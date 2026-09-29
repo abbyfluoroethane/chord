@@ -197,7 +197,10 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool) {
         // The server kept the presence, the carbons state, and the room joins.
         return;
     }
+    // The MUC state keeps the rooms to join again, and fails the joins that wait.
+    let muc_state = muc::next_session(ctx);
     *ctx.state = FeatureState::default();
+    ctx.state.muc = muc_state;
     if let Err(e) = crate::store::queries::clear_volatile(ctx.store, ctx.account_id) {
         ctx.store_error("clear presence and occupants", e);
     }
