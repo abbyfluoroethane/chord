@@ -11,7 +11,8 @@ pub const GROUP_GAP_MS: i64 = 5 * 60 * 1000;
 /// One message, ready to show.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimelineItem {
-    /// Stable id: `stanza-id:<id>` or `origin-id:<id>`.
+    /// Stable id: `stanza-id:<id>` or `origin-id:<id>`. Commands that refer to a message
+    /// (reply, edit, retract, react) take this id.
     pub id: String,
     /// JID of the sender. For a room message: room@service/nick.
     pub sender: String,
@@ -19,19 +20,79 @@ pub struct TimelineItem {
     pub sender_name: String,
     /// Avatar hash (XEP-0084 id) of the sender, if known.
     pub avatar: Option<String>,
+    /// The newest text: the correction if the message was edited. Empty if retracted.
     pub body: String,
     /// Unix time in ms.
     pub timestamp: i64,
     pub outgoing: bool,
     /// True if the previous item has the same sender and is less than 5 min older.
     pub same_sender_as_previous: bool,
+    /// XEP-0308: the sender corrected the message.
+    pub edited: bool,
+    /// XEP-0424: the sender retracted the message.
+    pub retracted: bool,
+    /// XEP-0444: the reactions, one entry per emoji, most used first.
+    pub reactions: Vec<ReactionSummary>,
+    /// XEP-0461: the message that this one replies to.
+    pub reply_to: Option<ReplyPreview>,
+    /// XEP-0066: an attachment URL (for example from an upload).
+    pub attachment: Option<String>,
+    /// XEP-0333: for an outgoing message, how far it got.
+    pub status: DeliveryStatus,
 }
+
+/// The reactions with one emoji.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReactionSummary {
+    pub emoji: String,
+    pub count: u32,
+    /// True if our account is one of the senders.
+    pub mine: bool,
+}
+
+/// A short view of the message that a reply quotes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplyPreview {
+    /// Timeline id of the quoted message, if it is in the store.
+    pub id: Option<String>,
+    pub sender_name: String,
+    /// The start of the quoted text. Empty if the message is not in the store.
+    pub body: String,
+}
+
+/// How far an outgoing message got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeliveryStatus {
+    Sent,
+    Received,
+    Displayed,
+}
+
+/// The length of the quoted text in a `ReplyPreview`.
+const PREVIEW_CHARS: usize = 120;
 
 impl ViewItem for TimelineItem {
     type Key = String;
     fn key(&self) -> String {
         self.id.clone()
     }
+}
+
+struct Row {
+    rowid: i64,
+    key_kind: String,
+    key: String,
+    outgoing: bool,
+    sender: String,
+    body: String,
+    timestamp: i64,
+    groupchat: bool,
+    edited: bool,
+    retracted: bool,
+    reply_to: Option<String>,
+    reply_to_sender: Option<String>,
+    attachment: Option<String>,
+    status: String,
 }
 
 /// The newest `window` messages of `room`, oldest first.
@@ -42,52 +103,173 @@ pub(crate) fn query(
 ) -> rusqlite::Result<Vec<TimelineItem>> {
     let conn = q.store.conn();
     let mut stmt = conn.prepare_cached(
-        "SELECT key_kind, key, direction, sender, body, timestamp, kind FROM messages
+        "SELECT id, key_kind, key, direction, sender, COALESCE(edited_body, body), timestamp,
+                kind, edited_body IS NOT NULL, retracted_at IS NOT NULL, reply_to,
+                reply_to_sender, oob_url, status
+         FROM messages
          WHERE account_id = ?1 AND peer = ?2
          ORDER BY timestamp DESC, id DESC LIMIT ?3",
     )?;
     let rows = stmt.query_map(params![q.account_id, room.as_str(), window as i64], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)? == "out",
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, String>(6)? == "groupchat",
-        ))
+        Ok(Row {
+            rowid: row.get(0)?,
+            key_kind: row.get(1)?,
+            key: row.get(2)?,
+            outgoing: row.get::<_, String>(3)? == "out",
+            sender: row.get(4)?,
+            body: row.get(5)?,
+            timestamp: row.get(6)?,
+            groupchat: row.get::<_, String>(7)? == "groupchat",
+            edited: row.get(8)?,
+            retracted: row.get(9)?,
+            reply_to: row.get(10)?,
+            reply_to_sender: row.get(11)?,
+            attachment: row.get(12)?,
+            status: row.get(13)?,
+        })
     })?;
-    let mut rows: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    let mut rows: Vec<Row> = rows.collect::<rusqlite::Result<_>>()?;
     rows.reverse();
 
     let mut items: Vec<TimelineItem> = Vec::with_capacity(rows.len());
-    for (key_kind, key, outgoing, sender, body, timestamp, groupchat) in rows {
-        let (sender_name, avatar_owner) = if groupchat {
-            let nick = sender
-                .rsplit_once('/')
-                .map_or(sender.as_str(), |(_, n)| n)
-                .to_owned();
-            (nick, sender.clone())
-        } else {
-            let bare = sender.split('/').next().unwrap_or(&sender).to_owned();
-            (contact_name(q, &bare)?, bare)
-        };
+    for row in rows {
+        let (sender_name, avatar_owner) = display_name(q, &row.sender, row.groupchat)?;
         let avatar = avatar_hash(q, &avatar_owner)?;
         let same_sender_as_previous = items
             .last()
-            .is_some_and(|p| p.sender == sender && timestamp - p.timestamp < GROUP_GAP_MS);
+            .is_some_and(|p| p.sender == row.sender && row.timestamp - p.timestamp < GROUP_GAP_MS);
+        let reply_to = match &row.reply_to {
+            Some(id) => Some(reply_preview(
+                q,
+                room,
+                id,
+                row.reply_to_sender.as_deref(),
+                row.groupchat,
+            )?),
+            None => None,
+        };
         items.push(TimelineItem {
-            id: format!("{key_kind}:{key}"),
-            sender,
+            id: format!("{}:{}", row.key_kind, row.key),
+            sender: row.sender,
             sender_name,
             avatar,
-            body,
-            timestamp,
-            outgoing,
+            body: if row.retracted {
+                String::new()
+            } else {
+                row.body
+            },
+            timestamp: row.timestamp,
+            outgoing: row.outgoing,
             same_sender_as_previous,
+            edited: row.edited,
+            retracted: row.retracted,
+            reactions: if row.retracted {
+                Vec::new()
+            } else {
+                reactions(q, row.rowid)?
+            },
+            reply_to,
+            attachment: if row.retracted { None } else { row.attachment },
+            status: match row.status.as_str() {
+                "displayed" => DeliveryStatus::Displayed,
+                "received" => DeliveryStatus::Received,
+                _ => DeliveryStatus::Sent,
+            },
         });
     }
     Ok(items)
+}
+
+/// The display name of a sender, and the owner of its avatar.
+fn display_name(
+    q: &QueryCtx<'_>,
+    sender: &str,
+    groupchat: bool,
+) -> rusqlite::Result<(String, String)> {
+    if groupchat {
+        let nick = sender
+            .rsplit_once('/')
+            .map_or(sender, |(_, n)| n)
+            .to_owned();
+        Ok((nick, sender.to_owned()))
+    } else {
+        let bare = sender.split('/').next().unwrap_or(sender).to_owned();
+        Ok((contact_name(q, &bare)?, bare))
+    }
+}
+
+/// The reactions to a message, one entry per emoji, most used first. Our own reactions
+/// have our bare JID as the sender.
+fn reactions(q: &QueryCtx<'_>, rowid: i64) -> rusqlite::Result<Vec<ReactionSummary>> {
+    let mut stmt = q.store.conn().prepare_cached(
+        "SELECT sender, emojis FROM reactions WHERE account_id = ?1 AND message = ?2",
+    )?;
+    let rows = stmt.query_map(params![q.account_id, rowid], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out: Vec<ReactionSummary> = Vec::new();
+    for row in rows {
+        let (sender, emojis) = row?;
+        let mine = sender == q.account.as_str();
+        for emoji in crate::store::json::from_array(&emojis) {
+            match out.iter_mut().find(|r| r.emoji == emoji) {
+                Some(r) => {
+                    r.count += 1;
+                    r.mine |= mine;
+                }
+                None => out.push(ReactionSummary {
+                    emoji,
+                    count: 1,
+                    mine,
+                }),
+            }
+        }
+    }
+    out.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.emoji.cmp(&b.emoji)));
+    Ok(out)
+}
+
+fn reply_preview(
+    q: &QueryCtx<'_>,
+    room: &BareJid,
+    id: &str,
+    sender: Option<&str>,
+    groupchat: bool,
+) -> rusqlite::Result<ReplyPreview> {
+    let found =
+        crate::store::queries::find_message(q.store.conn(), q.account_id, room.as_str(), id)?;
+    match found {
+        Some(m) => {
+            let (sender_name, _) = display_name(q, &m.sender, groupchat)?;
+            let key: Option<String> = q
+                .store
+                .conn()
+                .prepare_cached("SELECT key_kind || ':' || key FROM messages WHERE id = ?1")?
+                .query_row(params![m.rowid], |row| row.get(0))
+                .optional()?;
+            let body = if m.retracted {
+                String::new()
+            } else {
+                m.body.chars().take(PREVIEW_CHARS).collect()
+            };
+            Ok(ReplyPreview {
+                id: key,
+                sender_name,
+                body,
+            })
+        }
+        None => {
+            let sender_name = match sender {
+                Some(s) => display_name(q, s, groupchat)?.0,
+                None => String::new(),
+            };
+            Ok(ReplyPreview {
+                id: None,
+                sender_name,
+                body: String::new(),
+            })
+        }
+    }
 }
 
 /// Roster name of a bare JID, or its local part.

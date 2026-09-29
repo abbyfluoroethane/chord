@@ -6,6 +6,7 @@ use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::oob::Oob;
 use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
+use super::message_ext::{self, Incoming, Outgoing};
 use super::{Ctx, new_id};
 use crate::actor::ClientEvent;
 use crate::store::queries::{self, Direction, KeyKind, MessageKind, NewMessage};
@@ -49,7 +50,7 @@ fn store(
     if !matches!(message.type_, MessageType::Chat | MessageType::Normal) {
         return;
     }
-    let (Some(from), Some((_, body))) = (&message.from, message.get_best_body(vec![])) else {
+    let Some(from) = &message.from else {
         return;
     };
     let (direction, peer) = if from.to_bare() == *ctx.account {
@@ -59,6 +60,23 @@ fn store(
         }
     } else {
         (Direction::In, from.to_bare())
+    };
+    let sender = from.to_string();
+    let incoming = Incoming {
+        message,
+        kind: MessageKind::Chat,
+        direction,
+        peer: &peer,
+        sender: &sender,
+        archived: !live,
+        timestamp,
+    };
+    // Corrections, retractions, reactions, and markers change earlier messages.
+    if message_ext::intercept(ctx, &incoming) {
+        return;
+    }
+    let Some((_, body)) = message.get_best_body(vec![]) else {
+        return;
     };
     let peer_str = peer.to_string();
 
@@ -73,18 +91,18 @@ fn store(
             stanza_id,
         ) {
             Ok(true) => {
-                ctx.changed(ViewKey::Timeline(peer));
+                ctx.changed(ViewKey::Timeline(peer.clone()));
                 return;
             }
             Ok(false) => {}
             Err(e) => ctx.store_error("update a message key", e),
         }
     }
+    let extras = message_ext::extras(message, &ids);
     let Some((key_kind, key)) = ids.key() else {
         log::debug!("chat message from {from} has no stanza-id or origin-id. Not stored.");
         return;
     };
-    let sender = from.to_string();
     let new = NewMessage {
         kind: MessageKind::Chat,
         key_kind,
@@ -94,13 +112,15 @@ fn store(
         sender: &sender,
         body,
         timestamp,
+        extras,
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
+            message_ext::after_store(ctx, &incoming, &stored);
             if live {
                 ctx.emit(ClientEvent::MessageReceived(stored));
             }
-            ctx.changed(ViewKey::Timeline(peer));
+            ctx.changed(ViewKey::Timeline(peer.clone()));
             ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
         }
         Ok(None) => log::debug!("message {key} is stored already"),
@@ -110,27 +130,40 @@ fn store(
 
 /// Send a chat message and store it. Returns its origin-id.
 pub(crate) fn send(ctx: &mut Ctx<'_>, to: Jid, body: String) -> String {
-    send_with_oob(ctx, to, body, None)
+    send_message(ctx, to, body, Outgoing::default())
 }
 
 /// Send a chat message with an optional XEP-0066 out-of-band URL and store it. Returns
 /// its origin-id.
 pub(crate) fn send_with_oob(ctx: &mut Ctx<'_>, to: Jid, body: String, oob: Option<Oob>) -> String {
+    let mut out = Outgoing::default();
+    if let Some(oob) = oob {
+        out.extras.oob_url = Some(oob.url.clone());
+        out.payloads.push(oob.into());
+    }
+    send_message(ctx, to, body, out)
+}
+
+/// Send a chat message with extra payloads and references, and store it. Returns its
+/// origin-id, which is also its `id` attribute.
+pub(crate) fn send_message(ctx: &mut Ctx<'_>, to: Jid, body: String, out: Outgoing) -> String {
     let origin_id = new_id();
     let mut message = Message::chat(to.clone())
         .with_body("".into(), body.clone())
         .with_payload(OriginId {
             id: origin_id.clone(),
         });
-    if let Some(oob) = oob {
-        message = message.with_payload(oob);
-    }
+    message.payloads.extend(message_ext::outgoing_payloads(ctx));
+    message.payloads.extend(out.payloads);
     message.id = Some(Id(origin_id.clone()));
     ctx.send(message);
 
     let peer = to.to_bare();
     let peer_str = peer.to_string();
     let sender = ctx.account.to_string();
+    let mut extras = out.extras;
+    extras.message_id = Some(origin_id.clone());
+    extras.origin_id = Some(origin_id.clone());
     let new = NewMessage {
         kind: MessageKind::Chat,
         key_kind: KeyKind::OriginId,
@@ -140,6 +173,7 @@ pub(crate) fn send_with_oob(ctx: &mut Ctx<'_>, to: Jid, body: String, oob: Optio
         sender: &sender,
         body: &body,
         timestamp: None,
+        extras,
     };
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         ctx.store_error("store a sent message", e);

@@ -134,4 +134,57 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, owner)
     );
     "#,
+    // Version 3: message references (XEP-0308, 0424, 0444, 0461, 0333), attachments,
+    // read state, and push (XEP-0357).
+    r#"
+    -- Every id of a message. XEPs reference the `id` attribute in a 1:1 chat and the
+    -- stanza-id in a room. The key stays the stanza-id, otherwise the origin-id.
+    ALTER TABLE messages ADD COLUMN message_id TEXT;
+    ALTER TABLE messages ADD COLUMN origin_id TEXT;
+    ALTER TABLE messages ADD COLUMN stanza_id TEXT;
+    -- XEP-0461: the id that this message replies to, and the JID of its sender.
+    ALTER TABLE messages ADD COLUMN reply_to TEXT;
+    ALTER TABLE messages ADD COLUMN reply_to_sender TEXT;
+    -- XEP-0066: an attachment URL.
+    ALTER TABLE messages ADD COLUMN oob_url TEXT;
+    -- XEP-0308: the newest correction.
+    ALTER TABLE messages ADD COLUMN edited_body TEXT;
+    ALTER TABLE messages ADD COLUMN edited_at INTEGER;
+    -- XEP-0424: the time of the retraction. The body stays for the audit log only.
+    ALTER TABLE messages ADD COLUMN retracted_at INTEGER;
+    -- XEP-0333: for an outgoing message, the newest marker from the peer.
+    ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'sent'
+        CHECK (status IN ('sent', 'received', 'displayed'));
+
+    UPDATE messages SET origin_id = key, message_id = key WHERE key_kind = 'origin-id';
+    UPDATE messages SET stanza_id = key WHERE key_kind = 'stanza-id';
+    CREATE INDEX messages_by_message_id ON messages (account_id, peer, message_id);
+    CREATE INDEX messages_by_origin_id ON messages (account_id, peer, origin_id);
+    CREATE INDEX messages_by_stanza_id ON messages (account_id, peer, stanza_id);
+
+    -- XEP-0444: the reactions of one sender to one message.
+    CREATE TABLE reactions (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        message    INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        sender     TEXT NOT NULL,             -- bare JID in a 1:1 chat, occupant JID in a room
+        emojis     TEXT NOT NULL,             -- JSON array of strings
+        PRIMARY KEY (account_id, message, sender)
+    );
+
+    -- Our read position per chat or room: the newest message that we read (XEP-0333).
+    CREATE TABLE read_state (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        peer       TEXT NOT NULL,
+        last_read  INTEGER NOT NULL,          -- messages.id
+        PRIMARY KEY (account_id, peer)
+    );
+
+    -- XEP-0357: the push services that this account enabled.
+    CREATE TABLE push_registrations (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        service    TEXT NOT NULL,
+        node       TEXT NOT NULL,
+        PRIMARY KEY (account_id, service, node)
+    );
+    "#,
 ];

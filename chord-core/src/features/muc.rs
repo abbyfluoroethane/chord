@@ -19,9 +19,10 @@ use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
 use xmpp_parsers::stanza_id::OriginId;
 
 use super::chat::{MessageIds, delay_ms};
+use super::message_ext::{self, Incoming, Outgoing};
 use super::{Ctx, IqResponse, bookmarks, mam, new_id};
 use crate::actor::{ClientError, ClientEvent, ClientHandle};
-use crate::store::queries::{self, Direction, KeyKind, MessageKind, NewMessage};
+use crate::store::queries::{self, Direction, KeyKind, MessageExtras, MessageKind, NewMessage};
 use crate::views::{ChannelScope, ViewKey};
 
 const NS_MUC_OWNER: &str = "http://jabber.org/protocol/muc#owner";
@@ -490,6 +491,19 @@ pub(crate) fn send_with_payload(
     body: String,
     payload: Option<Element>,
 ) -> Result<String, ClientError> {
+    let mut out = Outgoing::default();
+    out.payloads.extend(payload);
+    send_message(ctx, room, body, out)
+}
+
+/// Send a groupchat message with extra payloads and references, and store it. Returns
+/// its origin-id, which is also its `id` attribute. See `send`.
+pub(crate) fn send_message(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    body: String,
+    out: Outgoing,
+) -> Result<String, ClientError> {
     let nick = match ctx.state.muc.nicks.get(room).cloned() {
         Some(nick) => Some(nick),
         None if room_row(ctx, room).is_some() => {
@@ -510,9 +524,8 @@ pub(crate) fn send_with_payload(
         .with_payload(OriginId {
             id: origin_id.clone(),
         });
-    if let Some(payload) = payload {
-        message.payloads.push(payload);
-    }
+    message.payloads.extend(message_ext::outgoing_payloads(ctx));
+    message.payloads.extend(out.payloads);
     message.id = Some(Id(origin_id.clone()));
     if nick.is_some() {
         ctx.send(message);
@@ -536,6 +549,11 @@ pub(crate) fn send_with_payload(
         sender: &sender,
         body: &body,
         timestamp: None,
+        extras: MessageExtras {
+            message_id: Some(origin_id.clone()),
+            origin_id: Some(origin_id.clone()),
+            ..out.extras
+        },
     };
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         ctx.store_error("store a sent message", e);
@@ -613,7 +631,7 @@ fn store(
     timestamp: Option<i64>,
     live: bool,
 ) {
-    let (Some(from), Some((_, body))) = (&message.from, message.get_best_body(vec![])) else {
+    let Some(from) = &message.from else {
         return;
     };
     // A message from the room itself, with no nick, is a status text. Skip it.
@@ -624,6 +642,23 @@ fn store(
         Direction::Out
     } else {
         Direction::In
+    };
+    let sender_jid = from.to_string();
+    let incoming = Incoming {
+        message,
+        kind: MessageKind::Groupchat,
+        direction,
+        peer: room,
+        sender: &sender_jid,
+        archived: !live,
+        timestamp,
+    };
+    // Corrections, retractions, reactions, and markers change earlier messages.
+    if message_ext::intercept(ctx, &incoming) {
+        return;
+    }
+    let Some((_, body)) = message.get_best_body(vec![]) else {
+        return;
     };
     let peer = room.to_string();
 
@@ -645,23 +680,25 @@ fn store(
             Err(e) => ctx.store_error("update a message key", e),
         }
     }
+    let extras = message_ext::extras(message, &ids);
     let Some((key_kind, key)) = ids.key() else {
         log::debug!("groupchat message from {from} has no stanza-id or origin-id. Not stored.");
         return;
     };
-    let sender = from.to_string();
     let new = NewMessage {
         kind: MessageKind::Groupchat,
         key_kind,
         key: &key,
         direction,
         peer: &peer,
-        sender: &sender,
+        sender: &sender_jid,
         body,
         timestamp,
+        extras,
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
+            message_ext::after_store(ctx, &incoming, &stored);
             if live {
                 ctx.emit(ClientEvent::MessageReceived(stored));
             }

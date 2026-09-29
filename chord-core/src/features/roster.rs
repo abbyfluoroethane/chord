@@ -570,7 +570,7 @@ fn read_contact(
     Ok(found.flatten())
 }
 
-fn list_contacts(conn: &Connection, account_id: i64) -> rusqlite::Result<Vec<Contact>> {
+pub(crate) fn list_contacts(conn: &Connection, account_id: i64) -> rusqlite::Result<Vec<Contact>> {
     let sql = format!(
         "SELECT {CONTACT_COLUMNS} FROM contacts WHERE account_id = ?1
          ORDER BY lower(coalesce(name, jid)), jid"

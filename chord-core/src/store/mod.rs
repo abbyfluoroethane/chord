@@ -1,6 +1,7 @@
 //! Local storage on SQLite. One database file per account. The actor owns the only
 //! connection.
 
+pub mod json;
 pub mod migrations;
 pub mod queries;
 pub mod schema;

@@ -34,6 +34,9 @@ pub struct ChannelItem {
     pub joined: bool,
     /// Time of the newest message, Unix ms.
     pub last_activity: Option<i64>,
+    /// Incoming messages after our read position (XEP-0333). With no read position,
+    /// every incoming message counts.
+    pub unread: u32,
 }
 
 impl ViewItem for ChannelItem {
@@ -44,10 +47,27 @@ impl ViewItem for ChannelItem {
 }
 
 pub(crate) fn query(q: &QueryCtx<'_>, scope: &ChannelScope) -> rusqlite::Result<Vec<ChannelItem>> {
-    match scope {
-        ChannelScope::Home => home(q),
-        ChannelScope::Space { service, node } => space(q, service, node),
+    let mut items = match scope {
+        ChannelScope::Home => home(q)?,
+        ChannelScope::Space { service, node } => space(q, service, node)?,
+    };
+    for item in &mut items {
+        item.unread = unread(q, &item.jid)?;
     }
+    Ok(items)
+}
+
+/// Incoming messages in `peer` after our read position.
+pub(crate) fn unread(q: &QueryCtx<'_>, peer: &str) -> rusqlite::Result<u32> {
+    q.store
+        .conn()
+        .prepare_cached(
+            "SELECT COUNT(*) FROM messages
+             WHERE account_id = ?1 AND peer = ?2 AND direction = 'in' AND retracted_at IS NULL
+               AND id > COALESCE((SELECT last_read FROM read_state
+                                  WHERE account_id = ?1 AND peer = ?2), 0)",
+        )?
+        .query_row(params![q.account_id, peer], |row| row.get(0))
 }
 
 /// Direct chats by newest activity, then the rooms that are in no space, by name.
@@ -69,6 +89,7 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
             category: None,
             joined: true,
             last_activity: Some(last),
+            unread: 0,
         });
     }
     let mut stmt = conn.prepare_cached(
@@ -91,6 +112,7 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
             category: None,
             joined: row.get::<_, i64>(2)? != 0,
             last_activity: row.get(3)?,
+            unread: 0,
         })
     })?;
     for room in rooms {
@@ -120,6 +142,7 @@ fn space(q: &QueryCtx<'_>, service: &str, node: &str) -> rusqlite::Result<Vec<Ch
             category: row.get(2)?,
             joined: row.get::<_, i64>(3)? != 0,
             last_activity: row.get(4)?,
+            unread: 0,
         })
     })?;
     rows.collect()

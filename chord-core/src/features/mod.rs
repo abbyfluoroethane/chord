@@ -10,15 +10,25 @@
 //! The actor runs the queued effects after the function returns. So feature code is
 //! synchronous, has no `Send` bound, and a test can call it with no session.
 
+// TODO: remove when the extension features fill their slots.
+#![allow(dead_code)]
+
 pub mod avatars;
 pub mod bookmarks;
 pub mod carbons;
 pub mod chat;
+pub mod corrections;
 pub mod disco;
 pub mod mam;
+pub mod markers;
+pub mod message_ext;
 pub mod muc;
 pub mod presence;
 pub mod pubsub;
+pub mod push;
+pub mod reactions;
+pub mod replies;
+pub mod retraction;
 pub mod roster;
 pub mod spaces;
 pub mod upload;
@@ -68,6 +78,12 @@ pub(crate) enum Pending {
     Spaces(spaces::Pending),
     Upload(upload::Pending),
     Avatars(avatars::Pending),
+    Corrections(corrections::Pending),
+    Retraction(retraction::Pending),
+    Reactions(reactions::Pending),
+    Replies(replies::Pending),
+    Markers(markers::Pending),
+    Push(push::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -104,6 +120,12 @@ pub(crate) struct FeatureState {
     pub spaces: spaces::State,
     pub upload: upload::State,
     pub avatars: avatars::State,
+    pub corrections: corrections::State,
+    pub retraction: retraction::State,
+    pub reactions: reactions::State,
+    pub replies: replies::State,
+    pub markers: markers::State,
+    pub push: push::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -117,6 +139,12 @@ pub(crate) enum FeatureCommand {
     Spaces(spaces::Command),
     Upload(upload::Command),
     Avatars(avatars::Command),
+    Corrections(corrections::Command),
+    Retraction(retraction::Command),
+    Reactions(reactions::Command),
+    Replies(replies::Command),
+    Markers(markers::Command),
+    Push(push::Command),
 }
 
 /// Everything a feature function can use.
@@ -213,6 +241,12 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool) {
     muc::on_connected(ctx);
     spaces::on_connected(ctx);
     avatars::on_connected(ctx);
+    corrections::on_connected(ctx);
+    retraction::on_connected(ctx);
+    reactions::on_connected(ctx);
+    replies::on_connected(ctx);
+    markers::on_connected(ctx);
+    push::on_connected(ctx);
 }
 
 /// A stanza from the server that is not the answer to one of our IQs.
@@ -316,6 +350,12 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Spaces(p) => spaces::on_response(ctx, p, response),
         Pending::Upload(p) => upload::on_response(ctx, p, response),
         Pending::Avatars(p) => avatars::on_response(ctx, p, response),
+        Pending::Corrections(p) => corrections::on_response(ctx, p, response),
+        Pending::Retraction(p) => retraction::on_response(ctx, p, response),
+        Pending::Reactions(p) => reactions::on_response(ctx, p, response),
+        Pending::Replies(p) => replies::on_response(ctx, p, response),
+        Pending::Markers(p) => markers::on_response(ctx, p, response),
+        Pending::Push(p) => push::on_response(ctx, p, response),
     }
 }
 
@@ -348,18 +388,41 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Spaces(c) => spaces::on_command(ctx, c),
         FeatureCommand::Upload(c) => upload::on_command(ctx, c),
         FeatureCommand::Avatars(c) => avatars::on_command(ctx, c),
+        FeatureCommand::Corrections(c) => corrections::on_command(ctx, c),
+        FeatureCommand::Retraction(c) => retraction::on_command(ctx, c),
+        FeatureCommand::Reactions(c) => reactions::on_command(ctx, c),
+        FeatureCommand::Replies(c) => replies::on_command(ctx, c),
+        FeatureCommand::Markers(c) => markers::on_command(ctx, c),
+        FeatureCommand::Push(c) => push::on_command(ctx, c),
     }
 }
 
 /// A command that needs a session, while none is up.
-pub(crate) fn on_command_offline(command: FeatureCommand) {
+/// A command while no session is up. Reads from the store work offline. Every other
+/// command answers `ClientError::NotConnected`.
+pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: FeatureCommand) {
+    use crate::actor::ClientError;
+    let store_error = |e: rusqlite::Error| ClientError::Invalid(format!("store: {e}"));
     match command {
+        FeatureCommand::Roster(roster::Command::Contacts { reply }) => {
+            let _ =
+                reply.send(roster::list_contacts(store.conn(), account_id).map_err(store_error));
+        }
+        FeatureCommand::Avatars(avatars::Command::Get { owner, reply }) => {
+            let _ = reply.send(avatars::load(store, account_id, &owner).map_err(store_error));
+        }
         FeatureCommand::Roster(c) => roster::offline(c),
         FeatureCommand::Mam(c) => mam::offline(c),
         FeatureCommand::Muc(c) => muc::offline(c),
         FeatureCommand::Spaces(c) => spaces::offline(c),
         FeatureCommand::Upload(c) => upload::offline(c),
         FeatureCommand::Avatars(c) => avatars::offline(c),
+        FeatureCommand::Corrections(c) => corrections::offline(c),
+        FeatureCommand::Retraction(c) => retraction::offline(c),
+        FeatureCommand::Reactions(c) => reactions::offline(c),
+        FeatureCommand::Replies(c) => replies::offline(c),
+        FeatureCommand::Markers(c) => markers::offline(c),
+        FeatureCommand::Push(c) => push::offline(c),
     }
 }
 

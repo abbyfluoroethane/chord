@@ -1,6 +1,8 @@
 //! Human and JSON forms of the view items and diffs.
 
-use chord_core::views::{ChannelItem, ChannelKind, ListDiff, MemberItem, SpaceItem, TimelineItem};
+use chord_core::views::{
+    ChannelItem, ChannelKind, DeliveryStatus, ListDiff, MemberItem, SpaceItem, TimelineItem,
+};
 
 use crate::json::Obj;
 
@@ -37,7 +39,15 @@ impl Show for ChannelItem {
             .map(|c| format!("[{c}] "))
             .unwrap_or_default();
         let joined = if self.joined { "" } else { "  (not joined)" };
-        format!("{category}{kind}{}  <{}>{joined}", self.name, self.jid)
+        let unread = if self.unread > 0 {
+            format!("  [{} unread]", self.unread)
+        } else {
+            String::new()
+        };
+        format!(
+            "{category}{kind}{}  <{}>{joined}{unread}",
+            self.name, self.jid
+        )
     }
 
     fn json(&self) -> String {
@@ -54,6 +64,7 @@ impl Show for ChannelItem {
             .opt_str("category", self.category.as_deref())
             .bool("joined", self.joined)
             .opt_num("last_activity", self.last_activity)
+            .num("unread", i64::from(self.unread))
             .finish()
     }
 }
@@ -67,10 +78,42 @@ impl Show for TimelineItem {
                     .to_string()
             })
             .unwrap_or_default();
-        if self.same_sender_as_previous {
-            format!("                   {}", self.body)
+        let mut text = if self.retracted {
+            "(retracted)".to_owned()
         } else {
-            format!("{time}  {}: {}", self.sender_name, self.body)
+            self.body.clone()
+        };
+        if self.edited && !self.retracted {
+            text.push_str(" (edited)");
+        }
+        if let Some(url) = &self.attachment
+            && *url != self.body
+        {
+            text.push_str(&format!(" [file: {url}]"));
+        }
+        if !self.reactions.is_empty() {
+            let list: Vec<String> = self
+                .reactions
+                .iter()
+                .map(|r| format!("{} {}", r.emoji, r.count))
+                .collect();
+            text.push_str(&format!("  [{}]", list.join(", ")));
+        }
+        if self.outgoing && self.status != DeliveryStatus::Sent {
+            text.push_str(match self.status {
+                DeliveryStatus::Displayed => " (read)",
+                _ => " (delivered)",
+            });
+        }
+        let quote = self
+            .reply_to
+            .as_ref()
+            .map(|r| format!("> {}: {}\n", r.sender_name, r.body))
+            .unwrap_or_default();
+        if self.same_sender_as_previous && quote.is_empty() {
+            format!("                   {text}")
+        } else {
+            format!("{quote}{time}  {}: {text}", self.sender_name)
         }
     }
 
@@ -84,6 +127,40 @@ impl Show for TimelineItem {
             .num("timestamp", self.timestamp)
             .bool("outgoing", self.outgoing)
             .bool("same_sender_as_previous", self.same_sender_as_previous)
+            .bool("edited", self.edited)
+            .bool("retracted", self.retracted)
+            .raw(
+                "reactions",
+                &crate::json::array(self.reactions.iter().map(|r| {
+                    Obj::new()
+                        .str("emoji", &r.emoji)
+                        .num("count", i64::from(r.count))
+                        .bool("mine", r.mine)
+                        .finish()
+                })),
+            )
+            .raw(
+                "reply_to",
+                &self.reply_to.as_ref().map_or_else(
+                    || "null".to_owned(),
+                    |r| {
+                        Obj::new()
+                            .opt_str("id", r.id.as_deref())
+                            .str("sender_name", &r.sender_name)
+                            .str("body", &r.body)
+                            .finish()
+                    },
+                ),
+            )
+            .opt_str("attachment", self.attachment.as_deref())
+            .str(
+                "status",
+                match self.status {
+                    DeliveryStatus::Sent => "sent",
+                    DeliveryStatus::Received => "received",
+                    DeliveryStatus::Displayed => "displayed",
+                },
+            )
             .finish()
     }
 }

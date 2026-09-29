@@ -88,9 +88,28 @@ impl MessageKind {
     }
 }
 
+/// The ids and references of a message, besides its key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MessageExtras {
+    /// The `id` attribute of the stanza.
+    pub message_id: Option<String>,
+    /// XEP-0359 origin-id.
+    pub origin_id: Option<String>,
+    /// XEP-0359 stanza-id from our server (1:1) or from the room.
+    pub stanza_id: Option<String>,
+    /// XEP-0461: the id that this message replies to.
+    pub reply_to: Option<String>,
+    /// XEP-0461: the JID of the sender of the message that this one replies to.
+    pub reply_to_sender: Option<String>,
+    /// XEP-0066: an attachment URL.
+    pub oob_url: Option<String>,
+}
+
 /// A chat message, as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredMessage {
+    /// Row id in `messages`.
+    pub rowid: i64,
     pub kind: MessageKind,
     pub key_kind: KeyKind,
     pub key: String,
@@ -114,6 +133,7 @@ pub struct NewMessage<'a> {
     pub sender: &'a str,
     pub body: &'a str,
     pub timestamp: Option<i64>,
+    pub extras: MessageExtras,
 }
 
 /// Current Unix time in ms, from SQLite's clock. This also works in the phase 2
@@ -139,14 +159,26 @@ pub fn insert_message(
     account_id: i64,
     message: &NewMessage<'_>,
 ) -> rusqlite::Result<Option<StoredMessage>> {
-    let timestamp: Option<i64> = conn
+    let x = &message.extras;
+    // The key is one of the ids too.
+    let origin_id = x
+        .origin_id
+        .as_deref()
+        .or((message.key_kind == KeyKind::OriginId).then_some(message.key));
+    let stanza_id = x
+        .stanza_id
+        .as_deref()
+        .or((message.key_kind == KeyKind::StanzaId).then_some(message.key));
+    let inserted: Option<(i64, i64)> = conn
         .query_row(
             &format!(
                 "INSERT INTO messages
-                    (account_id, key_kind, key, direction, peer, sender, body, timestamp, kind)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE(?8, {NOW_MS}), ?9)
+                    (account_id, key_kind, key, direction, peer, sender, body, timestamp, kind,
+                     message_id, origin_id, stanza_id, reply_to, reply_to_sender, oob_url)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE(?8, {NOW_MS}), ?9,
+                         ?10, ?11, ?12, ?13, ?14, ?15)
                  ON CONFLICT (account_id, key_kind, key) DO NOTHING
-                 RETURNING timestamp"
+                 RETURNING id, timestamp"
             ),
             params![
                 account_id,
@@ -158,11 +190,18 @@ pub fn insert_message(
                 message.body,
                 message.timestamp,
                 message.kind.as_str(),
+                x.message_id,
+                origin_id,
+                stanza_id,
+                x.reply_to,
+                x.reply_to_sender,
+                x.oob_url,
             ],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    Ok(timestamp.map(|timestamp| StoredMessage {
+    Ok(inserted.map(|(rowid, timestamp)| StoredMessage {
+        rowid,
         kind: message.kind,
         key_kind: message.key_kind,
         key: message.key.to_owned(),
@@ -189,7 +228,7 @@ pub fn upgrade_to_stanza_id(
     stanza_id: &str,
 ) -> rusqlite::Result<bool> {
     let changed = conn.execute(
-        "UPDATE OR IGNORE messages SET key_kind = 'stanza-id', key = ?1
+        "UPDATE OR IGNORE messages SET key_kind = 'stanza-id', key = ?1, stanza_id = ?1
          WHERE account_id = ?2 AND key_kind = 'origin-id' AND key = ?3
            AND direction = ?4 AND peer = ?5",
         params![stanza_id, account_id, origin_id, direction.as_str(), peer],
@@ -207,6 +246,86 @@ pub fn clear_volatile(store: &crate::store::Store, account_id: i64) -> rusqlite:
     ))
 }
 
+/// A stored message, with the fields that extensions (corrections, reactions, ...) need.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageRow {
+    pub rowid: i64,
+    pub kind: MessageKind,
+    pub direction: Direction,
+    pub peer: String,
+    pub sender: String,
+    pub message_id: Option<String>,
+    pub origin_id: Option<String>,
+    pub stanza_id: Option<String>,
+    pub body: String,
+    pub timestamp: i64,
+    pub retracted: bool,
+}
+
+const ROW_COLUMNS: &str = "id, kind, direction, peer, sender, message_id, origin_id, stanza_id,
+     COALESCE(edited_body, body), timestamp, retracted_at IS NOT NULL";
+
+fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
+    Ok(MessageRow {
+        rowid: row.get(0)?,
+        kind: MessageKind::parse(&row.get::<_, String>(1)?)?,
+        direction: Direction::parse(&row.get::<_, String>(2)?)?,
+        peer: row.get(3)?,
+        sender: row.get(4)?,
+        message_id: row.get(5)?,
+        origin_id: row.get(6)?,
+        stanza_id: row.get(7)?,
+        body: row.get(8)?,
+        timestamp: row.get(9)?,
+        retracted: row.get(10)?,
+    })
+}
+
+/// The newest message in the chat or room `peer` that has `id` as its `id` attribute,
+/// origin-id, or stanza-id. A reference from another XEP uses one of them.
+pub fn find_message(
+    conn: &Connection,
+    account_id: i64,
+    peer: &str,
+    id: &str,
+) -> rusqlite::Result<Option<MessageRow>> {
+    conn.prepare_cached(&format!(
+        "SELECT {ROW_COLUMNS} FROM messages
+         WHERE account_id = ?1 AND peer = ?2
+           AND (message_id = ?3 OR origin_id = ?3 OR stanza_id = ?3)
+         ORDER BY id DESC LIMIT 1"
+    ))?
+    .query_row(params![account_id, peer, id], message_row)
+    .optional()
+}
+
+/// The message with this timeline id (`TimelineItem::id`: `stanza-id:<id>` or
+/// `origin-id:<id>`).
+pub fn find_by_timeline_id(
+    conn: &Connection,
+    account_id: i64,
+    timeline_id: &str,
+) -> rusqlite::Result<Option<MessageRow>> {
+    let Some((kind, key)) = timeline_id.split_once(':') else {
+        return Ok(None);
+    };
+    conn.prepare_cached(&format!(
+        "SELECT {ROW_COLUMNS} FROM messages
+         WHERE account_id = ?1 AND key_kind = ?2 AND key = ?3"
+    ))?
+    .query_row(params![account_id, kind, key], message_row)
+    .optional()
+}
+
+/// The id that other XEPs use to reference this message: the room stanza-id in a room,
+/// the `id` attribute (or the origin-id) in a 1:1 chat.
+pub fn reference_id(row: &MessageRow) -> Option<&str> {
+    match row.kind {
+        MessageKind::Groupchat => row.stanza_id.as_deref(),
+        MessageKind::Chat => row.message_id.as_deref().or(row.origin_id.as_deref()),
+    }
+}
+
 /// All messages with `peer`, oldest first.
 pub fn messages_with(
     conn: &Connection,
@@ -214,7 +333,7 @@ pub fn messages_with(
     peer: &str,
 ) -> rusqlite::Result<Vec<StoredMessage>> {
     let mut stmt = conn.prepare(
-        "SELECT key_kind, key, direction, peer, sender, body, timestamp, kind FROM messages
+        "SELECT key_kind, key, direction, peer, sender, body, timestamp, kind, id FROM messages
          WHERE account_id = ?1 AND peer = ?2 ORDER BY timestamp, id",
     )?;
     let rows = stmt.query_map(params![account_id, peer], |row| {
@@ -227,6 +346,7 @@ pub fn messages_with(
             body: row.get(5)?,
             timestamp: row.get(6)?,
             kind: MessageKind::parse(&row.get::<_, String>(7)?)?,
+            rowid: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -247,6 +367,7 @@ mod tests {
             sender: "bob@chord.localhost/phone",
             body: "hi",
             timestamp: None,
+            extras: MessageExtras::default(),
         }
     }
 
@@ -279,6 +400,41 @@ mod tests {
     }
 
     #[test]
+    fn find_message_by_each_id_and_reference_id() {
+        let store = Store::open_in_memory().unwrap();
+        let conn = store.conn();
+        let account = ensure_account(conn, "alice@chord.localhost").unwrap();
+        let mut chat = message("s-1");
+        chat.extras = MessageExtras {
+            message_id: Some("m-1".into()),
+            origin_id: Some("o-1".into()),
+            ..MessageExtras::default()
+        };
+        let stored = insert_message(conn, account, &chat).unwrap().unwrap();
+        let peer = "bob@chord.localhost";
+        for id in ["m-1", "o-1", "s-1"] {
+            let row = find_message(conn, account, peer, id).unwrap().unwrap();
+            assert_eq!(row.rowid, stored.rowid, "{id}");
+        }
+        assert!(
+            find_message(conn, account, "eve@chord.localhost", "m-1")
+                .unwrap()
+                .is_none()
+        );
+        let row = find_by_timeline_id(conn, account, "stanza-id:s-1")
+            .unwrap()
+            .unwrap();
+        // In a 1:1 chat the reference is the `id` attribute.
+        assert_eq!(reference_id(&row), Some("m-1"));
+        // In a room the reference is the room stanza-id.
+        let room = MessageRow {
+            kind: MessageKind::Groupchat,
+            ..row
+        };
+        assert_eq!(reference_id(&room), Some("s-1"));
+    }
+
+    #[test]
     fn origin_id_key_upgrades_to_stanza_id_once() {
         let store = Store::open_in_memory().unwrap();
         let account = ensure_account(store.conn(), "alice@chord.localhost").unwrap();
@@ -291,6 +447,7 @@ mod tests {
             sender: "alice@chord.localhost",
             body: "hello",
             timestamp: None,
+            extras: MessageExtras::default(),
         };
         insert_message(store.conn(), account, &sent)
             .unwrap()

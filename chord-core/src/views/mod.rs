@@ -23,7 +23,7 @@ pub use channel_list::{ChannelItem, ChannelKind, ChannelScope};
 pub use diff::{ListDiff, ViewItem};
 pub use member_list::MemberItem;
 pub use space_list::SpaceItem;
-pub use timeline::TimelineItem;
+pub use timeline::{DeliveryStatus, ReactionSummary, ReplyPreview, TimelineItem};
 
 /// Messages that a timeline shows at first. `paginate_back` adds more.
 pub const DEFAULT_TIMELINE_WINDOW: usize = 50;

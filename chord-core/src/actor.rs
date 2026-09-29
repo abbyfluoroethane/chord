@@ -481,7 +481,7 @@ impl<S: Session> Actor<S> {
                 if self.online.is_some() {
                     self.with_ctx(|ctx| features::on_command(ctx, command));
                 } else {
-                    features::on_command_offline(command);
+                    features::on_command_offline(&self.store, self.account_id, command);
                 }
             }
         }
