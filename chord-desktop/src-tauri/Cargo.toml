@@ -1,0 +1,24 @@
+[package]
+name = "chord-desktop"
+description = "Chord Desktop: the Tauri app on chord-core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# The _lib suffix keeps the lib name apart from the bin name (a Windows issue,
+# rust-lang/cargo#8519).
+name = "chord_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# No [profile] here: the workspace root sets the profiles, with panic = "unwind".
+# Never set panic = "abort" (see the root Cargo.toml).

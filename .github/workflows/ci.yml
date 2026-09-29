@@ -19,11 +19,39 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # chord-desktop needs the WebKitGTK libraries. The desktop job builds it.
+      - run: cargo build --workspace --exclude chord-desktop
+      - run: cargo clippy --workspace --exclude chord-desktop --all-targets -- -D warnings
+      - run: cargo test --workspace --exclude chord-desktop
       - name: Generate the Kotlin bindings
         run: ./dev/ffi-bindgen-check.sh
+
+  # The Tauri desktop app: the Svelte front end, then the Rust side.
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Tauri system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: chord-desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the front end
+        working-directory: chord-desktop
+        run: |
+          npm ci
+          npm run check
+          npm run build
+      - run: cargo clippy -p chord-desktop --all-targets -- -D warnings
+      - run: cargo test -p chord-desktop
 
   # Compile the generated Kotlin bindings and run a small offline smoke program.
   # dev/ffi-bindgen-check.sh downloads kotlinc, JNA and kotlinx-coroutines.
@@ -79,7 +107,7 @@ jobs:
         # rustls-native-certs reads SSL_CERT_FILE in place of the system trust store.
         run: echo "SSL_CERT_FILE=$(mkcert -CAROOT)/rootCA.pem" >> "$GITHUB_ENV"
       - name: Integration tests
-        run: cargo test --workspace -- --ignored
+        run: cargo test --workspace --exclude chord-desktop -- --ignored
       - name: Alice sends to bob over TLS
         run: ./dev/send-demo.sh
       - name: End-to-end run through chord-cli

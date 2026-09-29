@@ -6,16 +6,16 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 
 cargo fmt --all --check
-cargo build --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace --exclude chord-desktop
+cargo clippy --workspace --exclude chord-desktop --all-targets -- -D warnings
 cargo clippy -p chord-cli --all-targets --features dev-insecure -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude chord-desktop
 cargo build -p chord-core --target wasm32-unknown-unknown --no-default-features
 ./dev/check-features.sh
 ./dev/ffi-bindgen-check.sh
 
 if [[ "${1:-}" == "--live" ]]; then
-  cargo test --workspace -- --ignored
+  cargo test --workspace --exclude chord-desktop -- --ignored
   ./dev/send-demo.sh
   ./dev/e2e-demo.sh
 fi

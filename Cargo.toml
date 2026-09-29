@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["chord-core", "chord-ffi", "chord-cli"]
+members = ["chord-core", "chord-ffi", "chord-cli", "chord-desktop/src-tauri"]
+# A plain `cargo build` skips the desktop app. It needs WebKitGTK on Linux.
+default-members = ["chord-core", "chord-ffi", "chord-cli"]
 
 [workspace.package]
 version = "0.1.0"
