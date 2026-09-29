@@ -13,7 +13,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::reactions::{Reaction, Reactions};
 
 use super::message_ext::Incoming;
-use super::{Ctx, FeatureCommand, IqResponse, new_id};
+use super::{Ctx, FeatureCommand, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::json::{from_array, to_array};
 use crate::store::queries::{self, Direction, MessageKind};
@@ -27,14 +27,6 @@ const MAX_EMOJI_BYTES: usize = 64;
 const MAX_EMOJIS: usize = 20;
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
-
-/// In-memory state for one session.
-#[derive(Debug, Default)]
-pub(crate) struct State {}
-
-/// What to do with the answer to an IQ that this feature sent.
-#[derive(Debug)]
-pub(crate) enum Pending {}
 
 /// A command from the public API.
 pub(crate) enum Command {
@@ -76,12 +68,6 @@ impl ClientHandle {
         }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
-}
-
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
-
-pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
-    match pending {}
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
@@ -343,7 +329,6 @@ mod tests {
             direction: dir,
             peer: &peer,
             sender,
-            archived: false,
             timestamp: None,
         };
         h.with_ctx(|ctx| on_message(ctx, &inc))

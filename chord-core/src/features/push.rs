@@ -29,10 +29,6 @@ pub struct PushRegistration {
     pub node: String,
 }
 
-/// In-memory state for one session.
-#[derive(Debug, Default)]
-pub(crate) struct State {}
-
 /// What to do with the answer to an IQ that this feature sent.
 #[derive(Debug)]
 pub(crate) enum Pending {
@@ -111,8 +107,6 @@ impl ClientHandle {
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 }
-
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     let outcome = match response {

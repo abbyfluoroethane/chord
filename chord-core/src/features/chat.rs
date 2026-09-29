@@ -72,14 +72,13 @@ fn store(
         direction,
         peer: &peer,
         sender: &sender,
-        archived: !live,
         timestamp,
     };
     // Corrections, retractions, reactions, and markers change earlier messages.
     if message_ext::intercept(ctx, &incoming) {
         return;
     }
-    let Some((_, body)) = message.get_best_body(vec![]) else {
+    let Some(body) = message_ext::body(message) else {
         return;
     };
     let peer_str = peer.to_string();
@@ -114,7 +113,7 @@ fn store(
         direction,
         peer: &peer_str,
         sender: &sender,
-        body,
+        body: &body,
         timestamp,
         extras,
     };

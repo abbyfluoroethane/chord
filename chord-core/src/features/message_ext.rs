@@ -11,9 +11,6 @@
 //!
 //! Outgoing messages get `outgoing_payloads` (for example XEP-0333 `<markable/>`).
 
-// TODO: remove when the extension features fill their slots.
-#![allow(dead_code)]
-
 use jid::BareJid;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::minidom::Element;
@@ -32,8 +29,6 @@ pub(crate) struct Incoming<'a> {
     pub peer: &'a BareJid,
     /// JID of the sender: a full or bare JID in a 1:1 chat, room@service/nick in a room.
     pub sender: &'a str,
-    /// True for a message from the archive (MAM).
-    pub archived: bool,
     /// Unix time in ms, from the archive or the XEP-0203 delay.
     pub timestamp: Option<i64>,
 }
@@ -65,6 +60,12 @@ pub(crate) fn extras(message: &Message, ids: &MessageIds) -> MessageExtras {
             .find_map(|p| Oob::try_from(p.clone()).ok())
             .map(|oob| oob.url),
     }
+}
+
+/// The body to store for a new message: without the XEP-0428 fallback of a reply.
+pub(crate) fn body(message: &Message) -> Option<String> {
+    replies::strip_fallback(message)
+        .or_else(|| message.get_best_body(vec![]).map(|(_, body)| body.clone()))
 }
 
 /// A new message is in the store.

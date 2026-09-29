@@ -17,7 +17,7 @@ use xmpp_parsers::minidom::rxml::NcName;
 use xmpp_parsers::stanza::Stanza;
 
 use super::message_ext::Incoming;
-use super::{Ctx, FeatureCommand, IqResponse, muc, new_id};
+use super::{Ctx, FeatureCommand, muc, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::Store;
 use crate::store::queries::{Direction, MessageKind, StoredMessage};
@@ -37,14 +37,6 @@ fn nc(name: &str) -> NcName {
     NcName::try_from(name.to_owned()).expect("a valid attribute name")
 }
 
-/// In-memory state for one session.
-#[derive(Debug, Default)]
-pub(crate) struct State {}
-
-/// What to do with the answer to an IQ that this feature sent.
-#[derive(Debug)]
-pub(crate) enum Pending {}
-
 /// A command from the public API.
 pub(crate) enum Command {
     MarkRead { peer: BareJid, reply: Reply },
@@ -62,28 +54,10 @@ impl ClientHandle {
     }
 }
 
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
-
-pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
-    match pending {}
-}
-
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
         Command::MarkRead { peer, reply } => {
             let _ = reply.send(mark_read(ctx, &peer));
-        }
-    }
-}
-
-/// A command while no session is up. Answer each reply channel with an error.
-///
-/// `mark_read` can work offline: `features::on_command_offline` should call
-/// `offline_with_store` instead, which has the store.
-pub(crate) fn offline(command: Command) {
-    match command {
-        Command::MarkRead { reply, .. } => {
-            let _ = reply.send(Err(ClientError::NotConnected));
         }
     }
 }
@@ -384,7 +358,6 @@ mod tests {
             direction: dir,
             peer,
             sender,
-            archived: false,
             timestamp: None,
         };
         h.with_ctx(|ctx| on_message(ctx, &incoming))

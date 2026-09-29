@@ -10,9 +10,6 @@
 //! The actor runs the queued effects after the function returns. So feature code is
 //! synchronous, has no `Send` bound, and a test can call it with no session.
 
-// TODO: remove when the extension features fill their slots.
-#![allow(dead_code)]
-
 pub mod avatars;
 pub mod bookmarks;
 pub mod carbons;
@@ -78,11 +75,6 @@ pub(crate) enum Pending {
     Spaces(spaces::Pending),
     Upload(upload::Pending),
     Avatars(avatars::Pending),
-    Corrections(corrections::Pending),
-    Retraction(retraction::Pending),
-    Reactions(reactions::Pending),
-    Replies(replies::Pending),
-    Markers(markers::Pending),
     Push(push::Pending),
 }
 
@@ -120,12 +112,6 @@ pub(crate) struct FeatureState {
     pub spaces: spaces::State,
     pub upload: upload::State,
     pub avatars: avatars::State,
-    pub corrections: corrections::State,
-    pub retraction: retraction::State,
-    pub reactions: reactions::State,
-    pub replies: replies::State,
-    pub markers: markers::State,
-    pub push: push::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -241,12 +227,6 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool) {
     muc::on_connected(ctx);
     spaces::on_connected(ctx);
     avatars::on_connected(ctx);
-    corrections::on_connected(ctx);
-    retraction::on_connected(ctx);
-    reactions::on_connected(ctx);
-    replies::on_connected(ctx);
-    markers::on_connected(ctx);
-    push::on_connected(ctx);
 }
 
 /// A stanza from the server that is not the answer to one of our IQs.
@@ -350,11 +330,6 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Spaces(p) => spaces::on_response(ctx, p, response),
         Pending::Upload(p) => upload::on_response(ctx, p, response),
         Pending::Avatars(p) => avatars::on_response(ctx, p, response),
-        Pending::Corrections(p) => corrections::on_response(ctx, p, response),
-        Pending::Retraction(p) => retraction::on_response(ctx, p, response),
-        Pending::Reactions(p) => reactions::on_response(ctx, p, response),
-        Pending::Replies(p) => replies::on_response(ctx, p, response),
-        Pending::Markers(p) => markers::on_response(ctx, p, response),
         Pending::Push(p) => push::on_response(ctx, p, response),
     }
 }
@@ -397,10 +372,10 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
     }
 }
 
-/// A command that needs a session, while none is up.
-/// A command while no session is up. Reads from the store work offline. Every other
-/// command answers `ClientError::NotConnected`.
-pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: FeatureCommand) {
+/// A command while no session is up. Reads from the store work offline, and `mark_read`
+/// moves the read position. Every other command answers `ClientError::NotConnected`.
+/// Returns true if the command changed the store, so that the views need a new query.
+pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: FeatureCommand) -> bool {
     use crate::actor::ClientError;
     let store_error = |e: rusqlite::Error| ClientError::Invalid(format!("store: {e}"));
     match command {
@@ -414,6 +389,10 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Push(push::Command::List { reply }) => {
             let _ = reply.send(push::list(store, account_id));
         }
+        FeatureCommand::Markers(c) => {
+            markers::offline_with_store(store, account_id, c);
+            return true;
+        }
         FeatureCommand::Roster(c) => roster::offline(c),
         FeatureCommand::Mam(c) => mam::offline(c),
         FeatureCommand::Muc(c) => muc::offline(c),
@@ -424,9 +403,9 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Retraction(c) => retraction::offline(c),
         FeatureCommand::Reactions(c) => reactions::offline(c),
         FeatureCommand::Replies(c) => replies::offline(c),
-        FeatureCommand::Markers(c) => markers::offline(c),
         FeatureCommand::Push(c) => push::offline(c),
     }
+    false
 }
 
 /// A result from work outside the session.

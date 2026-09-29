@@ -13,7 +13,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::stanza_id::OriginId;
 
 use super::message_ext::Incoming;
-use super::{Ctx, IqResponse, new_id};
+use super::{Ctx, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, Direction, MessageKind, MessageRow};
 use crate::views::ViewKey;
@@ -22,14 +22,6 @@ type Reply = oneshot::Sender<Result<(), ClientError>>;
 
 /// Current Unix time in ms, from SQLite (see `queries::NOW_MS`).
 pub(super) const NOW_MS: &str = "CAST(unixepoch('subsec') * 1000 AS INTEGER)";
-
-/// In-memory state for one session.
-#[derive(Debug, Default)]
-pub(crate) struct State {}
-
-/// What to do with the answer to an IQ that this feature sent.
-#[derive(Debug)]
-pub(crate) enum Pending {}
 
 /// A command from the public API.
 pub(crate) enum Command {
@@ -56,12 +48,6 @@ impl ClientHandle {
         }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
-}
-
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
-
-pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
-    match pending {}
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
@@ -300,7 +286,6 @@ pub(crate) mod tests {
             direction: Direction::In,
             peer: &peer,
             sender,
-            archived: false,
             timestamp: Some(5000),
         };
         h.with_ctx(|ctx| on_message(ctx, &incoming))

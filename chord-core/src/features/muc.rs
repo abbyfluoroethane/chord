@@ -623,7 +623,7 @@ pub(crate) fn store_private(
     if !is_room(ctx, &room) {
         return false;
     }
-    let Some((_, body)) = message.get_best_body(vec![]) else {
+    let Some(body) = message_ext::body(message) else {
         return true;
     };
     let peer = format!("{room}/{nick}");
@@ -668,7 +668,7 @@ pub(crate) fn store_private(
         direction,
         peer: &peer,
         sender: &sender,
-        body,
+        body: &body,
         timestamp,
         extras,
     };
@@ -866,14 +866,13 @@ fn store(
         direction,
         peer: room,
         sender: &sender_jid,
-        archived: !live,
         timestamp,
     };
     // Corrections, retractions, reactions, and markers change earlier messages.
     if message_ext::intercept(ctx, &incoming) {
         return;
     }
-    let Some((_, body)) = message.get_best_body(vec![]) else {
+    let Some(body) = message_ext::body(message) else {
         return;
     };
     let peer = room.to_string();
@@ -908,7 +907,7 @@ fn store(
         direction,
         peer: &peer,
         sender: &sender_jid,
-        body,
+        body: &body,
         timestamp,
         extras,
     };

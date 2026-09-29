@@ -12,9 +12,9 @@ use xmpp_parsers::message::Message;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::minidom::rxml::NcName;
 
+use super::Ctx;
 use super::corrections::{NOW_MS, new_message, original_id, own_message, same_sender};
 use super::message_ext::Incoming;
-use super::{Ctx, IqResponse};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, MessageKind, MessageRow};
 use crate::views::{ChannelScope, ViewKey};
@@ -29,14 +29,6 @@ const NS_FALLBACK: &str = "urn:xmpp:fallback:0";
 const NS_HINTS: &str = "urn:xmpp:hints";
 const FALLBACK_BODY: &str =
     "This person attempted to retract a previous message, but it's unsupported by your client.";
-
-/// In-memory state for one session.
-#[derive(Debug, Default)]
-pub(crate) struct State {}
-
-/// What to do with the answer to an IQ that this feature sent.
-#[derive(Debug)]
-pub(crate) enum Pending {}
 
 /// A command from the public API.
 pub(crate) enum Command {
@@ -57,12 +49,6 @@ impl ClientHandle {
         }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
-}
-
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
-
-pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
-    match pending {}
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
@@ -220,7 +206,6 @@ mod tests {
             direction: Direction::In,
             peer: &peer,
             sender,
-            archived: false,
             timestamp: None,
         };
         h.with_ctx(|ctx| on_message(ctx, &incoming))

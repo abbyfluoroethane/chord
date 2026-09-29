@@ -15,7 +15,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::minidom::rxml::NcName;
 
 use super::message_ext::Outgoing;
-use super::{Ctx, FeatureCommand, IqResponse, chat, muc};
+use super::{Ctx, FeatureCommand, chat, muc};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, MessageKind};
 
@@ -32,14 +32,6 @@ type Reply = oneshot::Sender<Result<(), ClientError>>;
 fn nc(name: &str) -> NcName {
     NcName::try_from(name.to_owned()).expect("a valid attribute name")
 }
-
-/// In-memory state for one session.
-#[derive(Debug, Default)]
-pub(crate) struct State {}
-
-/// What to do with the answer to an IQ that this feature sent.
-#[derive(Debug)]
-pub(crate) enum Pending {}
 
 /// A command from the public API.
 pub(crate) enum Command {
@@ -64,12 +56,6 @@ impl ClientHandle {
         }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
-}
-
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
-
-pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
-    match pending {}
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
