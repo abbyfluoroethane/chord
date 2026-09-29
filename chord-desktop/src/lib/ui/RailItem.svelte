@@ -1,5 +1,6 @@
 <script lang="ts">
-  // One slot on the circle rail: the left pill, a 40px tile, a mention badge.
+  // One slot on the circle rail: the left pill, a 48px tile, a mention badge.
+  // The rail stays 64px wide, so the tile has 8px on each side.
   import type { Snippet } from 'svelte';
   import type { HTMLAttributes } from 'svelte/elements';
   import { tooltip } from './tooltip';
@@ -59,15 +60,15 @@
     position: relative;
     display: grid;
     place-items: center;
-    width: 40px;
-    height: 40px;
+    width: 48px;
+    height: 48px;
     /* Round at rest. Hover and selection turn the tile into a squircle. */
     border-radius: 50%;
     border: 2px solid transparent;
     background: var(--surface-200);
     color: var(--ink);
     font-weight: 600;
-    font-size: 14px;
+    font-size: 16px;
     overflow: hidden;
     transition:
       border-radius var(--dur-fast) var(--ease-out),
@@ -134,7 +135,7 @@
 
   .badge {
     position: absolute;
-    right: 10px;
+    right: 4px;
     bottom: 0;
     min-width: 20px;
     height: 20px;

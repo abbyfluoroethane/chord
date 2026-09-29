@@ -97,7 +97,7 @@
     mentions={home.mentions}
     onclick={() => app.selectSpace(HOME)}
   >
-    <ChordMark size={28} />
+    <ChordMark size={32} />
   </RailItem>
 
   <div class="sep" role="separator"></div>
@@ -149,7 +149,7 @@
   {/each}
 
   <RailItem name="Add a circle" variant="add" onclick={() => (ui.addCircleOpen = true)}>
-    <Icon icon={Plus} size={20} />
+    <Icon icon={Plus} size={24} />
   </RailItem>
 </nav>
 

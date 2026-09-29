@@ -51,7 +51,7 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 16px;
-  --radius-circle-icon: 12px;
+  --radius-circle-icon: 16px; /* style guide radius-lg: circle icons */
 
   /* Motion */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
