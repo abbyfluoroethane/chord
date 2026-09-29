@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use rusqlite::{OptionalExtension, params};
+use xmpp_parsers::data_forms::DataForm;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
@@ -57,6 +58,8 @@ pub(crate) struct State {
 pub(crate) enum Pending {
     /// The answer to the configuration of a new room, with the join replies that wait
     /// for it: others cannot enter the room until it is unlocked.
+    /// The configuration form of a room that we created. The joins wait.
+    RoomConfigForm(BareJid, Vec<Reply>),
     InstantRoom(BareJid, Vec<Reply>),
     /// The answer to a XEP-0425 moderation request.
     Moderate(Reply),
@@ -212,6 +215,21 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     match pending {
+        Pending::RoomConfigForm(room, replies) => {
+            let form = match response {
+                IqResponse::Result(Some(query)) => query
+                    .get_child("x", "jabber:x:data")
+                    .and_then(|x| DataForm::try_from(x.clone()).ok()),
+                IqResponse::Result(None) | IqResponse::Error(_) => None,
+                IqResponse::Lost => {
+                    for reply in replies {
+                        let _ = reply.send(Err(ClientError::NotConnected));
+                    }
+                    return;
+                }
+            };
+            submit_room_config(ctx, &room, form.as_ref(), replies);
+        }
         Pending::InstantRoom(room, replies) => {
             let result = match response {
                 IqResponse::Result(_) => Ok(()),
@@ -1195,16 +1213,59 @@ fn drop_outbox(ctx: &mut Ctx<'_>, room: &BareJid) {
 /// Configure a new room (XEP-0045, 10.1.3). Until then the room is locked. A Chord room
 /// is a channel, so it is persistent (it stays when the last occupant leaves) and it keeps
 /// an archive for MAM. The server keeps its defaults for the other fields.
+/// The room configuration fields that Chord turns on in a room that it creates, when the
+/// form of the server has them. `enablearchiving` is the Prosody name for the archive,
+/// `mam` the ejabberd name. ejabberd rejects a form with a field that it does not know.
+const ROOM_CONFIG_ON: &[&str] = &[
+    "muc#roomconfig_persistentroom",
+    "muc#roomconfig_enablearchiving",
+    "mam",
+];
+
+/// Unlock a room that we created (XEP-0045, 10.1). Ask for its configuration form first,
+/// so that the submit has only fields that the server knows.
 fn unlock_room(ctx: &mut Ctx<'_>, room: &BareJid, replies: Vec<Reply>) {
+    let query: Element = format!("<query xmlns='{NS_MUC_OWNER}'/>")
+        .parse()
+        .expect("static XML");
+    let iq = Iq::Get {
+        from: None,
+        to: Some(Jid::from(room.clone())),
+        id: String::new(),
+        payload: query,
+    };
+    ctx.request(
+        iq,
+        super::Pending::Muc(Pending::RoomConfigForm(room.clone(), replies)),
+    );
+}
+
+/// Submit the configuration of a new room. With no form from the server, submit an empty
+/// form: that accepts the default configuration (an instant room, XEP-0045, 10.1.2).
+fn submit_room_config(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    form: Option<&DataForm>,
+    replies: Vec<Reply>,
+) {
+    let mut fields = String::new();
+    if let Some(form) = form {
+        fields.push_str(
+            "<field var='FORM_TYPE'><value>http://jabber.org/protocol/muc#roomconfig</value></field>",
+        );
+        for field in &form.fields {
+            if let Some(var) = field.var.as_deref()
+                && ROOM_CONFIG_ON.contains(&var)
+            {
+                fields.push_str(&format!("<field var='{var}'><value>1</value></field>"));
+            }
+        }
+    }
     let query: Element = format!(
-        "<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='submit'>\
-         <field var='FORM_TYPE'><value>http://jabber.org/protocol/muc#roomconfig</value></field>\
-         <field var='muc#roomconfig_persistentroom'><value>1</value></field>\
-         <field var='muc#roomconfig_enablearchiving'><value>1</value></field>\
-         </x></query>"
+        "<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='submit'>{fields}</x></query>"
     )
     .parse()
-    .expect("static XML");
+    .expect("the field names are static XML");
     let iq = Iq::Set {
         from: None,
         to: Some(Jid::from(room.clone())),
@@ -1519,6 +1580,19 @@ mod tests {
             )
         };
         let configure = |h: &mut Harness| {
+            // Chord asks for the form first. The server offers the Prosody fields.
+            let form: Element = "<query xmlns='http://jabber.org/protocol/muc#owner'>\
+                <x xmlns='jabber:x:data' type='form'>\
+                <field var='FORM_TYPE' type='hidden'><value>http://jabber.org/protocol/muc#roomconfig</value></field>\
+                <field var='muc#roomconfig_persistentroom' type='boolean'><value>0</value></field>\
+                <field var='muc#roomconfig_enablearchiving' type='boolean'><value>0</value></field>\
+                </x></query>"
+                .parse()
+                .unwrap();
+            h.answer(
+                |p| matches!(p, super::super::Pending::Muc(Pending::RoomConfigForm(..))),
+                Some(form),
+            );
             // The join also starts the MAM catch-up of the room. Find the configuration.
             let iqs = h.sent_iqs();
             let Some(Iq::Set { to, payload, .. }) = iqs.iter().find(
