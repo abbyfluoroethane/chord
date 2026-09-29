@@ -860,9 +860,8 @@ fn vcard_failed(reply: Reply, strict: bool, error: ClientError) {
 }
 
 /// Our presence with the XEP-0153 update element. An empty `<photo/>` means no photo.
-/// The initial presence in `presence.rs` does not carry the element yet. A later
-/// presence from that file drops it.
-fn vcard_presence(hash: Option<&str>) -> Presence {
+/// The initial presence in `presence.rs` uses it too, so each presence keeps the hash.
+pub(crate) fn vcard_presence(hash: Option<&str>) -> Presence {
     let data = hash.and_then(|h| {
         let mut out = [0u8; 20];
         if h.len() != 40 {
