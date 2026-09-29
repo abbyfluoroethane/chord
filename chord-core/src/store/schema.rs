@@ -227,4 +227,13 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, jid)
     );
     "#,
+    // 8: our own presence: the show value and the status text. Every presence and room
+    // join carries them, also after a restart.
+    r#"
+    CREATE TABLE own_presence (
+        account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+        show       TEXT,                      -- away, dnd, or xa. NULL is available.
+        status     TEXT
+    );
+    "#,
 ];

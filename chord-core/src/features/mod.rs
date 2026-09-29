@@ -146,6 +146,7 @@ pub(crate) enum FeatureCommand {
     Notify(notify::Command),
     ChatStates(chat_states::Command),
     Blocking(blocking::Command),
+    Presence(presence::Command),
 }
 
 /// Everything a feature function can use.
@@ -409,6 +410,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Notify(c) => notify::on_command(ctx, c),
         FeatureCommand::ChatStates(c) => chat_states::on_command(ctx, c),
         FeatureCommand::Blocking(c) => blocking::on_command(ctx, c),
+        FeatureCommand::Presence(c) => presence::on_command(ctx, c),
     }
 }
 
@@ -453,6 +455,10 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Push(c) => push::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
+        FeatureCommand::Presence(c) => {
+            presence::offline(store, account_id, c);
+            return true;
+        }
     }
     false
 }

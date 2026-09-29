@@ -22,7 +22,7 @@ use xmpp_parsers::stanza_id::OriginId;
 
 use super::chat::{MessageIds, delay_ms};
 use super::message_ext::{self, Incoming, Outgoing};
-use super::{Ctx, IqResponse, avatars, bookmarks, mam, new_id, presence as own_presence};
+use super::{Ctx, IqResponse, bookmarks, mam, new_id, presence as own_presence};
 use crate::actor::{ClientError, ClientEvent, ClientHandle};
 use crate::store::queries::{self, Direction, KeyKind, MessageExtras, MessageKind, NewMessage};
 use crate::views::{ChannelScope, ViewKey};
@@ -1056,15 +1056,24 @@ pub(crate) fn join_room(
     mark_room(ctx, room);
 }
 
-/// Available presence for a room: our caps, and the hash of our avatar when the store
-/// has it (XEP-0153), like the presence of the account.
+/// Presence for a room: the presence of the account (caps, avatar hash, show value and
+/// status text).
 fn room_presence(ctx: &mut Ctx<'_>) -> Presence {
-    match avatars::load(ctx.store, ctx.account_id, ctx.account) {
-        Ok(Some(avatar)) => avatars::vcard_presence(Some(&avatar.hash)),
-        Ok(None) => own_presence::initial(),
-        Err(e) => {
-            ctx.store_error("read our avatar", e);
-            own_presence::initial()
+    own_presence::current(ctx)
+}
+
+/// Send our changed presence to every room that we are in, to room/nick.
+pub(crate) fn send_presence_to_rooms(ctx: &mut Ctx<'_>, presence: &Presence) {
+    let rooms: Vec<(BareJid, String)> = ctx
+        .state
+        .muc
+        .nicks
+        .iter()
+        .map(|(room, nick)| (room.clone(), nick.clone()))
+        .collect();
+    for (room, nick) in rooms {
+        if let Ok(full) = room.with_resource_str(&nick) {
+            ctx.send(presence.clone().with_to(Jid::from(full)));
         }
     }
 }
