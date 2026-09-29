@@ -12,7 +12,7 @@ use xmpp_parsers::message_correct::Replace;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::stanza_id::OriginId;
 
-use super::message_ext::Incoming;
+use super::message_ext::{self, Incoming};
 use super::{Ctx, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, Direction, MessageKind, MessageRow};
@@ -105,9 +105,6 @@ pub(super) fn own_message(
     }
     let peer = BareJid::new(&row.peer)
         .map_err(|e| ClientError::Invalid(format!("bad peer {}: {e}", row.peer)))?;
-    if row.kind == MessageKind::Groupchat && !ctx.state.muc.nicks.contains_key(&peer) {
-        return Err(ClientError::Invalid(format!("not in the room {peer}")));
-    }
     Ok((row, peer))
 }
 
@@ -148,7 +145,7 @@ fn edit(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), ClientErro
     message
         .payloads
         .push(Element::from(Replace { id: Id(original) }));
-    ctx.send(message);
+    message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
     apply(ctx, &row, &body, None);
     Ok(())
 }

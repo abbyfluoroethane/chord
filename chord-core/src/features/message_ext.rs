@@ -17,7 +17,8 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::oob::Oob;
 
 use super::chat::MessageIds;
-use super::{Ctx, corrections, markers, reactions, replies, retraction};
+use super::{Ctx, corrections, markers, muc, reactions, replies, retraction};
+use crate::actor::ClientError;
 use crate::store::queries::{Direction, MessageExtras, MessageKind, StoredMessage};
 
 /// A chat or groupchat message, as the extension features see it.
@@ -76,6 +77,24 @@ pub(crate) fn after_store(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>, stored: &S
 /// Payloads for every outgoing chat or groupchat message.
 pub(crate) fn outgoing_payloads(ctx: &mut Ctx<'_>) -> Vec<Element> {
     markers::outgoing_payloads(ctx)
+}
+
+/// Send a message that changes or annotates an earlier message (a correction, a
+/// retraction, a reaction, or a marker) to the peer of that message. A message to a room
+/// waits in the room outbox until the join completes.
+pub(crate) fn send_to_peer(
+    ctx: &mut Ctx<'_>,
+    kind: MessageKind,
+    peer: &BareJid,
+    message: Message,
+) -> Result<(), ClientError> {
+    match kind {
+        MessageKind::Chat => {
+            ctx.send(message);
+            Ok(())
+        }
+        MessageKind::Groupchat => muc::send_to_room(ctx, peer, message),
+    }
 }
 
 /// What a sender adds to a new outgoing message: payloads and the references to store.

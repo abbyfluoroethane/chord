@@ -264,6 +264,133 @@ pub async fn contact_add(client: &Client, args: &[&str]) -> Result<(), CliError>
     Ok(())
 }
 
+/// `edit <item-id> <text>`: correct an own message (XEP-0308).
+pub async fn edit(client: &Client, item: &str, text: &str) -> Result<(), CliError> {
+    client
+        .handle
+        .edit_message(item.to_owned(), text.to_owned())
+        .await
+        .map_err(err)?;
+    println!("edited {item}");
+    Ok(())
+}
+
+/// `retract <item-id>`: retract an own message (XEP-0424).
+pub async fn retract(client: &Client, item: &str) -> Result<(), CliError> {
+    client
+        .handle
+        .retract_message(item.to_owned())
+        .await
+        .map_err(err)?;
+    println!("retracted {item}");
+    Ok(())
+}
+
+/// `react <item-id> [emoji...]`: set the own reactions to a message (XEP-0444). With no
+/// emoji, remove them.
+pub async fn react(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (item, emojis) = args
+        .split_first()
+        .ok_or_else(|| CliError::from("usage: react <item-id> [emoji...]".to_owned()))?;
+    let emojis: Vec<String> = emojis.iter().map(|e| (*e).to_owned()).collect();
+    client
+        .handle
+        .react((*item).to_owned(), emojis.clone())
+        .await
+        .map_err(err)?;
+    if emojis.is_empty() {
+        println!("removed the reactions to {item}");
+    } else {
+        println!("reacted to {item} with {}", emojis.join(" "));
+    }
+    Ok(())
+}
+
+/// `reply <item-id> <text>`: reply to a message (XEP-0461).
+pub async fn reply(client: &Client, item: &str, text: &str) -> Result<(), CliError> {
+    client
+        .handle
+        .reply(item.to_owned(), text.to_owned())
+        .await
+        .map_err(err)?;
+    println!("replied to {item}");
+    Ok(())
+}
+
+/// `read <jid>`: mark the chat or room as read. Online, it also sends a XEP-0333
+/// displayed marker.
+pub async fn read(client: &Client, peer: &str) -> Result<(), CliError> {
+    let peer = bare(peer)?;
+    client.handle.mark_read(peer.clone()).await.map_err(err)?;
+    println!("marked {peer} as read");
+    Ok(())
+}
+
+/// `pm <room> <nick> <text>`: send a private message to a room occupant.
+pub async fn pm(client: &Client, room: &str, nick: &str, text: &str) -> Result<(), CliError> {
+    let room = bare(room)?;
+    client
+        .handle
+        .send_private(room.clone(), nick.to_owned(), text.to_owned())
+        .await
+        .map_err(err)?;
+    println!("sent to {room}/{nick}: {text}");
+    Ok(())
+}
+
+/// `push-enable <service> <node>`: enable push notifications (XEP-0357). The app server
+/// secret comes from CHORD_PUSH_SECRET, never from an argument.
+pub async fn push_enable(client: &Client, service: &str, node: &str) -> Result<(), CliError> {
+    let service = Jid::new(service).map_err(|e| format!("bad JID {service}: {e}"))?;
+    let form = std::env::var("CHORD_PUSH_SECRET")
+        .ok()
+        .map(|secret| vec![("secret".to_owned(), secret)]);
+    client
+        .handle
+        .enable_push(service.clone(), node.to_owned(), form)
+        .await
+        .map_err(err)?;
+    println!("enabled push to {service} {node}");
+    Ok(())
+}
+
+/// `push-disable <service> [node]`.
+pub async fn push_disable(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (service, node) = match args {
+        [service] => (*service, None),
+        [service, node] => (*service, Some((*node).to_owned())),
+        _ => return Err("usage: push-disable <service> [node]".to_owned().into()),
+    };
+    let service = Jid::new(service).map_err(|e| format!("bad JID {service}: {e}"))?;
+    client
+        .handle
+        .disable_push(service.clone(), node)
+        .await
+        .map_err(err)?;
+    println!("disabled push to {service}");
+    Ok(())
+}
+
+/// `push-list`: the push registrations in the store.
+pub async fn push_list(opts: &Opts, client: &Client) -> Result<(), CliError> {
+    let registrations = client.handle.push_registrations().await.map_err(err)?;
+    if opts.json {
+        let items = registrations.iter().map(|r| {
+            Obj::new()
+                .str("service", &r.service)
+                .str("node", &r.node)
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        println!("push registrations ({})", registrations.len());
+        for r in &registrations {
+            println!("  {} {}", r.service, r.node);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::content_type;

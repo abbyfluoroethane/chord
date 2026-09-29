@@ -16,6 +16,12 @@
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
 //!   space-delete <service> <node>
 //!   contacts | contact-add <jid> [name]
+//!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
+//!   reply <item-id> <text>          <item-id> is the id in `timeline --json`
+//!   read <jid>                      mark as read (also with --offline)
+//!   pm <room> <nick> <text>         private message to a room occupant
+//!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
+//!   push-disable <service> [node] | push-list
 //!
 //! --json prints JSON. --offline reads the local database and does not log in.
 //! `timeline --follow` prints each diff as it arrives, as a UI gets it.
@@ -62,7 +68,10 @@ listen [--once] | spaces | channels [home | <service> <node>] | members <room> |
 timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
 upload <jid> <file> | space-browse | space-join <service> <node> | \
 space-create <name> [--private] | space-add-room <service> <node> <room> [name] | \
-space-add-member <service> <node> <jid> | space-delete <service> <node> | contacts | contact-add <jid> [name]";
+space-add-member <service> <node> <jid> | space-delete <service> <node> | contacts | \
+contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
+react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
+push-enable <service> <node> | push-disable <service> [node] | push-list";
 
 /// Global options.
 pub struct Opts {
@@ -206,13 +215,22 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "space-delete",
         "contacts",
         "contact-add",
+        "edit",
+        "retract",
+        "react",
+        "reply",
+        "read",
+        "pm",
+        "push-enable",
+        "push-disable",
+        "push-list",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
     }
     let needs_session = !matches!(
         *command,
-        "spaces" | "channels" | "members" | "timeline" | "state"
+        "spaces" | "channels" | "members" | "timeline" | "state" | "read" | "push-list"
     );
     if needs_session && opts.offline {
         return Err(format!("{command} needs a session, not --offline").into());
@@ -247,6 +265,15 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("space-delete", [service, node]) => actions::space_delete(&client, service, node).await,
         ("contacts", []) => actions::contacts(opts, &client).await,
         ("contact-add", args) => actions::contact_add(&client, args).await,
+        ("edit", [item, text]) => actions::edit(&client, item, text).await,
+        ("retract", [item]) => actions::retract(&client, item).await,
+        ("react", args) => actions::react(&client, args).await,
+        ("reply", [item, text]) => actions::reply(&client, item, text).await,
+        ("read", [peer]) => actions::read(&client, peer).await,
+        ("pm", [room, nick, text]) => actions::pm(&client, room, nick, text).await,
+        ("push-enable", [service, node]) => actions::push_enable(&client, service, node).await,
+        ("push-disable", args) => actions::push_disable(&client, args).await,
+        ("push-list", []) => actions::push_list(opts, &client).await,
         _ => Err(USAGE.to_owned().into()),
     };
     let stopped = stop_client(client).await;

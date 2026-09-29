@@ -12,7 +12,7 @@ use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::reactions::{Reaction, Reactions};
 
-use super::message_ext::Incoming;
+use super::message_ext::{self, Incoming};
 use super::{Ctx, FeatureCommand, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::json::{from_array, to_array};
@@ -195,8 +195,8 @@ fn react(ctx: &mut Ctx<'_>, item_id: &str, emojis: Vec<String>) -> Result<(), Cl
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
+    message_ext::send_to_peer(ctx, row.kind, &to.to_bare(), message)?;
     save(ctx, row.rowid, &ctx.account.to_string(), &emojis).map_err(store_error)?;
-    ctx.send(message);
     ctx.changed(ViewKey::Timeline(to.to_bare()));
     Ok(())
 }
@@ -494,6 +494,10 @@ mod tests {
     fn outgoing_room_uses_stanza_id_and_validates() {
         let mut h = Harness::new();
         let (_, id) = add(&h, MessageKind::Groupchat, ROOM, "m1", "s1");
+        h.state
+            .muc
+            .nicks
+            .insert(BareJid::new(ROOM).unwrap(), "alice".into());
         h.with_ctx(|ctx| react(ctx, &id, strs(&["👍"]))).unwrap();
         let sent = h.take_sent();
         let [Stanza::Message(m)] = &sent[..] else {

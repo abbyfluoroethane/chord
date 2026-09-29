@@ -14,7 +14,7 @@ use xmpp_parsers::minidom::rxml::NcName;
 
 use super::Ctx;
 use super::corrections::{NOW_MS, new_message, original_id, own_message, same_sender};
-use super::message_ext::Incoming;
+use super::message_ext::{self, Incoming};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, MessageKind, MessageRow};
 use crate::views::{ChannelScope, ViewKey};
@@ -95,7 +95,7 @@ fn retract(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
-    ctx.send(message);
+    message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
     apply(ctx, &row, None);
     Ok(())
 }

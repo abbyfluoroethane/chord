@@ -541,10 +541,10 @@ fn send_private(
     nick: &str,
     body: String,
 ) -> Result<String, ClientError> {
-    let Some(our_nick) = ctx.state.muc.nicks.get(room).cloned() else {
-        return Err(ClientError::Invalid(format!("not in the room {room}")));
-    };
-    if !is_occupant(ctx, room, nick) {
+    // While the join runs, the occupant list is not complete. Then the message waits
+    // in the outbox, and the room answers with an error if the nick is not there.
+    let joined = ctx.state.muc.nicks.contains_key(room);
+    if joined && !is_occupant(ctx, room, nick) {
         return Err(ClientError::Invalid(format!("{nick} is not in {room}")));
     }
     let to = Jid::new(&format!("{room}/{nick}"))
@@ -559,7 +559,15 @@ fn send_private(
         .payloads
         .push(Element::builder("x", NS_MUC_USER).build());
     message.id = Some(Id(origin_id.clone()));
-    ctx.send(message);
+    send_to_room(ctx, room, message)?;
+    let our_nick = ctx
+        .state
+        .muc
+        .nicks
+        .get(room)
+        .cloned()
+        .or_else(|| ctx.state.muc.joins.get(room).map(|j| j.nick.clone()))
+        .unwrap_or_default();
 
     let peer = to.to_string();
     let sender = format!("{room}/{our_nick}");
@@ -685,6 +693,34 @@ pub(crate) fn store_private(
     true
 }
 
+/// Send a message to a room, and store nothing. If we are not in the room yet (for
+/// example right after login, while the autojoin runs), the message waits in the outbox
+/// and goes out when the join completes. The send starts the join if none runs. Fails if
+/// the room is unknown.
+pub(crate) fn send_to_room(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    message: Message,
+) -> Result<(), ClientError> {
+    if ctx.state.muc.nicks.contains_key(room) {
+        ctx.send(message);
+        return Ok(());
+    }
+    if room_row(ctx, room).is_none() {
+        return Err(ClientError::Invalid(format!("not in the room {room}")));
+    }
+    if !ctx.state.muc.joins.contains_key(room) {
+        join_room(ctx, room, None, None, None);
+    }
+    ctx.state
+        .muc
+        .outbox
+        .entry(room.clone())
+        .or_default()
+        .push(message);
+    Ok(())
+}
+
 /// Send a groupchat message and store it. Returns its origin-id.
 ///
 /// If we are not in the room yet (for example right after login, while the autojoin
@@ -715,20 +751,6 @@ pub(crate) fn send_message(
     body: String,
     out: Outgoing,
 ) -> Result<String, ClientError> {
-    let nick = match ctx.state.muc.nicks.get(room).cloned() {
-        Some(nick) => Some(nick),
-        None if room_row(ctx, room).is_some() => {
-            if !ctx.state.muc.joins.contains_key(room) {
-                join_room(ctx, room, None, None, None);
-            }
-            None
-        }
-        None => return Err(ClientError::Invalid(format!("not in the room {room}"))),
-    };
-    let sender_nick = nick
-        .clone()
-        .or_else(|| ctx.state.muc.joins.get(room).map(|j| j.nick.clone()))
-        .unwrap_or_default();
     let origin_id = new_id();
     let mut message = Message::groupchat(Jid::from(room.clone()))
         .with_body("".into(), body.clone())
@@ -738,16 +760,15 @@ pub(crate) fn send_message(
     message.payloads.extend(message_ext::outgoing_payloads(ctx));
     message.payloads.extend(out.payloads);
     message.id = Some(Id(origin_id.clone()));
-    if nick.is_some() {
-        ctx.send(message);
-    } else {
-        ctx.state
-            .muc
-            .outbox
-            .entry(room.clone())
-            .or_default()
-            .push(message);
-    }
+    send_to_room(ctx, room, message)?;
+    let sender_nick = ctx
+        .state
+        .muc
+        .nicks
+        .get(room)
+        .cloned()
+        .or_else(|| ctx.state.muc.joins.get(room).map(|j| j.nick.clone()))
+        .unwrap_or_default();
 
     let peer = room.to_string();
     let sender = format!("{room}/{sender_nick}");

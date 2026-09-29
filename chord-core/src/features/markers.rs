@@ -14,9 +14,8 @@ use rusqlite::{OptionalExtension, params};
 use xmpp_parsers::message::{Id, Message};
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::minidom::rxml::NcName;
-use xmpp_parsers::stanza::Stanza;
 
-use super::message_ext::Incoming;
+use super::message_ext::{self, Incoming};
 use super::{Ctx, FeatureCommand, muc, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::Store;
@@ -282,7 +281,10 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &BareJid) -> Result<(), ClientError> {
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
-    ctx.send(Stanza::Message(message));
+    // The read position moved already. A marker that cannot go out changes nothing.
+    if let Err(e) = message_ext::send_to_peer(ctx, newest.kind, peer, message) {
+        log::debug!("no displayed marker to {peer}: {e}");
+    }
     Ok(())
 }
 
@@ -299,6 +301,7 @@ mod tests {
     use super::*;
     use crate::features::testing::Harness;
     use crate::store::queries::{KeyKind, MessageExtras, NewMessage, insert_message};
+    use xmpp_parsers::stanza::Stanza;
 
     const PEER: &str = "bob@chord.localhost";
     const ROOM: &str = "dev@rooms.chord.localhost";
@@ -501,6 +504,7 @@ mod tests {
         let mut h = Harness::new();
         let room = BareJid::new(ROOM).unwrap();
         put(&h, "s9", Direction::In, MessageKind::Groupchat, ROOM);
+        h.state.muc.nicks.insert(room.clone(), "alice".into());
         h.with_ctx(|ctx| mark_read(ctx, &room)).unwrap();
         let sent = h.take_sent();
         let Stanza::Message(m) = &sent[0] else {
