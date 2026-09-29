@@ -512,7 +512,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
                 set_subject(ctx, &room, subject);
             }
             let ids = MessageIds::of(message, &room);
-            store(ctx, &room, message, ids, delay_ms(message));
+            store(ctx, &room, message, ids, delay_ms(message), true);
         }
         MessageType::Error => log::warn!("error message from the room {from}"),
         // Private messages between occupants, and mediated invites.
@@ -546,21 +546,25 @@ pub(crate) fn store_archived(
 ) {
     let mut ids = MessageIds::of(message, room);
     ids.stanza_id = Some(archive_id.to_owned());
+    // History is not news: it goes to the store and the views, but not to the events.
     store(
         ctx,
         room,
         message,
         ids,
         timestamp.or_else(|| delay_ms(message)),
+        false,
     );
 }
 
+/// Store a groupchat message. With `live`, also report it as `MessageReceived`.
 fn store(
     ctx: &mut Ctx<'_>,
     room: &BareJid,
     message: &Message,
     ids: MessageIds,
     timestamp: Option<i64>,
+    live: bool,
 ) {
     let (Some(from), Some((_, body))) = (&message.from, message.get_best_body(vec![])) else {
         return;
@@ -611,7 +615,9 @@ fn store(
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
-            ctx.emit(ClientEvent::MessageReceived(stored));
+            if live {
+                ctx.emit(ClientEvent::MessageReceived(stored));
+            }
             ctx.changed(ViewKey::Timeline(room.clone()));
             mark_room(ctx, room);
         }
@@ -1117,8 +1123,12 @@ mod tests {
         );
         h.with_ctx(|ctx| on_presence(ctx, &created));
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        // The join also starts the MAM catch-up of the room. Find the configuration.
         let iqs = h.sent_iqs();
-        let [Iq::Set { to, payload, .. }] = iqs.as_slice() else {
+        let Some(Iq::Set { to, payload, .. }) = iqs
+            .iter()
+            .find(|iq| matches!(iq, Iq::Set { payload, .. } if payload.is("query", NS_MUC_OWNER)))
+        else {
             panic!("{iqs:?}")
         };
         assert_eq!(to.as_ref(), Some(&jid(ROOM)));
