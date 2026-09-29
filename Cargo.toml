@@ -39,6 +39,12 @@ sha1 = "0.11"
 # - Tauri size guides recommend panic = "abort". Do not copy that.
 [profile.dev]
 panic = "unwind"
+# Line tables keep file and line numbers in panics and backtraces. Full debug info made
+# target/ grow to 25 GB and fill the disk during parallel builds.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 panic = "unwind"
