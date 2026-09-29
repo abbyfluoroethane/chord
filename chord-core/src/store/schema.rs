@@ -206,4 +206,16 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, peer)
     );
     "#,
+    // 6: join requests for spaces that we own (XEP-0060, 8.6). ejabberd does not list
+    // pending subscribers in the owner subscriptions query, so Chord keeps the requests
+    // that the service sends.
+    r#"
+    CREATE TABLE space_join_requests (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        service    TEXT NOT NULL,
+        node       TEXT NOT NULL,
+        jid        TEXT NOT NULL,
+        PRIMARY KEY (account_id, service, node, jid)
+    );
+    "#,
 ];

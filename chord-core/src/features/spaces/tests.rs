@@ -1834,9 +1834,18 @@ fn the_join_requests_are_the_pending_owner_subscriptions() {
 }
 
 #[test]
-fn approve_and_deny_send_an_owner_subscription_set() {
-    for state in ["subscribed", "none"] {
+fn approve_and_deny_send_the_authorization_form() {
+    for (state, allow) in [("subscribed", "true"), ("none", "false")] {
         let mut h = followed();
+        // A stored request from the service goes away after the answer.
+        crate::features::spaces::db::add_request(
+            h.store.conn(),
+            h.account_id,
+            SERVICE,
+            "dev",
+            "bob@chord.localhost",
+        )
+        .unwrap();
         let mut rx = owner_call(&mut h, |reply| Command::AnswerJoin {
             service: service_bare(),
             node: "dev".into(),
@@ -1844,19 +1853,19 @@ fn approve_and_deny_send_an_owner_subscription_set() {
             state,
             reply,
         });
-        let sent = h.sent_iqs();
-        assert!(matches!(&sent[0], Iq::Set { .. }));
-        let text = payload_of(&sent[0]);
-        assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
-        assert!(text.contains("bob@chord.localhost"), "{text}");
-        assert!(
-            text.contains(&format!("subscription=\"{state}\""))
-                || text.contains(&format!("subscription='{state}'")),
-            "{text}"
-        );
-        assert_eq!(rx.try_recv(), Ok(None));
-        h.answer(is_done, None);
         assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+        let sent = h.take_sent();
+        let [xmpp_parsers::stanza::Stanza::Message(m)] = &sent[..] else {
+            panic!("expected one message: {sent:?}")
+        };
+        let form = String::from(&m.payloads[0]);
+        assert!(form.contains(FORM_SUBSCRIBE_AUTHORIZATION), "{form}");
+        assert!(form.contains("bob@chord.localhost"), "{form}");
+        assert!(form.contains(&format!("<value>{allow}</value>")), "{form}");
+        let left =
+            crate::features::spaces::db::requests(h.store.conn(), h.account_id, SERVICE, "dev")
+                .unwrap();
+        assert!(left.is_empty());
     }
 }
 

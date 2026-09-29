@@ -91,7 +91,22 @@ import json, sys
 print([c['unread'] for c in json.load(sys.stdin) if c['jid'] == sys.argv[1]])" "$A")
 [[ "$unread" == "[0]" ]] || fail "B still has unread messages: $unread"
 
-echo "5. room: both join $room, A sends, and B sees it"
+echo "5. spaces: A makes an authorize space, B asks to join, and A approves"
+created=$(a --json space-create "E2E $n" --authorize)
+service=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['service'])" "$created")
+node=$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['node'])" "$created")
+cleanup_space() { a space-delete "$service" "$node" >/dev/null 2>&1 || true; }
+trap 'cleanup_space; [[ -n "${KEEP_WORK:-}" ]] || rm -rf "$work"' EXIT
+b space-browse | grep -qF "E2E $n" || fail "B does not see the new space in browse"
+b space-join "$service" "$node" | grep -q "must approve" || fail "the join is not pending"
+b --offline space-pending | grep -qF "E2E $n" || fail "B has no pending join"
+a space-requests "$service" "$node" | grep -qF "$B" || fail "A does not see the join request"
+a space-approve "$service" "$node" "$B" >/dev/null
+has_space() { b --json spaces | grep -qF "\"$node\""; }
+retry 5 has_space || fail "B does not have the space after the approval"
+b --offline space-pending | grep -qF "E2E $n" && fail "the join is still pending"
+
+echo "6. room: both join $room, A sends, and B sees it"
 a join "$room" --nick chordtest >/dev/null
 b join "$room" --nick chordtest2 >/dev/null
 rtext="e2e $n room"
@@ -99,14 +114,12 @@ a send "$room" "$rtext" >/dev/null
 has_room_text() { b --json timeline "$room" --limit 20 | grep -qF "$rtext"; }
 retry 5 has_room_text || fail "B does not see the room message"
 
-echo "6. A sends B a private message in the room"
+echo "7. A sends B a private message in the room"
 a pm "$room" chordtest2 "e2e $n private" >/dev/null
 
-echo "7. A uploads a file to B"
+echo "8. A uploads a file to B"
 printf 'chord e2e %s\n' "$n" > "$work/e2e.txt"
 a upload "$B" "$work/e2e.txt" >/dev/null
 
-echo "8. spaces: A browses spaces.chat.foid.space"
-a space-browse | grep -q "public spaces" || fail "space browse failed"
 
 echo "PASS: foid end-to-end run"

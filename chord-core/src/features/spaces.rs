@@ -235,7 +235,6 @@ pub(crate) enum Action {
         node: String,
     },
     AddMember,
-    Nothing,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -287,6 +286,7 @@ pub(crate) enum Pending {
     },
     /// The pending subscriptions of a space that we own.
     JoinRequests {
+        service: String,
         node: String,
         reply: Reply<Vec<JoinRequest>>,
     },
@@ -839,7 +839,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 &service,
                 &format!("<subscriptions node='{}'/>", xml_escape(&node)),
             );
+            let service = service.to_string();
             go(ctx, iq, reply, |reply| Pending::JoinRequests {
+                service,
                 node,
                 reply,
             });
@@ -851,19 +853,25 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             state,
             reply,
         } => {
-            let iq = owner_iq(
-                true,
+            // XEP-0060, 8.6: the owner answers with the authorization form in a message.
+            // ejabberd does not list pending subscribers in the owner subscriptions
+            // query, and it acts on this form.
+            ctx.send(authorization_answer(
                 &service,
-                &format!(
-                    "<subscriptions node='{}'><subscription jid='{}' subscription='{state}'/></subscriptions>",
-                    xml_escape(&node),
-                    xml_escape(jid.as_str())
-                ),
-            );
-            go(ctx, iq, reply, |reply| Pending::Done {
-                action: Action::Nothing,
-                reply,
-            });
+                &node,
+                jid.as_str(),
+                state == "subscribed",
+            ));
+            if let Err(e) = db::remove_request(
+                ctx.store.conn(),
+                ctx.account_id,
+                service.as_str(),
+                &node,
+                jid.as_str(),
+            ) {
+                ctx.store_error("remove a join request", e);
+            }
+            let _ = reply.send(Ok(()));
         }
         Command::Create {
             name,
@@ -1162,7 +1170,17 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             access,
             reply,
         } => match result {
-            Ok(_) => {
+            Ok(payload) => {
+                // ejabberd makes the owner's own subscription to an authorize node wait
+                // for approval too. We own the node, so approve it.
+                if payload.as_ref().is_some_and(is_pending_subscription) {
+                    ctx.send(authorization_answer(
+                        &service,
+                        &node,
+                        ctx.account.as_str(),
+                        true,
+                    ));
+                }
                 let access = access.as_str();
                 let s = service.to_string();
                 if let Err(e) = db::upsert_space(
@@ -1184,11 +1202,27 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(Err(e));
             }
         },
-        Pending::JoinRequests { node, reply } => {
+        Pending::JoinRequests {
+            service,
+            node,
+            reply,
+        } => {
+            // The owner query, plus the requests that the service sent as forms.
+            let stored = db::requests(ctx.store.conn(), ctx.account_id, &service, &node)
+                .unwrap_or_else(|e| {
+                    ctx.store_error("read the join requests", e);
+                    Vec::new()
+                });
             let _ = reply.send(result.map(|payload| {
-                payload
+                let mut list = payload
                     .map(|p| parse_join_requests(&p, &node))
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                for jid in stored {
+                    if !list.iter().any(|r| r.jid == jid) {
+                        list.push(JoinRequest { jid, subid: None });
+                    }
+                }
+                list
             }));
         }
         Pending::Done { action, reply } => match result {
@@ -1227,7 +1261,7 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             remove_item(ctx, &s, &node, room.as_str());
             changed(ctx, &s, &node);
         }
-        Action::AddMember | Action::Nothing => {}
+        Action::AddMember => {}
     }
 }
 
@@ -1277,6 +1311,34 @@ fn on_subscriptions(ctx: &mut Ctx<'_>, service: &BareJid, payload: &Element) {
 }
 
 /// The subscriptions of a space node for its owner. Keeps the pending ones.
+/// The answer of an owner to a join request (XEP-0060, 8.6): the authorization form,
+/// submitted in a message to the service.
+fn authorization_answer(service: &BareJid, node: &str, jid: &str, allow: bool) -> Message {
+    let form = DataForm::new(
+        DataFormType::Submit,
+        FORM_SUBSCRIBE_AUTHORIZATION,
+        vec![
+            Field::text_single("pubsub#node", node),
+            Field::new("pubsub#subscriber_jid", FieldType::JidSingle).with_value(jid),
+            Field::new("pubsub#allow", FieldType::Boolean).with_value(if allow {
+                "true"
+            } else {
+                "false"
+            }),
+        ],
+    );
+    let mut message = Message::new(Some(Jid::from(service.clone())));
+    message.payloads.push(form.into());
+    message
+}
+
+/// True if a subscribe answer says `pending`.
+fn is_pending_subscription(payload: &Element) -> bool {
+    payload
+        .get_child("subscription", ns::PUBSUB)
+        .is_some_and(|s| s.attr("subscription") == Some("pending"))
+}
+
 fn parse_join_requests(payload: &Element, node: &str) -> Vec<JoinRequest> {
     let Some(list) = payload
         .get_child("subscriptions", ns::PUBSUB_OWNER)
@@ -1317,10 +1379,6 @@ pub(crate) fn on_authorization(ctx: &mut Ctx<'_>, message: &Message) -> bool {
     let Some(form) = form else {
         return false;
     };
-    if ctx.state.spaces.service.as_ref() != Some(&from) {
-        log::warn!("dropped a join request from {from}: not our spaces service");
-        return true;
-    }
     let value = |var: &str| {
         form.fields
             .iter()
@@ -1331,6 +1389,20 @@ pub(crate) fn on_authorization(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         log::warn!("a join request from {from} has no node or subscriber");
         return true;
     };
+    // An offline request arrives right after login, before service discovery names the
+    // spaces service. So a space in the store also counts.
+    let known = ctx.state.spaces.service.as_ref() == Some(&from)
+        || db::space_name(ctx.store.conn(), ctx.account_id, from.as_str(), &node)
+            .ok()
+            .flatten()
+            .is_some();
+    if !known {
+        log::warn!("dropped a join request from {from}: not our spaces service");
+        return true;
+    }
+    if let Err(e) = db::add_request(ctx.store.conn(), ctx.account_id, from.as_str(), &node, &jid) {
+        ctx.store_error("store a join request", e);
+    }
     let name = db::space_name(ctx.store.conn(), ctx.account_id, from.as_str(), &node)
         .ok()
         .flatten()
@@ -2206,7 +2278,7 @@ mod tests;
 
 // --- Store ---
 
-mod db {
+pub(super) mod db {
     use super::*;
 
     pub struct Item<'a> {
@@ -2287,6 +2359,50 @@ mod db {
             params![account_id, service, node],
             |row| row.get(0),
         )
+    }
+
+    pub fn add_request(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        jid: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT OR IGNORE INTO space_join_requests (account_id, service, node, jid)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![account_id, service, node, jid],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_request(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        jid: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM space_join_requests
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND jid = ?4",
+            params![account_id, service, node, jid],
+        )?;
+        Ok(())
+    }
+
+    pub fn requests(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT jid FROM space_join_requests
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 ORDER BY jid",
+        )?;
+        stmt.query_map(params![account_id, service, node], |row| row.get(0))?
+            .collect()
     }
 
     pub fn pending(conn: &Connection, account_id: i64) -> rusqlite::Result<Vec<PendingJoin>> {
