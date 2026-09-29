@@ -7,6 +7,7 @@
   import DeleteModal from './DeleteModal.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
   import Menu, { type MenuItem } from './Menu.svelte';
+  import LinkPreviewCard from './LinkPreviewCard.svelte';
   import MessageBody from './MessageBody.svelte';
   import MessageEdit from './MessageEdit.svelte';
   import MessageToolbar from './MessageToolbar.svelte';
@@ -16,7 +17,9 @@
   import Reply from 'lucide-svelte/icons/reply';
   import { app } from './app.svelte';
   import { clock, domainOf, stamp } from './format';
+  import { linkPreviews } from './linkpreviews.svelte';
   import { prefs } from './prefs.svelte';
+  import { segments } from './richtext';
   import type { TimelineItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -34,6 +37,35 @@
   const editing = $derived(app.editingId === item.id);
   const foreign = $derived(domainOf(item.sender) !== domainOf(app.me.address));
   const full = $derived(new Date(item.timestamp).toLocaleString());
+
+  // Up to three different links of the body. Code is not a link. The attachment has its own view.
+  const wanted = $derived.by(() => {
+    if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
+    const urls = segments(item.body, [])
+      .filter((s) => s.t === 'link' && s.v !== item.attachment?.url)
+      .map((s) => s.v);
+    return [...new Set(urls)].slice(0, 3);
+  });
+
+  // Ask for the previews when the message first scrolls into view.
+  let seen = $state(false);
+  function watch(node: HTMLElement) {
+    if (typeof IntersectionObserver === 'undefined') {
+      seen = true;
+      return;
+    }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        seen = true;
+        io.disconnect();
+      }
+    });
+    io.observe(node);
+    return { destroy: () => io.disconnect() };
+  }
+  $effect(() => {
+    if (seen) for (const url of wanted) linkPreviews.request(url);
+  });
 
   const items = $derived<MenuItem[]>([
     { label: 'Reply', icon: Reply, onselect: () => app.startReply(item) },
@@ -136,6 +168,14 @@
         </div>
       {/if}
       {#if item.attachment}<AttachmentView file={item.attachment} />{/if}
+      {#if wanted.length}
+        <div class="previews" use:watch>
+          {#each wanted as url (url)}
+            {@const p = linkPreviews.get(url)}
+            {#if p}<LinkPreviewCard preview={p} />{/if}
+          {/each}
+        </div>
+      {/if}
       <ReactionPills reactions={item.reactions} ontoggle={(e) => app.toggleReaction(item.id, e)} />
       {#if item.status === 'failed'}
         <p class="failed">Not sent. <button onclick={() => (item.status = 'sending')}>Try again</button></p>
@@ -159,6 +199,10 @@
 {/if}
 
 <style>
+  .previews {
+    display: flex;
+    flex-direction: column;
+  }
   .msg {
     position: relative;
     display: grid;

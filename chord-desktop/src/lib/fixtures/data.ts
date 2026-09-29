@@ -1,4 +1,5 @@
 // Sample data for the UI shell. The bridge replaces all of this later.
+import type { LinkPreview } from '$lib/chord/types';
 import type {
   ChannelItem,
   ContactItem,
@@ -349,6 +350,12 @@ const opsGeneral = build([
     edited: true
   },
   {
+    id: 'g10b',
+    who: 'sam',
+    ts: at(0, 12, 20),
+    body: 'Range weather for Thursday: https://weather.example.net/range and the photo https://cdn.example.net/burn.jpg'
+  },
+  {
     id: 'g11',
     who: 'rin',
     ts: at(0, 12, 40),
@@ -383,6 +390,38 @@ function small(who: string[], base: number): TimelineItem[] {
     }))
   );
 }
+
+/** Sample link previews for the browser preview, keyed by URL. There is no network. */
+export const linkPreviews: Record<string, LinkPreview> = {
+  'https://example.org/stand-manual': {
+    url: 'https://example.org/stand-manual',
+    siteName: 'Example Docs',
+    title: 'Test stand manual: pressure limits and valve order',
+    description:
+      'The maximum working pressure is 12 bar. Follow the valve order on page two before every static fire, and log each run in the range book.',
+    image: pic(160, 160, '#0a655c', '#111316'),
+    imageWidth: 160,
+    imageHeight: 160
+  },
+  'https://weather.example.net/range': {
+    url: 'https://weather.example.net/range',
+    siteName: 'Range Weather',
+    title: 'Thursday at the range: clear, light wind',
+    description: null,
+    image: pic(1200, 630, '#4cc3b5', '#21252b'),
+    imageWidth: 1200,
+    imageHeight: 630
+  },
+  'https://cdn.example.net/burn.jpg': {
+    url: 'https://cdn.example.net/burn.jpg',
+    siteName: null,
+    title: null,
+    description: null,
+    image: pic(640, 400, '#c47b0c', '#3a2c16'),
+    imageWidth: null,
+    imageHeight: null
+  }
+};
 
 export const timelines: Record<string, TimelineItem[]> = {
   'launch-ops-general@chat.foid.space': opsGeneral,

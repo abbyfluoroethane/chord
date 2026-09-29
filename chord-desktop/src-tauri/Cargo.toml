@@ -30,6 +30,14 @@ log.workspace = true
 percent-encoding = "2"
 # The avatar store reads the database with its own connection (src/avatars.rs).
 rusqlite.workspace = true
+# Link previews (src/link_preview.rs): the HTTP fetch, with rustls as in chord-core.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# The DNS lookup of the SSRF filter, and the per-URL lock.
+tokio = { workspace = true, features = ["net", "sync"] }
+# Parses the URL, and resolves a relative image URL against the page.
+url = "2"
+# html5ever based HTML parser and selectors, for the Open Graph tags.
+scraper = "0.23"
 
 # The system keychain for the saved password (src/keychain.rs). Each platform names its
 # own store. A target with no store feature would fall back to a mock store that keeps

@@ -5,6 +5,7 @@ import * as fx from '$lib/fixtures/data';
 import type { NotificationSetting, SpaceAccess, TimelineSubscription } from '$lib/chord';
 import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle } from './adapt';
 import { api, live } from './bridge';
+import { linkPreviews } from './linkpreviews.svelte';
 import { settings } from './local';
 import type {
   ChannelItem,
@@ -202,6 +203,7 @@ class AppState {
   }
 
   loadLocal() {
+    linkPreviews.load();
     if (live) {
       this.hiddenDms = settings.get<string[]>('hiddenDms') ?? [];
       this.nickname = settings.get<Record<string, string>>('nicks') ?? {};

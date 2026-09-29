@@ -3,6 +3,7 @@
   import SettingRow from './SettingRow.svelte';
   import Toggle from './Toggle.svelte';
   import { contactsStore } from './contacts.svelte';
+  import { linkPreviews } from './linkpreviews.svelte';
   import { prefs } from './prefs.svelte';
 
   let address = $state('');
@@ -16,6 +17,18 @@
     if (r.ok) address = '';
   }
 </script>
+
+<h2 class="section">Link previews</h2>
+<SettingRow
+  title="Show link previews"
+  hint="Chord fetches the page from this computer to show a preview. The site can see your IP address."
+>
+  <Toggle
+    checked={linkPreviews.enabled}
+    label="Show link previews"
+    onchange={(v) => linkPreviews.setEnabled(v)}
+  />
+</SettingRow>
 
 <h2 class="section">Contact requests</h2>
 <SettingRow

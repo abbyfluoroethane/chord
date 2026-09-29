@@ -11,6 +11,7 @@ import type {
   JoinOutcome,
   Jid,
   JoinRequest,
+  LinkPreview,
   ListDiff,
   MemberItem,
   NotificationLevel,
@@ -279,3 +280,12 @@ export const pushRegistrations = () => invoke<PushRegistration[]>('push_registra
 export const getSettings = () => invoke<Settings>('get_settings');
 /** Replace the local settings. Any JSON, 256 KB at most. */
 export const setSettings = (value: Settings) => invoke<void>('set_settings', { value });
+
+// ---------------------------------------------------------------- link previews
+
+/**
+ * Fetch the page of `url` from this computer and read its title, text and image. The
+ * site sees our IP address. Resolves to null when the page has no preview. Rust caches
+ * the answer for one hour and refuses private addresses.
+ */
+export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_preview', { url });

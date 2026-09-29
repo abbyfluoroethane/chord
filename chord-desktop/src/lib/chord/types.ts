@@ -272,3 +272,16 @@ export interface OpenInfo {
  * Keep the fields you know and pass unknown fields back, so that a newer version works.
  */
 export type Settings = Record<string, unknown>;
+
+/** The preview of a link (Rust `LinkPreview`). Every field but `url` can be null. */
+export interface LinkPreview {
+  /** The URL after the redirects. */
+  url: string;
+  siteName: string | null;
+  title: string | null;
+  description: string | null;
+  /** An absolute http or https URL. */
+  image: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+}

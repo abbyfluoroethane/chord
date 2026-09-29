@@ -9,6 +9,7 @@ mod avatars;
 mod commands;
 mod error;
 mod keychain;
+mod link_preview;
 mod notify;
 mod settings;
 mod state;
@@ -85,6 +86,7 @@ pub fn run() {
             commands::set_notification_level,
             commands::notification_level,
             commands::push_registrations,
+            link_preview::link_preview,
             settings::get_settings,
             settings::set_settings,
         ])
