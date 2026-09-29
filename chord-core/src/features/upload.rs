@@ -2,8 +2,7 @@
 //!
 //! `ClientHandle::upload` asks the upload service for a slot, then the runtime runs the
 //! HTTP PUT, then we send a chat message with the GET URL. It needs the disco scan of the
-//! server to be complete. Before that, the command fails with `ClientError::Unsupported`
-//! ("upload service not discovered yet"), and the caller can try again.
+//! server to be complete: `features::on_command` holds the command until then.
 //!
 //! Only 1:1 chats work. A room gets `ClientError::Unsupported`, until the MUC feature
 //! has a way to send a message with an OOB payload.
@@ -588,18 +587,17 @@ mod tests {
     #[test]
     fn no_service_fails_the_command() {
         let mut h = Harness::new();
-        let answer = command(&mut h, "bob@chord.localhost", vec![1]);
+        // Before discovery finishes, the command waits.
+        let mut answer = command(&mut h, "bob@chord.localhost", vec![1]);
+        assert_eq!(answer.try_recv().unwrap(), None);
+
+        // Discovery finishes with no upload service: the command fails.
+        h.state.disco.complete = true;
+        h.with_ctx(crate::features::on_services_ready);
         let Err(ClientError::Unsupported(text)) = result_of(answer) else {
             panic!("expected Unsupported");
         };
-        assert!(text.contains("not discovered yet"));
-
-        h.state.disco.complete = true;
-        let answer = command(&mut h, "bob@chord.localhost", vec![1]);
-        assert!(matches!(
-            result_of(answer),
-            Err(ClientError::Unsupported(_))
-        ));
+        assert!(text.contains("no upload service"));
         assert!(h.take_sent().is_empty());
     }
 

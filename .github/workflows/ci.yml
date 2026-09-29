@@ -61,6 +61,8 @@ jobs:
         run: cargo test --workspace -- --ignored
       - name: Alice sends to bob over TLS
         run: ./dev/send-demo.sh
+      - name: End-to-end run through chord-cli
+        run: ./dev/e2e-demo.sh
       - name: Server log
         if: failure()
         run: docker compose -f dev/prosody/docker-compose.yml logs --tail 200

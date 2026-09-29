@@ -16,5 +16,6 @@ cargo build -p chord-core --target wasm32-unknown-unknown --no-default-features
 if [[ "${1:-}" == "--live" ]]; then
   cargo test --workspace -- --ignored
   ./dev/send-demo.sh
+  ./dev/e2e-demo.sh
 fi
 echo "All checks passed."

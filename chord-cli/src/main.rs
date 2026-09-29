@@ -9,6 +9,13 @@
 //!   members <room>
 //!   timeline <jid> [--limit N] [--follow]
 //!   state                           spaces, Home channels, and the channels of each space
+//!   join <room> [--nick N]          join and bookmark a room (password: CHORD_ROOM_PASSWORD)
+//!   leave <room>
+//!   upload <jid> <file>             XEP-0363 upload, then send the URL
+//!   space-browse | space-join <service> <node> | space-create <name> [--private]
+//!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
+//!   space-delete <service> <node>
+//!   contacts | contact-add <jid> [name]
 //!
 //! --json prints JSON. --offline reads the local database and does not log in.
 //! `timeline --follow` prints each diff as it arrives, as a UI gets it.
@@ -29,6 +36,7 @@
 //!   3  server unreachable, or its TLS certificate is invalid
 //!   4  login timed out
 
+mod actions;
 mod json;
 mod show;
 mod views;
@@ -51,7 +59,10 @@ use tokio::task::JoinHandle;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <text> | \
 listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
-timeline <jid> [--limit N] [--follow] | state";
+timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
+upload <jid> <file> | space-browse | space-join <service> <node> | \
+space-create <name> [--private] | space-add-room <service> <node> <room> [name] | \
+space-add-member <service> <node> <jid> | space-delete <service> <node> | contacts | contact-add <jid> [name]";
 
 /// Global options.
 pub struct Opts {
@@ -176,12 +187,33 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         .split_first()
         .ok_or_else(|| CliError::from(USAGE.to_owned()))?;
     let known = [
-        "login", "send", "listen", "spaces", "channels", "members", "timeline", "state",
+        "login",
+        "send",
+        "listen",
+        "spaces",
+        "channels",
+        "members",
+        "timeline",
+        "state",
+        "join",
+        "leave",
+        "upload",
+        "space-browse",
+        "space-join",
+        "space-create",
+        "space-add-room",
+        "space-add-member",
+        "space-delete",
+        "contacts",
+        "contact-add",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
     }
-    let needs_session = matches!(*command, "login" | "send" | "listen");
+    let needs_session = !matches!(
+        *command,
+        "spaces" | "channels" | "members" | "timeline" | "state"
+    );
     if needs_session && opts.offline {
         return Err(format!("{command} needs a session, not --offline").into());
     }
@@ -202,6 +234,19 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("members", [room]) => views::members(opts, &client, room).await,
         ("timeline", args) => views::timeline(opts, &client, args).await,
         ("state", []) => views::state(opts, &client).await,
+        ("join", args) => actions::join(&client, args).await,
+        ("leave", [room]) => actions::leave(&client, room).await,
+        ("upload", [to, file]) => actions::upload(&client, to, file).await,
+        ("space-browse", []) => actions::space_browse(opts, &client).await,
+        ("space-join", [service, node]) => actions::space_join(&client, service, node).await,
+        ("space-create", args) => actions::space_create(opts, &client, args).await,
+        ("space-add-room", args) => actions::space_add_room(&client, args).await,
+        ("space-add-member", [service, node, jid]) => {
+            actions::space_add_member(&client, service, node, jid).await
+        }
+        ("space-delete", [service, node]) => actions::space_delete(&client, service, node).await,
+        ("contacts", []) => actions::contacts(opts, &client).await,
+        ("contact-add", args) => actions::contact_add(&client, args).await,
         _ => Err(USAGE.to_owned().into()),
     };
     let stopped = stop_client(client).await;

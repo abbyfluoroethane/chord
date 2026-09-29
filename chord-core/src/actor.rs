@@ -262,6 +262,8 @@ struct Online<S: Session> {
     bound_jid: Option<Jid>,
     /// The id of the ping that `logout` waits for, and the logout reply.
     logout: Option<(String, oneshot::Sender<()>)>,
+    /// A logout that waits until the features send their queued stanzas.
+    logout_waiting: Option<oneshot::Sender<()>>,
 }
 
 /// The actor. It owns the session, the store, and the views. Run it with `run`.
@@ -391,6 +393,12 @@ impl<S: Session> Actor<S> {
                 }
             }
         }
+        // A logout that waited for queued stanzas can go on now.
+        if !features::has_queued_stanzas(&self.state)
+            && let Some(reply) = self.online.as_mut().and_then(|o| o.logout_waiting.take())
+        {
+            self.logout(reply).await;
+        }
         let dirty = std::mem::take(&mut self.dirty);
         let q = QueryCtx {
             store: &self.store,
@@ -506,6 +514,7 @@ impl<S: Session> Actor<S> {
             events,
             bound_jid: None,
             logout: None,
+            logout_waiting: None,
         });
         Ok(())
     }
@@ -517,6 +526,12 @@ impl<S: Session> Actor<S> {
             let _ = reply.send(());
             return;
         };
+        if features::has_queued_stanzas(&self.state) {
+            // For example a room message that waits for its join. `flush` calls this
+            // again when the queue is empty.
+            online.logout_waiting = Some(reply);
+            return;
+        }
         let id = format!("logout-{}", features::new_id());
         let server = features::disco::domain_of(&self.account);
         let ping = Iq::from_get(id.clone(), Ping).with_to(server);

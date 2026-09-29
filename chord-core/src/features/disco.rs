@@ -103,8 +103,11 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     let IqResponse::Result(Some(payload)) = response else {
-        if let Pending::ServiceInfo(_) = pending {
-            finish_one(ctx);
+        match pending {
+            Pending::ServiceInfo(_) => finish_one(ctx),
+            // With no item list, discovery ends here, with no services.
+            Pending::ServerItems => mark_complete(ctx),
+            Pending::ServerInfo => {}
         }
         return;
     };
@@ -112,11 +115,12 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
         Pending::ServerInfo => ctx.state.disco.server = DiscoInfoResult::try_from(payload).ok(),
         Pending::ServerItems => {
             let Ok(items) = DiscoItemsResult::try_from(payload) else {
+                mark_complete(ctx);
                 return;
             };
             ctx.state.disco.outstanding = items.items.len();
             if items.items.is_empty() {
-                ctx.state.disco.complete = true;
+                mark_complete(ctx);
             }
             for item in items.items {
                 let query =
@@ -137,10 +141,20 @@ fn finish_one(ctx: &mut Ctx<'_>) {
     let state = &mut ctx.state.disco;
     state.outstanding = state.outstanding.saturating_sub(1);
     if state.outstanding == 0 {
-        state.complete = true;
-        // Spaces need the pubsub service, so they start now.
-        super::spaces::on_disco_complete(ctx);
+        mark_complete(ctx);
     }
+}
+
+/// Discovery is done: every service query has an answer, or the item list failed.
+fn mark_complete(ctx: &mut Ctx<'_>) {
+    if ctx.state.disco.complete {
+        return;
+    }
+    ctx.state.disco.complete = true;
+    // Spaces need the pubsub service, so they start now.
+    super::spaces::on_disco_complete(ctx);
+    // Commands that waited for the services run now.
+    super::on_services_ready(ctx);
 }
 
 /// Answer a disco#info query to us. Returns true if `iq` is one.
@@ -193,6 +207,68 @@ mod tests {
         assert_eq!(id, "q1");
         let info = DiscoInfoResult::try_from(p.clone()).unwrap();
         assert!(info.features.contains("urn:xmpp:bookmarks:1+notify"));
+    }
+
+    #[test]
+    fn service_commands_wait_for_discovery() {
+        use crate::actor::ClientError;
+        use crate::features::{FeatureCommand, on_command};
+        use futures_channel::oneshot;
+
+        let mut h = Harness::new();
+        h.with_ctx(on_connected);
+        let (reply, mut answer) = oneshot::channel();
+        let command = FeatureCommand::Upload(crate::features::upload::Command::Upload {
+            to: Jid::new("bob@chord.localhost").unwrap(),
+            filename: "a.txt".into(),
+            content_type: "text/plain".into(),
+            data: vec![1],
+            reply,
+        });
+        h.with_ctx(|ctx| on_command(ctx, command));
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            None,
+            "held until discovery finishes"
+        );
+        assert_eq!(h.state.deferred.len(), 1);
+
+        // The item list fails: discovery ends with no services, and the command runs.
+        h.respond(
+            |p| matches!(p, FeaturePending::Disco(Pending::ServerItems)),
+            IqResponse::Lost,
+        );
+        assert!(h.state.disco.complete);
+        assert!(h.state.deferred.is_empty());
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Unsupported(_)))
+        ));
+    }
+
+    #[test]
+    fn a_command_before_connected_survives_the_session_reset() {
+        use crate::features::{FeatureCommand, on_command};
+        use futures_channel::oneshot;
+
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        let command = FeatureCommand::Upload(crate::features::upload::Command::Upload {
+            to: Jid::new("bob@chord.localhost").unwrap(),
+            filename: "a.txt".into(),
+            content_type: "text/plain".into(),
+            data: vec![1],
+            reply,
+        });
+        // The command arrives after login, before `Connected`.
+        h.with_ctx(|ctx| on_command(ctx, command));
+        h.with_ctx(|ctx| crate::features::on_connected(ctx, false));
+        assert_eq!(
+            h.state.deferred.len(),
+            1,
+            "the reset keeps the waiting command"
+        );
+        assert_eq!(answer.try_recv().unwrap(), None);
     }
 
     #[test]

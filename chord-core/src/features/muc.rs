@@ -45,6 +45,8 @@ pub(crate) struct State {
     pub(super) nicks: HashMap<BareJid, String>,
     /// The rooms that were joined before this session. `on_connected` joins them again.
     previous: Vec<BareJid>,
+    /// Messages for rooms that we are joining. They go out when the join completes.
+    outbox: HashMap<BareJid, Vec<Message>>,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -463,10 +465,25 @@ pub(crate) fn send_chat(ctx: &mut Ctx<'_>, to: Jid, body: String) -> Result<Stri
 }
 
 /// Send a groupchat message and store it. Returns its origin-id.
+///
+/// If we are not in the room yet (for example right after login, while the autojoin
+/// runs), the message waits in the outbox and goes out when the join completes. The
+/// send starts the join if none runs.
 pub(crate) fn send(ctx: &mut Ctx<'_>, room: &BareJid, body: String) -> Result<String, ClientError> {
-    let Some(nick) = ctx.state.muc.nicks.get(room).cloned() else {
-        return Err(ClientError::Invalid(format!("not in the room {room}")));
+    let nick = match ctx.state.muc.nicks.get(room).cloned() {
+        Some(nick) => Some(nick),
+        None if room_row(ctx, room).is_some() => {
+            if !ctx.state.muc.joins.contains_key(room) {
+                join_room(ctx, room, None, None, None);
+            }
+            None
+        }
+        None => return Err(ClientError::Invalid(format!("not in the room {room}"))),
     };
+    let sender_nick = nick
+        .clone()
+        .or_else(|| ctx.state.muc.joins.get(room).map(|j| j.nick.clone()))
+        .unwrap_or_default();
     let origin_id = new_id();
     let mut message = Message::groupchat(Jid::from(room.clone()))
         .with_body("".into(), body.clone())
@@ -474,10 +491,19 @@ pub(crate) fn send(ctx: &mut Ctx<'_>, room: &BareJid, body: String) -> Result<St
             id: origin_id.clone(),
         });
     message.id = Some(Id(origin_id.clone()));
-    ctx.send(message);
+    if nick.is_some() {
+        ctx.send(message);
+    } else {
+        ctx.state
+            .muc
+            .outbox
+            .entry(room.clone())
+            .or_default()
+            .push(message);
+    }
 
     let peer = room.to_string();
-    let sender = format!("{room}/{nick}");
+    let sender = format!("{room}/{sender_nick}");
     let new = NewMessage {
         kind: MessageKind::Groupchat,
         key_kind: KeyKind::OriginId,
@@ -679,6 +705,7 @@ fn on_error(ctx: &mut Ctx<'_>, room: &BareJid, nick: Option<&str>, presence: &Pr
             let _ = reply.send(Err(ClientError::Server(text.clone())));
         }
         ctx.emit(ClientEvent::Notice(format!("Cannot join {room}: {text}")));
+        drop_outbox(ctx, room);
         mark_room(ctx, room);
     } else {
         ctx.emit(ClientEvent::Notice(format!("Error from {room}: {text}")));
@@ -709,12 +736,10 @@ fn on_unavailable(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Pres
     } else if is_self {
         let was_in = ctx.state.muc.nicks.remove(room).is_some();
         let joining = ctx.state.muc.joins.remove(room);
-        if let Some(join) = &joining {
-            let _ = join;
-        }
         for reply in joining.into_iter().flat_map(|j| j.replies) {
             let _ = reply.send(Err(ClientError::Server("removed from the room".into())));
         }
+        drop_outbox(ctx, room);
         set_joined(ctx, room, false);
         clear_occupants(ctx, room);
         if was_in {
@@ -800,17 +825,41 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
         if !join.changing_nick {
             mam::catch_up_room(ctx, room);
         }
+        for message in ctx.state.muc.outbox.remove(room).unwrap_or_default() {
+            ctx.send(message);
+        }
     }
     mark_room(ctx, room);
 }
 
-/// Accept the default configuration of a new room (XEP-0045, 10.1.2). Until then the room
-/// is locked.
+/// True while messages wait for a room join.
+pub(crate) fn has_outbox(state: &State) -> bool {
+    state.outbox.values().any(|m| !m.is_empty())
+}
+
+/// Drop the queued messages of a room whose join failed, and say so.
+fn drop_outbox(ctx: &mut Ctx<'_>, room: &BareJid) {
+    if let Some(messages) = ctx.state.muc.outbox.remove(room) {
+        ctx.emit(ClientEvent::Notice(format!(
+            "{} message(s) to {room} were not sent: the join failed",
+            messages.len()
+        )));
+    }
+}
+
+/// Configure a new room (XEP-0045, 10.1.3). Until then the room is locked. A Chord room
+/// is a channel, so it is persistent (it stays when the last occupant leaves) and it keeps
+/// an archive for MAM. The server keeps its defaults for the other fields.
 fn unlock_room(ctx: &mut Ctx<'_>, room: &BareJid) {
-    let query: Element =
-        format!("<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='submit'/></query>")
-            .parse()
-            .expect("static XML");
+    let query: Element = format!(
+        "<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='submit'>\
+         <field var='FORM_TYPE'><value>http://jabber.org/protocol/muc#roomconfig</value></field>\
+         <field var='muc#roomconfig_persistentroom'><value>1</value></field>\
+         <field var='muc#roomconfig_enablearchiving'><value>1</value></field>\
+         </x></query>"
+    )
+    .parse()
+    .expect("static XML");
     let iq = Iq::Set {
         from: None,
         to: Some(Jid::from(room.clone())),
@@ -1111,7 +1160,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_room_is_unlocked_with_the_default_configuration() {
+    fn a_new_room_is_configured_persistent_with_an_archive() {
         let mut h = Harness::new();
         let mut answer = join(&mut h, "alice");
         let created = occupant_presence(
@@ -1331,11 +1380,35 @@ mod tests {
     }
 
     #[test]
-    fn send_needs_a_joined_room_and_send_chat_routes_by_room() {
+    fn send_to_a_known_room_waits_for_the_join_and_send_chat_routes_by_room() {
         let mut h = Harness::new();
         ensure_room_for_test(&mut h);
+        // Not in the room yet: the send starts a join and queues the message.
+        let id = h
+            .with_ctx(|ctx| send_chat(ctx, Jid::from(room()), "early".into()))
+            .unwrap();
+        let sent = h.take_sent();
+        assert!(
+            matches!(&sent[..], [Stanza::Presence(_)]),
+            "only the join presence goes out: {sent:?}"
+        );
+        h.with_ctx(|ctx| on_presence(ctx, &self_presence("alice")));
+        let sent = h.take_sent();
+        let queued = sent.iter().find_map(|s| match s {
+            Stanza::Message(m) if m.type_ == MessageType::Groupchat => Some(m),
+            _ => None,
+        });
+        assert_eq!(queued.and_then(|m| m.id.clone()), Some(Id(id)), "{sent:?}");
+
+        // A room that we do not know is an error.
         let err = h
-            .with_ctx(|ctx| send_chat(ctx, Jid::from(room()), "x".into()))
+            .with_ctx(|ctx| {
+                send(
+                    ctx,
+                    &BareJid::new("nope@rooms.chord.localhost").unwrap(),
+                    "x".into(),
+                )
+            })
             .unwrap_err();
         assert!(matches!(err, ClientError::Invalid(_)), "{err:?}");
         let err = h

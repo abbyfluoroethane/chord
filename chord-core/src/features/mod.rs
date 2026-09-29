@@ -104,6 +104,9 @@ pub(crate) struct FeatureState {
     pub spaces: spaces::State,
     pub upload: upload::State,
     pub avatars: avatars::State,
+    /// Commands that need a server service (pubsub, upload) and arrived before service
+    /// discovery finished. They run when it finishes.
+    pub deferred: Vec<FeatureCommand>,
 }
 
 /// A command for one feature. The public API in each feature module sends it.
@@ -193,8 +196,11 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool) {
     }
     // The MUC state keeps the rooms to join again, and fails the joins that wait.
     let muc_state = muc::next_session(ctx);
+    // Commands that wait for service discovery stay: the new session runs discovery again.
+    let deferred = std::mem::take(&mut ctx.state.deferred);
     *ctx.state = FeatureState::default();
     ctx.state.muc = muc_state;
+    ctx.state.deferred = deferred;
     if let Err(e) = crate::store::queries::clear_volatile(ctx.store, ctx.account_id) {
         ctx.store_error("clear presence and occupants", e);
     }
@@ -313,8 +319,28 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
     }
 }
 
-/// A command for one feature.
+/// A command for one feature. A command that needs a server service waits until
+/// service discovery finishes (see `on_services_ready`).
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
+    let needs_services = matches!(
+        command,
+        FeatureCommand::Spaces(_) | FeatureCommand::Upload(_)
+    );
+    if needs_services && !ctx.state.disco.complete {
+        ctx.state.deferred.push(command);
+        return;
+    }
+    dispatch(ctx, command);
+}
+
+/// Service discovery finished. Run the commands that waited for it.
+pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
+    for command in std::mem::take(&mut ctx.state.deferred) {
+        dispatch(ctx, command);
+    }
+}
+
+fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
     match command {
         FeatureCommand::Roster(c) => roster::on_command(ctx, c),
         FeatureCommand::Mam(c) => mam::on_command(ctx, c),
@@ -342,6 +368,12 @@ pub(crate) fn on_internal(ctx: &mut Ctx<'_>, internal: Internal) {
     match internal {
         Internal::UploadDone(done) => upload::on_put_done(ctx, done),
     }
+}
+
+/// True while features hold stanzas that must go out before a logout, for example room
+/// messages that wait for a join.
+pub(crate) fn has_queued_stanzas(state: &FeatureState) -> bool {
+    muc::has_outbox(&state.muc)
 }
 
 /// A timeline wants more history than the store has. MAM fetches older messages.

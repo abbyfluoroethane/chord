@@ -18,8 +18,9 @@ text="${1:-hello bob, the time is $(date +%H:%M:%S)}"
 bob_log=$(mktemp)
 trap 'rm -f "$bob_log"' EXIT
 
-# 1. Bob listens, and exits after the first message.
-CHORD_JID=bob@chord.localhost CHORD_PASSWORD="$BOB_PASSWORD" "$cli" listen --once >"$bob_log" 2>&1 &
+# 1. Bob listens. Other messages can arrive first (for example messages that the server
+# stored while bob was offline), so the script waits for alice's exact text.
+CHORD_JID=bob@chord.localhost CHORD_PASSWORD="$BOB_PASSWORD" "$cli" listen >"$bob_log" 2>&1 &
 bob=$!
 for _ in $(seq 1 150); do
   grep -q '^listening' "$bob_log" && break
@@ -32,15 +33,17 @@ echo "[bob]   $(head -1 "$bob_log")"
 CHORD_JID=alice@chord.localhost CHORD_PASSWORD="$ALICE_PASSWORD" "$cli" login | sed 's/^/[alice] /'
 CHORD_JID=alice@chord.localhost CHORD_PASSWORD="$ALICE_PASSWORD" "$cli" send bob@chord.localhost "$text" | sed 's/^/[alice] /'
 
-# 3. Bob prints the message. Stop after 15 seconds.
+# 3. Wait until bob prints the message. Stop after 15 seconds.
+found=no
 for _ in $(seq 1 150); do
-  kill -0 "$bob" 2>/dev/null || break
+  if grep -qF "$text" "$bob_log"; then found=yes; break; fi
   sleep 0.1
 done
-if kill -0 "$bob" 2>/dev/null; then
-  kill "$bob"
+kill "$bob" 2>/dev/null || true
+wait "$bob" 2>/dev/null || true
+tail -n +2 "$bob_log" | sed 's/^/[bob]   /'
+if [[ "$found" != yes ]]; then
   echo "FAIL: bob did not receive the message in 15 seconds" >&2
   exit 1
 fi
-tail -n +2 "$bob_log" | sed 's/^/[bob]   /'
-grep -qF "$text" "$bob_log" && echo "PASS: bob received the message"
+echo "PASS: bob received the message"
