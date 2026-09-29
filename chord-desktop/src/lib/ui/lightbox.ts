@@ -51,7 +51,8 @@ export async function openLightbox(images: LightboxImage[], index: number): Prom
   const pswp = new PhotoSwipe({
     dataSource: images.map((i) => ({ src: i.src, alt: i.alt })),
     index: start,
-    bgOpacity: 0.92,
+    // The see-through colour and the blur are in lightbox.css.
+    bgOpacity: 1,
     showHideAnimationType: still ? 'none' : 'fade',
     showAnimationDuration: still ? 0 : OPEN_MS,
     hideAnimationDuration: still ? 0 : CLOSE_MS,
