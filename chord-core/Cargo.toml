@@ -23,7 +23,7 @@ uuid.workspace = true
 sasl = { workspace = true, optional = true }
 tokio-xmpp = { workspace = true, optional = true }
 # Only session/native.rs and runtime.rs use tokio.
-tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time"] }
+tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time", "io-util"] }
 
 # xmpp-parsers and xso use uuid. On wasm32-unknown-unknown it needs a JS randomness source.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

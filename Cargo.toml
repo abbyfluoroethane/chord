@@ -29,11 +29,11 @@ uuid = { version = "1", features = ["v4"] }
 
 # panic = "unwind" is required. Do not set panic = "abort" in any profile.
 #
+# - UniFFI needs unwind to turn a panic into an error at the FFI boundary.
 # - tokio-xmpp 6.0.0 panics in stanzastream/worker.rs:549 when a connector drops its
-#   slot. Chord drops the slot on a fatal auth failure and on a disconnect during a
-#   reconnect (see chord-core/src/session/native.rs). Tokio catches that panic only
-#   with unwind. With abort, the panic stops the whole process.
-# - UniFFI also needs unwind to turn a panic into an error at the FFI boundary.
+#   slot. Chord never drops the slot (see release_slot in
+#   chord-core/src/session/native.rs), but if that ever breaks, tokio catches the panic
+#   only with unwind. With abort, the panic stops the whole process.
 # - Tauri size guides recommend panic = "abort". Do not copy that.
 [profile.dev]
 panic = "unwind"

@@ -9,7 +9,7 @@
 //! Search for `TOKIO-XMPP-COPY` to find the code that copies `tokio-xmpp` internals.
 
 use core::future::Future;
-use core::pin::Pin;
+use core::pin::{Pin, pin};
 use core::task::{Context, Poll};
 use core::time::Duration;
 use std::borrow::Cow;
@@ -28,9 +28,14 @@ use tokio_xmpp::connect::{DnsConfig, ServerConnector, StartTlsServerConnector};
 use tokio_xmpp::error::AuthError;
 use tokio_xmpp::rustls;
 use tokio_xmpp::stanzastream::{Connection, Event, StanzaStream, StreamEvent};
-use tokio_xmpp::xmlstream::{StreamHeader, Timeouts};
+use tokio_xmpp::xmlstream::{
+    FallibleStreamElement, RecvFeaturesError, StreamHeader, Timeouts, accept_stream,
+    initiate_stream,
+};
+use xmpp_parsers::bind::BindFeature;
 use xmpp_parsers::ns;
 use xmpp_parsers::stanza::Stanza;
+use xmpp_parsers::stream_features::StreamFeatures;
 
 use super::{
     AuthFailure, ConnectError, DisconnectReason, SaslRetry, ServerAddr, Session, SessionConfig,
@@ -185,6 +190,7 @@ impl NativeSession {
                 tokio::spawn(retry_login(
                     attempt.clone(),
                     slot,
+                    release_slot,
                     auth_tx.clone(),
                     shutdown_rx.clone(),
                     login_timeout,
@@ -213,17 +219,40 @@ impl NativeSession {
 /// - The loop stops when `shutdown` turns true. `new_c2s` has no stop.
 /// - Each attempt has a time limit.
 ///
-/// The loop never holds `slot` forever. It drops `slot` on shutdown, or `FATAL_SLOT_HOLD`
-/// after a fatal failure. tokio-xmpp 6.0.0 then panics in the worker task
-/// (stanzastream/worker.rs:180-183 and 548-549). Tokio catches that panic, and the worker
-/// ends. This is the only way to end a worker that waits for a connection.
-async fn retry_login<T, F, Fut>(
-    mut attempt: F,
+/// When the loop stops without a connection, `release` gets the slot. It must fill the
+/// slot: if the slot drops, tokio-xmpp 6.0.0 panics in the worker
+/// (stanzastream/worker.rs:180-183 and 548-549). The loop never holds the slot forever.
+/// It releases the slot on shutdown, or `FATAL_SLOT_HOLD` after a fatal failure.
+async fn retry_login<T, F, Fut, R>(
+    attempt: F,
     slot: oneshot::Sender<T>,
+    release: R,
+    auth_failed: mpsc::UnboundedSender<AuthFailure>,
+    shutdown: watch::Receiver<bool>,
+    login_timeout: Duration,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, LoginError>>,
+    R: FnOnce(oneshot::Sender<T>),
+{
+    match login_until_stop(attempt, auth_failed, shutdown, login_timeout).await {
+        Some(connection) => {
+            // An error means that the worker is gone. Nothing waits for the connection.
+            let _ = slot.send(connection);
+        }
+        None => release(slot),
+    }
+}
+
+/// Try to log in until an attempt succeeds, a fatal failure occurs, or `shutdown` turns
+/// true. Returns `None` in the last two cases.
+async fn login_until_stop<T, F, Fut>(
+    mut attempt: F,
     auth_failed: mpsc::UnboundedSender<AuthFailure>,
     mut shutdown: watch::Receiver<bool>,
     login_timeout: Duration,
-) where
+) -> Option<T>
+where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, LoginError>>,
 {
@@ -231,29 +260,96 @@ async fn retry_login<T, F, Fut>(
     loop {
         let result = tokio::select! {
             result = tokio::time::timeout(login_timeout, attempt()) => result,
-            _ = shutdown.wait_for(|stop| *stop) => return,
+            _ = shutdown.wait_for(|stop| *stop) => return None,
         };
         match result {
-            Ok(Ok(connection)) => {
-                let _ = slot.send(connection);
-                return;
-            }
+            Ok(Ok(connection)) => return Some(connection),
             Ok(Err(LoginError::Fatal(failure))) => {
                 log::warn!("login failed on reconnect: {failure}. Stopping.");
                 let _ = auth_failed.send(failure);
                 let _ =
                     tokio::time::timeout(FATAL_SLOT_HOLD, shutdown.wait_for(|stop| *stop)).await;
-                return;
+                return None;
             }
             Ok(Err(error)) => log::info!("reconnect failed: {error}. Retrying in {delay:?}."),
             Err(_) => log::info!("reconnect timed out. Retrying in {delay:?}."),
         }
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
-            _ = shutdown.wait_for(|stop| *stop) => return,
+            _ = shutdown.wait_for(|stop| *stop) => return None,
         }
         delay = (delay * 2).min(MAX_RETRY_DELAY);
     }
+}
+
+/// Fill the slot with a connection whose server end is closed already.
+///
+/// A worker that waits for a connection can end in two ways only. If the slot drops, it
+/// panics (stanzastream/worker.rs:548-549). If it gets a connection, it negotiates. With
+/// this dead connection, the negotiation fails at once, and the worker takes its normal
+/// exit because the frontend is gone (worker.rs:501-514). `run` makes sure that the
+/// frontend is gone first: it starts `StanzaStream::close` before it sets `shutdown`.
+///
+/// TOKIO-XMPP-COPY: the in-memory stream pair is `custom_stream_pair` from the tokio-xmpp
+/// 6.0.0 tests (src/stanzastream/tests.rs:60-110), without the bind exchange.
+fn release_slot(slot: oneshot::Sender<Connection>) {
+    tokio::spawn(async move {
+        match dead_connection().await {
+            // An error means that the worker ended already.
+            Ok(connection) => drop(slot.send(connection)),
+            Err(e) => log::error!("cannot build the connection that ends the worker: {e}"),
+        }
+    });
+}
+
+async fn dead_connection() -> io::Result<Connection> {
+    const JID: &str = "closed@closed.invalid";
+    const DOMAIN: &str = "closed.invalid";
+    let header = |from: &'static str, to: &'static str| StreamHeader {
+        from: Some(Cow::Borrowed(from)),
+        to: Some(Cow::Borrowed(to)),
+        id: Some(Cow::Borrowed("closed")),
+    };
+    let (client, server) = tokio::io::duplex(1024);
+    let client = async move {
+        let io = tokio::io::BufReader::new(client);
+        let pending = initiate_stream(
+            io,
+            ns::JABBER_CLIENT,
+            header(JID, DOMAIN),
+            Timeouts::default(),
+        )
+        .await?;
+        pending
+            .recv_features::<FallibleStreamElement>()
+            .await
+            .map_err(|e| match e {
+                RecvFeaturesError::Io(e) => e,
+                RecvFeaturesError::StreamError(e) => io::Error::other(e),
+            })
+    };
+    let server = async move {
+        let io = tokio::io::BufReader::new(server);
+        let accepted = accept_stream(io, ns::JABBER_CLIENT, Timeouts::default()).await?;
+        let pending = accepted.send_header(header(DOMAIN, JID)).await?;
+        // The worker requires a bind feature to start negotiation (worker.rs:165-171).
+        let features = StreamFeatures {
+            bind: Some(BindFeature { required: false }),
+            ..Default::default()
+        };
+        // The server end drops after the features, so the client end reads EOF next.
+        pending
+            .send_features::<FallibleStreamElement>(&features)
+            .await
+            .map(drop)
+    };
+    let ((features, stream), ()) = tokio::try_join!(client, server)?;
+    let identity = Jid::new(JID).map_err(io::Error::other)?;
+    Ok(Connection {
+        stream: stream.box_stream(),
+        features,
+        identity,
+    })
 }
 
 /// Own the stream. Forward commands to it, and map its events to `SessionEvent`.
@@ -302,12 +398,16 @@ async fn run(
             }
         }
     }
-    // Stop a pending reconnect first. It drops its slot, the worker ends, and then
-    // `close` returns at once. While the stream is connected, no reconnect runs.
-    let _ = shutdown.send(true);
     // `StanzaStream::close` does not return while the worker waits for a connection
     // (stanzastream/worker.rs:150-159), so it gets a time limit.
-    let _ = tokio::time::timeout(CLOSE_TIMEOUT, stream.close()).await;
+    let mut close = pin!(tokio::time::timeout(CLOSE_TIMEOUT, stream.close()));
+    // The first poll closes the transmit queue. Only then may a pending reconnect
+    // release its slot, so the worker sees that the frontend is gone (see `release_slot`).
+    let first = core::future::poll_fn(|cx| Poll::Ready(close.as_mut().poll(cx))).await;
+    let _ = shutdown.send(true);
+    if first.is_pending() {
+        let _ = close.await;
+    }
     let _ = events
         .send(SessionEvent::Disconnected(DisconnectReason::Closed))
         .await;
@@ -496,6 +596,7 @@ mod tests {
         let task = tokio::spawn(retry_login(
             attempt,
             slot,
+            drop,
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
@@ -523,6 +624,7 @@ mod tests {
         tokio::spawn(retry_login(
             attempt,
             slot,
+            drop,
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
@@ -543,6 +645,7 @@ mod tests {
         tokio::spawn(retry_login(
             attempt,
             slot,
+            drop,
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
@@ -568,6 +671,7 @@ mod tests {
         let task = tokio::spawn(retry_login(
             attempt,
             slot,
+            drop,
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
@@ -604,8 +708,8 @@ mod tests {
 
     /// The whole path, with the real `StanzaStream` worker and a fake login: a reconnect
     /// fails with `not-authorized`. The session reports `AuthFailed`, then `Closed`, and
-    /// the session task ends. The worker panics when the slot drops. The runtime catches
-    /// the panic, and the process keeps running. This needs `panic = "unwind"`.
+    /// the session task ends. The worker gets a dead connection instead of a dropped slot,
+    /// so it ends without its panic, and the process keeps running.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn auth_failure_on_reconnect_closes_session_without_zombie() {
         let panics_before = worker_panics().load(Ordering::SeqCst);
@@ -643,7 +747,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            start.elapsed() < Duration::from_secs(6),
+            start.elapsed() < Duration::from_secs(2),
             "took {:?}",
             start.elapsed()
         );
@@ -652,9 +756,9 @@ mod tests {
             1,
             "no retry after a fatal failure"
         );
-        // The worker ended through its panic. `Closed` comes only after `close` returns,
-        // and `close` returns only after the worker ends.
-        assert_eq!(worker_panics().load(Ordering::SeqCst), panics_before + 1);
+        // No worker panic. `Closed` comes only after `close` returns, and `close` returns
+        // early only after the worker ends, so the fast close shows a clean worker exit.
+        assert_eq!(worker_panics().load(Ordering::SeqCst), panics_before);
         // The runtime and the process keep running after the panic.
         assert_eq!(tokio::spawn(async { 40 + 2 }).await.unwrap(), 42);
     }
