@@ -17,6 +17,14 @@
 //!   make us fetch, and a hash that failed once is not tried again in the session. An
 //!   empty `<photo/>` removes only a photo that we took from a vCard in this session.
 //!   `on_presence` returns false, so the roster also sees the presence.
+//! - `ClientHandle::refresh_avatar` asks for XEP-0084 first. If the owner has no metadata
+//!   node, or the metadata is empty, it fetches the vCard of the bare JID and stores its
+//!   photo. A XEP-0084 avatar always wins.
+//! - `set_avatar` and `remove_avatar` also update the PHOTO of our own vCard, so that
+//!   XEP-0153 clients see the change. The vCard step reads our vCard first and keeps all
+//!   its other fields. After the update we send a presence with `vcard-temp:x:update`.
+//!   A failure of the vCard step is logged and does not fail `set_avatar`.
+//!   `set_vcard_photo` and `remove_vcard_photo` change only the vCard.
 //!
 //! The functions that store and check images also serve the space avatars (`spaces.rs`).
 //! The owner of a space avatar is `service/node`.
@@ -37,8 +45,8 @@ use xmpp_parsers::pubsub::event::Payload;
 use xmpp_parsers::pubsub::pubsub::{Item, Items, PubSub, Publish, PublishOptions};
 use xmpp_parsers::pubsub::{ItemId, NodeName};
 use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
-use xmpp_parsers::vcard::{VCard, VCardQuery};
-use xmpp_parsers::vcard_update::VCardUpdate;
+use xmpp_parsers::vcard::{Binval, Photo, Type as PhotoType, VCard, VCardQuery};
+use xmpp_parsers::vcard_update::{Photo as UpdatePhoto, VCardUpdate};
 
 use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending};
 use crate::actor::{ClientError, ClientHandle};
@@ -93,8 +101,26 @@ pub(crate) enum Pending {
     },
     /// We published our data item. The metadata comes next.
     PublishData { image: Image, reply: Reply },
-    /// The vCard of `owner`, for the photo with this hash (XEP-0153).
-    VCard { owner: BareJid, hash: String },
+    /// The vCard of `owner` (XEP-0153). With a `hash` we check the photo against it.
+    /// Without a `hash` (a refresh) we take the hash from the photo. `reply` waits.
+    VCard {
+        owner: BareJid,
+        hash: Option<String>,
+        reply: Option<Reply>,
+    },
+    /// Our own vCard, before we change its photo. `image` is `None` to remove the photo.
+    /// If `strict` is false, an error is logged and the reply is `Ok`.
+    OwnVCard {
+        image: Option<Image>,
+        reply: Reply,
+        strict: bool,
+    },
+    /// We set our vCard. `hash` goes in our presence.
+    PublishVCard {
+        hash: Option<String>,
+        reply: Reply,
+        strict: bool,
+    },
     /// We published our metadata.
     PublishMetadata { image: Image, reply: Reply },
     /// We published an empty metadata element.
@@ -124,6 +150,11 @@ pub(crate) enum Command {
     Remove {
         reply: Reply,
     },
+    /// Change only the photo of our vCard. `None` removes it.
+    VCardPhoto {
+        image: Option<(String, Vec<u8>)>,
+        reply: Reply,
+    },
     Set {
         mime: String,
         data: Vec<u8>,
@@ -146,6 +177,7 @@ impl ClientHandle {
 
     /// Ask the server for the avatar of `owner`, and store it. Use it for a user that
     /// is not a contact, for whom no PEP events arrive. Returns when the image is stored.
+    /// If the owner has no XEP-0084 avatar, it uses the photo of the vCard.
     pub async fn refresh_avatar(&self, owner: BareJid) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Avatars(Command::Refresh { owner, reply }))?;
@@ -156,6 +188,27 @@ impl ClientHandle {
     pub async fn remove_avatar(&self) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Avatars(Command::Remove { reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Set the PHOTO of our vCard (XEP-0054) and tell our contacts with a presence
+    /// (XEP-0153). It does not touch XEP-0084. `set_avatar` does both.
+    pub async fn set_vcard_photo(&self, mime: String, data: Vec<u8>) -> Result<(), ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Avatars(Command::VCardPhoto {
+            image: Some((mime, data)),
+            reply,
+        }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Remove the PHOTO of our vCard. The other fields stay.
+    pub async fn remove_vcard_photo(&self) -> Result<(), ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Avatars(Command::VCardPhoto {
+            image: None,
+            reply,
+        }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
@@ -386,8 +439,7 @@ fn apply_metadata(ctx: &mut Ctx<'_>, owner: &BareJid, element: Element, reply: O
         .find(|i| i.url.is_none())
         .or(metadata.infos.first());
     let Some(info) = info else {
-        remove_avatar(ctx, owner);
-        done(reply, Ok(()));
+        no_metadata(ctx, owner, reply);
         return;
     };
     let hash = info.id.to_hex();
@@ -468,6 +520,39 @@ fn fetch_metadata(ctx: &mut Ctx<'_>, owner: BareJid, reply: Option<Reply>) {
     );
 }
 
+/// The owner has no XEP-0084 avatar. A refresh (`reply` is set) asks for the vCard photo.
+/// Other cases remove the avatar. The stored row stays until the vCard answers, so a
+/// photo does not flicker.
+fn no_metadata(ctx: &mut Ctx<'_>, owner: &BareJid, reply: Option<Reply>) {
+    if reply.is_none() || owner == ctx.account {
+        remove_avatar(ctx, owner);
+        done(reply, Ok(()));
+        return;
+    }
+    // XEP-0084 no longer wins for this owner.
+    ctx.state.avatars.pep.remove(owner);
+    if !ctx
+        .state
+        .avatars
+        .fetching
+        .insert((owner.clone(), String::new()))
+    {
+        // A refresh of this vCard runs already.
+        done(reply, Ok(()));
+        return;
+    }
+    // XEP-0153: the request goes to the bare JID.
+    let iq = Iq::from_get("", VCardQuery).with_to(Jid::from(owner.clone()));
+    ctx.request(
+        iq,
+        FeaturePending::Avatars(Pending::VCard {
+            owner: owner.clone(),
+            hash: None,
+            reply,
+        }),
+    );
+}
+
 /// The items of a pubsub result.
 fn result_items(payload: Option<Element>) -> Option<Vec<Item>> {
     match PubSub::try_from(payload?).ok()? {
@@ -483,17 +568,18 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let items = result_items(payload).unwrap_or_default();
                 match items.into_iter().rev().find_map(|i| i.payload) {
                     Some(element) => apply_metadata(ctx, &owner, element, reply),
-                    None => {
-                        remove_avatar(ctx, &owner);
-                        done(reply, Ok(()));
-                    }
+                    None => no_metadata(ctx, &owner, reply),
                 }
             }
             IqResponse::Error(e) => {
-                if e.defined_condition == DefinedCondition::ItemNotFound {
-                    // The owner has no metadata node: no avatar.
-                    remove_avatar(ctx, &owner);
-                    done(reply, Ok(()));
+                if matches!(
+                    e.defined_condition,
+                    DefinedCondition::ItemNotFound
+                        | DefinedCondition::ServiceUnavailable
+                        | DefinedCondition::FeatureNotImplemented
+                ) {
+                    // The owner has no metadata node: no XEP-0084 avatar.
+                    no_metadata(ctx, &owner, reply);
                 } else {
                     log::debug!("avatar metadata of {owner}: {}", describe(&e));
                     done(reply, Err(ClientError::Server(describe(&e))));
@@ -518,26 +604,69 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 IqResponse::Lost => done(reply, Err(ClientError::NotConnected)),
             }
         }
-        Pending::VCard { owner, hash } => {
-            ctx.state
-                .avatars
-                .fetching
-                .remove(&(owner.clone(), hash.clone()));
-            let failed = match response {
-                IqResponse::Result(payload) => accept_vcard(ctx, &owner, &hash, payload)
-                    .map_err(|e| log::debug!("vCard photo of {owner}: {e}"))
-                    .is_err(),
+        Pending::VCard { owner, hash, reply } => {
+            let key = hash.clone().unwrap_or_default();
+            ctx.state.avatars.fetching.remove(&(owner.clone(), key));
+            let result = match response {
+                IqResponse::Result(payload) => accept_vcard(ctx, &owner, hash.as_deref(), payload),
                 IqResponse::Error(e) => {
                     log::debug!("vCard of {owner}: {}", describe(&e));
-                    true
+                    if hash.is_none() && e.defined_condition == DefinedCondition::ItemNotFound {
+                        // A refresh: the owner has no vCard, so no photo.
+                        remove_avatar(ctx, &owner);
+                        Ok(())
+                    } else {
+                        Err(ClientError::Server(describe(&e)))
+                    }
                 }
-                // The next presence can start the fetch again.
-                IqResponse::Lost => false,
+                IqResponse::Lost => Err(ClientError::NotConnected),
             };
-            if failed {
-                ctx.state.avatars.vcard_failed.insert((owner, hash));
+            if let Err(e) = &result {
+                log::debug!("vCard photo of {owner}: {e}");
+                // After a lost session the next presence can start the fetch again.
+                if let (Some(hash), false) = (hash, matches!(e, ClientError::NotConnected)) {
+                    ctx.state.avatars.vcard_failed.insert((owner, hash));
+                }
             }
+            done(reply, result);
         }
+        Pending::OwnVCard {
+            image,
+            reply,
+            strict,
+        } => match response {
+            IqResponse::Result(payload) => {
+                let vcard = payload
+                    .and_then(|p| VCard::try_from(p).ok())
+                    .unwrap_or(VCard {
+                        photo: None,
+                        payloads: vec![],
+                    });
+                publish_vcard(ctx, vcard, image, reply, strict);
+            }
+            // Some servers answer item-not-found for a vCard that does not exist.
+            IqResponse::Error(e) if e.defined_condition == DefinedCondition::ItemNotFound => {
+                let vcard = VCard {
+                    photo: None,
+                    payloads: vec![],
+                };
+                publish_vcard(ctx, vcard, image, reply, strict);
+            }
+            IqResponse::Error(e) => vcard_failed(reply, strict, ClientError::Server(describe(&e))),
+            IqResponse::Lost => vcard_failed(reply, strict, ClientError::NotConnected),
+        },
+        Pending::PublishVCard {
+            hash,
+            reply,
+            strict,
+        } => match response {
+            IqResponse::Result(_) => {
+                ctx.send(vcard_presence(hash.as_deref()));
+                let _ = reply.send(Ok(()));
+            }
+            IqResponse::Error(e) => vcard_failed(reply, strict, ClientError::Server(describe(&e))),
+            IqResponse::Lost => vcard_failed(reply, strict, ClientError::NotConnected),
+        },
         Pending::PublishData { image, reply } => match response {
             IqResponse::Result(_) => publish_metadata(ctx, image, reply),
             IqResponse::Error(e) => {
@@ -551,7 +680,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             IqResponse::Result(_) => {
                 let account = ctx.account.clone();
                 remove_avatar(ctx, &account);
-                let _ = reply.send(Ok(()));
+                start_vcard(ctx, None, reply, false);
             }
             IqResponse::Error(e) => {
                 let _ = reply.send(Err(ClientError::Server(describe(&e))));
@@ -571,7 +700,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                     ctx.store_error("store our avatar", e);
                 }
                 mark_changed(ctx, &account);
-                let _ = reply.send(Ok(()));
+                start_vcard(ctx, Some(image), reply, false);
             }
             IqResponse::Error(e) => {
                 let _ = reply.send(Err(ClientError::Server(describe(&e))));
@@ -618,6 +747,30 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             let _ = reply.send(result);
         }
         Command::Refresh { owner, reply } => fetch_metadata(ctx, owner, Some(reply)),
+        Command::VCardPhoto { image, reply } => {
+            let image = match image {
+                None => None,
+                Some((mime, data)) => {
+                    if data.is_empty()
+                        || data.len() > MAX_AVATAR_BYTES
+                        || !mime.starts_with("image/")
+                    {
+                        let _ = reply.send(Err(ClientError::Invalid(
+                            "a photo is an image of 1 byte to 1 MiB".into(),
+                        )));
+                        return;
+                    }
+                    Some(Image {
+                        hash: sha1_hex(&data),
+                        mime,
+                        data,
+                        width: 0,
+                        height: 0,
+                    })
+                }
+            };
+            start_vcard(ctx, image, reply, true);
+        }
         Command::Remove { reply } => {
             let item = Item::new(None, None, Some(Metadata { infos: vec![] }));
             let iq = publish_iq(NODE_METADATA, item);
@@ -657,6 +810,75 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             );
         }
     }
+}
+
+/// Change the PHOTO of our vCard. We read our vCard first, so its other fields stay.
+fn start_vcard(ctx: &mut Ctx<'_>, image: Option<Image>, reply: Reply, strict: bool) {
+    // XEP-0054: a get without `to` asks for our own vCard.
+    let iq = Iq::from_get("", VCardQuery);
+    ctx.request(
+        iq,
+        FeaturePending::Avatars(Pending::OwnVCard {
+            image,
+            reply,
+            strict,
+        }),
+    );
+}
+
+fn publish_vcard(
+    ctx: &mut Ctx<'_>,
+    mut vcard: VCard,
+    image: Option<Image>,
+    reply: Reply,
+    strict: bool,
+) {
+    let hash = image.as_ref().map(|i| i.hash.clone());
+    vcard.photo = image.map(|i| Photo {
+        type_: PhotoType { data: i.mime },
+        binval: Binval { data: i.data },
+    });
+    let iq = Iq::from_set("", vcard);
+    ctx.request(
+        iq,
+        FeaturePending::Avatars(Pending::PublishVCard {
+            hash,
+            reply,
+            strict,
+        }),
+    );
+}
+
+/// The vCard step failed. A step that is not strict follows a XEP-0084 change that worked.
+fn vcard_failed(reply: Reply, strict: bool, error: ClientError) {
+    if strict {
+        let _ = reply.send(Err(error));
+    } else {
+        log::warn!("cannot update our vCard photo: {error}");
+        let _ = reply.send(Ok(()));
+    }
+}
+
+/// Our presence with the XEP-0153 update element. An empty `<photo/>` means no photo.
+/// The initial presence in `presence.rs` does not carry the element yet. A later
+/// presence from that file drops it.
+fn vcard_presence(hash: Option<&str>) -> Presence {
+    let data = hash.and_then(|h| {
+        let mut out = [0u8; 20];
+        if h.len() != 40 {
+            return None;
+        }
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(h.get(2 * i..2 * i + 2)?, 16).ok()?;
+        }
+        Some(out)
+    });
+    let update = VCardUpdate {
+        photo: Some(UpdatePhoto { data }),
+    };
+    let mut presence = super::presence::initial();
+    presence.payloads.push(update.into());
+    presence
 }
 
 fn publish_metadata(ctx: &mut Ctx<'_>, image: Image, reply: Reply) {
@@ -707,7 +929,10 @@ pub(crate) fn offline(command: Command) {
         Command::Get { reply, .. } => {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
-        Command::Refresh { reply, .. } | Command::Set { reply, .. } | Command::Remove { reply } => {
+        Command::Refresh { reply, .. }
+        | Command::Set { reply, .. }
+        | Command::Remove { reply }
+        | Command::VCardPhoto { reply, .. } => {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
     }
@@ -779,7 +1004,14 @@ fn on_vcard_hint(ctx: &mut Ctx<'_>, presence: &Presence) {
         .insert((owner.clone(), hash.clone()));
     // XEP-0153: the request goes to the bare JID.
     let iq = Iq::from_get("", VCardQuery).with_to(Jid::from(owner.clone()));
-    ctx.request(iq, FeaturePending::Avatars(Pending::VCard { owner, hash }));
+    ctx.request(
+        iq,
+        FeaturePending::Avatars(Pending::VCard {
+            owner,
+            hash: Some(hash),
+            reply: None,
+        }),
+    );
 }
 
 /// True if we see the presence of `owner`: a roster item with subscription `to` or `both`.
@@ -797,32 +1029,42 @@ fn sees_contact(ctx: &Ctx<'_>, owner: &BareJid) -> bool {
     matches!(subscription.as_deref(), Some("to" | "both"))
 }
 
-/// Check the photo of a vCard result against `hash`, and store it.
+/// Check the photo of a vCard result against `hash`, and store it. Without a `hash` (a
+/// refresh) the hash is the SHA-1 of the photo, and a vCard without a photo removes the
+/// avatar.
 fn accept_vcard(
     ctx: &mut Ctx<'_>,
     owner: &BareJid,
-    hash: &str,
+    hash: Option<&str>,
     payload: Option<Element>,
 ) -> Result<(), ClientError> {
     let vcard = payload
         .and_then(|p| VCard::try_from(p).ok())
         .ok_or_else(|| ClientError::Invalid("no vCard in the answer".into()))?;
-    let photo = vcard
-        .photo
-        .ok_or_else(|| ClientError::Invalid("the vCard has no photo".into()))?;
+    let Some(photo) = vcard.photo else {
+        if hash.is_none() {
+            remove_avatar(ctx, owner);
+            return Ok(());
+        }
+        return Err(ClientError::Invalid("the vCard has no photo".into()));
+    };
     // XEP-0084 arrived while we fetched: it wins.
     if ctx.state.avatars.pep.contains(owner) {
         return Ok(());
     }
     let data = photo.binval.data;
-    verify_image(hash, &data)?;
+    let hash = match hash {
+        Some(hash) => hash.to_owned(),
+        None => sha1_hex(&data),
+    };
+    verify_image(&hash, &data)?;
     let mime = sniff_mime(&data)
         .map(str::to_owned)
         .or_else(|| Some(photo.type_.data).filter(|t| t.starts_with("image/")))
         .ok_or_else(|| ClientError::Invalid("the photo is not an image".into()))?;
     let key = owner.as_str();
-    let stored = store_metadata(ctx.store, ctx.account_id, key, hash, Some(&mime))
-        .and_then(|_| store_data(ctx.store, ctx.account_id, key, hash, &data));
+    let stored = store_metadata(ctx.store, ctx.account_id, key, &hash, Some(&mime))
+        .and_then(|_| store_data(ctx.store, ctx.account_id, key, &hash, &data));
     match stored {
         Ok(_) => {
             ctx.state.avatars.vcard.insert(owner.clone());
@@ -1147,6 +1389,12 @@ mod tests {
             |p| matches!(p, FeaturePending::Avatars(Pending::PublishMetadata { .. })),
             None,
         );
+        // The reply waits for the vCard step.
+        assert!(answer.try_recv().unwrap().is_none());
+        h.sent_iqs();
+        h.answer(is_own_vcard, Some(own_vcard()));
+        h.sent_iqs();
+        h.answer(is_publish_vcard, None);
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
         let account = h.account.clone();
         let mine = load(&h.store, h.account_id, &account).unwrap().unwrap();
@@ -1570,6 +1818,397 @@ mod tests {
         );
         hear(&mut h, &presence_with(bob_phone(), empty));
         assert!(stored(&h).is_some());
+    }
+
+    // Refresh with the vCard fallback, and the vCard set.
+
+    fn is_metadata(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Avatars(Pending::Metadata { .. }))
+    }
+
+    fn refresh(h: &mut Harness) -> oneshot::Receiver<Result<(), ClientError>> {
+        let (reply, answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Refresh {
+                    owner: bob(),
+                    reply,
+                },
+            )
+        });
+        answer
+    }
+
+    fn metadata_result(element: Option<Element>) -> Element {
+        PubSub::Items(Items {
+            max_items: Some(1),
+            node: NodeName(NODE_METADATA.to_owned()),
+            subid: None,
+            items: element
+                .map(|payload| Item {
+                    id: None,
+                    publisher: None,
+                    payload: Some(payload),
+                })
+                .into_iter()
+                .collect(),
+        })
+        .into()
+    }
+
+    /// Check that the one IQ sent is a vCard get to bob.
+    fn expect_vcard_get(h: &mut Harness) {
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].to().unwrap().as_str(), BOB);
+        let Iq::Get { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert!(payload.is("vCard", "vcard-temp"));
+    }
+
+    #[test]
+    fn refresh_falls_back_to_the_vcard_when_the_node_is_missing() {
+        let mut h = Harness::new();
+        let mut answer = refresh(&mut h);
+        h.sent_iqs();
+        h.respond(
+            is_metadata,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        expect_vcard_get(&mut h);
+        assert!(answer.try_recv().unwrap().is_none());
+        h.take_dirty();
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let avatar = stored(&h).unwrap();
+        assert_eq!(avatar.hash, sha1_hex(PNG));
+        assert_eq!(avatar.mime.as_deref(), Some("image/png"));
+        assert_eq!(avatar.data.as_deref(), Some(PNG));
+        assert!(h.take_dirty().contains(&ViewKey::MemberList(bob())));
+    }
+
+    #[test]
+    fn refresh_falls_back_to_the_vcard_when_the_metadata_is_empty() {
+        for result in [
+            metadata_result(None),
+            metadata_result(Some(Metadata { infos: vec![] }.into())),
+        ] {
+            let mut h = Harness::new();
+            let mut answer = refresh(&mut h);
+            h.sent_iqs();
+            h.answer(is_metadata, Some(result));
+            expect_vcard_get(&mut h);
+            h.answer(is_vcard, Some(vcard_result(PNG)));
+            assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+            assert_eq!(stored(&h).unwrap().data.as_deref(), Some(PNG));
+        }
+    }
+
+    #[test]
+    fn refresh_prefers_xep_0084_and_does_not_ask_for_the_vcard() {
+        let mut h = Harness::new();
+        let mut answer = refresh(&mut h);
+        h.sent_iqs();
+        let image = b"pep image";
+        h.answer(
+            is_metadata,
+            Some(metadata_result(Some(metadata_element(image, "image/png")))),
+        );
+        h.answer(is_data, Some(data_result(image)));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(h.sent_iqs().iter().all(|iq| {
+            let Iq::Get { payload, .. } = iq else {
+                return true;
+            };
+            !payload.is("vCard", "vcard-temp")
+        }));
+        assert_eq!(stored(&h).unwrap().hash, sha1_hex(image));
+    }
+
+    #[test]
+    fn refresh_without_a_vcard_photo_removes_the_avatar() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        h.sent_iqs();
+        let mut answer = refresh(&mut h);
+        h.sent_iqs();
+        h.respond(
+            is_metadata,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        // The old row stays until the vCard answers.
+        assert!(stored(&h).is_some());
+        h.answer(
+            is_vcard,
+            Some("<vCard xmlns='vcard-temp'/>".parse().unwrap()),
+        );
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert_eq!(stored(&h), None);
+    }
+
+    #[test]
+    fn refresh_reports_other_errors_and_a_bad_vcard() {
+        let mut h = Harness::new();
+        let mut answer = refresh(&mut h);
+        h.sent_iqs();
+        h.respond(
+            is_metadata,
+            IqResponse::Error(error(DefinedCondition::Forbidden)),
+        );
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server("Forbidden: no".into())))
+        );
+        assert!(h.sent_iqs().is_empty());
+
+        // A vCard photo with a type that is no image fails the refresh.
+        let mut h = Harness::new();
+        let mut answer = refresh(&mut h);
+        h.sent_iqs();
+        h.respond(
+            is_metadata,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        let text = b"plain text";
+        let result: Element = format!(
+            "<vCard xmlns='vcard-temp'><PHOTO><TYPE>text/plain</TYPE>\
+             <BINVAL>{}</BINVAL></PHOTO></vCard>",
+            base64(text)
+        )
+        .parse()
+        .unwrap();
+        h.answer(is_vcard, Some(result));
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        assert_eq!(stored(&h), None);
+    }
+
+    #[test]
+    fn the_fetch_of_our_own_metadata_does_not_ask_for_the_vcard() {
+        let mut h = Harness::new();
+        h.with_ctx(on_connected);
+        h.sent_iqs();
+        h.respond(
+            is_metadata,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    fn is_own_vcard(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Avatars(Pending::OwnVCard { .. }))
+    }
+
+    fn is_publish_vcard(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Avatars(Pending::PublishVCard { .. }))
+    }
+
+    fn own_vcard() -> Element {
+        "<vCard xmlns='vcard-temp'><FN>Alice</FN><NICKNAME>al</NICKNAME>\
+         <PHOTO><TYPE>image/png</TYPE><BINVAL>AAAA</BINVAL></PHOTO></vCard>"
+            .parse()
+            .unwrap()
+    }
+
+    fn sent_presence(h: &mut Harness) -> Vec<Presence> {
+        h.take_sent()
+            .into_iter()
+            .filter_map(|s| match s {
+                xmpp_parsers::stanza::Stanza::Presence(p) => Some(p),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn photo_hash(presence: &Presence) -> Option<Option<[u8; 20]>> {
+        let x = presence
+            .payloads
+            .iter()
+            .find(|p| p.is("x", xmpp_parsers::ns::VCARD_UPDATE))?;
+        Some(VCardUpdate::try_from(x.clone()).unwrap().photo?.data)
+    }
+
+    #[test]
+    fn set_vcard_photo_reads_the_vcard_keeps_its_fields_and_sends_a_presence() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        let image = PNG.to_vec();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::VCardPhoto {
+                    image: Some(("image/png".into(), image.clone())),
+                    reply,
+                },
+            )
+        });
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        // A get without `to` reads our own vCard.
+        assert!(sent[0].to().is_none());
+        let Iq::Get { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert!(payload.is("vCard", "vcard-temp"));
+        h.answer(is_own_vcard, Some(own_vcard()));
+
+        let sent = h.sent_iqs();
+        let Iq::Set { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        let vcard = VCard::try_from(payload.clone()).unwrap();
+        let photo = vcard.photo.unwrap();
+        assert_eq!(photo.binval.data, image);
+        assert_eq!(photo.type_.data, "image/png");
+        // The other fields stay.
+        let names: Vec<_> = vcard.payloads.iter().map(|e| e.name().to_owned()).collect();
+        assert_eq!(names, ["FN", "NICKNAME"]);
+        assert!(answer.try_recv().unwrap().is_none());
+
+        h.answer(is_publish_vcard, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let presences = sent_presence(&mut h);
+        assert_eq!(presences.len(), 1);
+        let hash = photo_hash(&presences[0]).unwrap().unwrap();
+        assert_eq!(hex(&hash), sha1_hex(&image));
+    }
+
+    #[test]
+    fn remove_vcard_photo_sends_an_empty_photo_element() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::VCardPhoto { image: None, reply }));
+        h.sent_iqs();
+        h.answer(is_own_vcard, Some(own_vcard()));
+        let sent = h.sent_iqs();
+        let Iq::Set { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        let vcard = VCard::try_from(payload.clone()).unwrap();
+        assert!(vcard.photo.is_none());
+        assert_eq!(vcard.payloads.len(), 2);
+        h.answer(is_publish_vcard, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let presences = sent_presence(&mut h);
+        assert_eq!(photo_hash(&presences[0]), Some(None));
+    }
+
+    #[test]
+    fn a_missing_own_vcard_is_treated_as_empty() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::VCardPhoto {
+                    image: Some(("image/png".into(), PNG.to_vec())),
+                    reply,
+                },
+            )
+        });
+        h.sent_iqs();
+        h.respond(
+            is_own_vcard,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        let sent = h.sent_iqs();
+        assert!(matches!(sent[0], Iq::Set { .. }));
+        h.answer(is_publish_vcard, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn set_vcard_photo_rejects_bad_input_and_reports_errors() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::VCardPhoto {
+                    image: Some(("text/plain".into(), vec![1])),
+                    reply,
+                },
+            )
+        });
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        assert!(h.sent_iqs().is_empty());
+
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::VCardPhoto { image: None, reply }));
+        h.sent_iqs();
+        h.answer(is_own_vcard, Some(own_vcard()));
+        h.sent_iqs();
+        h.respond(
+            is_publish_vcard,
+            IqResponse::Error(error(DefinedCondition::NotAllowed)),
+        );
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server("NotAllowed: no".into())))
+        );
+        assert!(sent_presence(&mut h).is_empty());
+    }
+
+    #[test]
+    fn set_avatar_updates_the_vcard_last_and_ignores_a_vcard_error() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        let image = PNG.to_vec();
+        h.with_ctx(|ctx| on_command(ctx, set_command(reply, "image/png", image.clone())));
+        h.sent_iqs();
+        h.answer(
+            |p| matches!(p, FeaturePending::Avatars(Pending::PublishData { .. })),
+            None,
+        );
+        h.sent_iqs();
+        h.answer(
+            |p| matches!(p, FeaturePending::Avatars(Pending::PublishMetadata { .. })),
+            None,
+        );
+        // The reply waits for the vCard step.
+        assert!(answer.try_recv().unwrap().is_none());
+        let sent = h.sent_iqs();
+        assert!(sent[0].to().is_none());
+        h.answer(is_own_vcard, Some(own_vcard()));
+        h.sent_iqs();
+        h.respond(
+            is_publish_vcard,
+            IqResponse::Error(error(DefinedCondition::NotAllowed)),
+        );
+        // XEP-0084 worked, so `set_avatar` succeeds.
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(sent_presence(&mut h).is_empty());
+    }
+
+    #[test]
+    fn remove_avatar_also_removes_the_vcard_photo() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::Remove { reply }));
+        h.sent_iqs();
+        h.answer(
+            |p| matches!(p, FeaturePending::Avatars(Pending::Unpublish { .. })),
+            None,
+        );
+        assert!(answer.try_recv().unwrap().is_none());
+        h.sent_iqs();
+        h.answer(is_own_vcard, Some(own_vcard()));
+        let sent = h.sent_iqs();
+        let Iq::Set { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert!(VCard::try_from(payload.clone()).unwrap().photo.is_none());
+        h.answer(is_publish_vcard, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
     }
 
     #[test]

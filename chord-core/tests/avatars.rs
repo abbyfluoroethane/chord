@@ -1,5 +1,6 @@
-//! Avatars (XEP-0084) against the dev Prosody server. Alice publishes an avatar, bob
+//! Avatars against the dev Prosody server. Alice publishes an avatar (XEP-0084), bob
 //! fetches it. The test ends with an empty metadata element, so alice has no avatar.
+//! A second test checks the vCard fallback (XEP-0054) of `refresh_avatar`.
 
 use std::time::Duration;
 
@@ -77,6 +78,43 @@ async fn alice_publishes_and_bob_fetches_the_avatar() {
     assert_eq!(got.mime.as_deref(), Some("image/png"));
     assert_eq!(got.data.as_deref(), Some(&image[..]));
     removed.expect("remove_avatar");
+    after.expect("refresh after remove");
+    assert_eq!(after_avatar.unwrap(), None);
+}
+
+#[tokio::test]
+#[ignore = "needs the dev Prosody server: ./dev/prosody/setup.sh"]
+async fn refresh_falls_back_to_the_vcard_photo() {
+    let bob_jid = BareJid::new("bob@chord.localhost").unwrap();
+    let alice = login("alice", "ALICE_PASSWORD").await;
+    let bob = login("bob", "BOB_PASSWORD").await;
+
+    // Start clean: no XEP-0084 avatar and no vCard photo for bob.
+    bob.remove_avatar().await.expect("remove_avatar");
+
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.extend_from_slice(format!("chord vcard test {}", uuid_suffix()).as_bytes());
+    let set = bob
+        .set_vcard_photo("image/jpeg".into(), image.clone())
+        .await;
+    let result = alice.refresh_avatar(bob_jid.clone()).await;
+    let got = alice.avatar(bob_jid.clone()).await;
+
+    // Clean up before the asserts, so a failure leaves no photo.
+    let removed = bob.remove_vcard_photo().await;
+    let after = alice.refresh_avatar(bob_jid.clone()).await;
+    let after_avatar = alice.avatar(bob_jid).await;
+    alice.logout().await;
+    bob.logout().await;
+
+    set.expect("set_vcard_photo");
+    result.expect("refresh_avatar");
+    let got = got.unwrap().expect("alice has the vCard photo");
+    assert_eq!(got.hash, sha1_hex(&image));
+    // Prosody (mod_vcard_legacy) may mirror the photo into XEP-0084 with the TYPE hint.
+    // Then the image comes from PEP, so the test does not check the type.
+    assert_eq!(got.data.as_deref(), Some(&image[..]));
+    removed.expect("remove_vcard_photo");
     after.expect("refresh after remove");
     assert_eq!(after_avatar.unwrap(), None);
 }
