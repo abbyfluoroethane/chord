@@ -6,3 +6,4 @@ dev/foid/.env
 chord-desktop/node_modules/
 chord-desktop/build/
 chord-desktop/.svelte-kit/
+chord-desktop/build-preview/
