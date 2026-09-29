@@ -2,22 +2,46 @@
   // Presence pairs colour with a shape, as on the website (style guide, .pres):
   // online = filled dot, away = half-filled amber dot with an amber ring,
   // dnd = a red bar, offline = a grey ring.
+  // With `cut`, a backdrop of that colour follows the shape, `pad` px wide. It cuts the
+  // shape out of an avatar.
   import type { PresenceKind } from './types';
   import { presenceLabel } from './types';
 
-  let { kind, size = 10, label = true }: { kind: PresenceKind; size?: number; label?: boolean } =
-    $props();
+  let {
+    kind,
+    size = 10,
+    label = true,
+    cut = null,
+    pad = 0
+  }: {
+    kind: PresenceKind;
+    size?: number;
+    label?: boolean;
+    cut?: string | null;
+    pad?: number;
+  } = $props();
+
+  // The pad in viewBox units: the shape is 10 units wide.
+  const p = $derived(cut ? (pad * 10) / size : 0);
+  const box = $derived(size + (cut ? 2 * pad : 0));
 </script>
 
 <svg
   class="presence"
-  width={size}
-  height={size}
-  viewBox="0 0 10 10"
+  width={box}
+  height={box}
+  viewBox="{-p} {-p} {10 + 2 * p} {10 + 2 * p}"
   role={label ? 'img' : undefined}
   aria-label={label ? presenceLabel[kind] : undefined}
   aria-hidden={label ? undefined : 'true'}
 >
+  {#if cut}
+    {#if kind === 'dnd'}
+      <rect x={-p} y={3 - p} width={10 + 2 * p} height={4 + 2 * p} rx={2 + p} fill={cut} />
+    {:else}
+      <circle cx="5" cy="5" r={5 + p} fill={cut} />
+    {/if}
+  {/if}
   {#if kind === 'online'}
     <circle cx="5" cy="5" r="5" fill="var(--online)" />
   {:else if kind === 'away'}

@@ -23,7 +23,7 @@
   let failed = $state('');
 </script>
 
-<span class="avatar" style:width="{size}px" style:height="{size}px" style:--cut={cut}>
+<span class="avatar" style:width="{size}px" style:height="{size}px">
   {#if src && failed !== src}
     <img {src} alt="" onerror={() => (failed = src ?? '')} />
   {:else}
@@ -32,8 +32,8 @@
     </span>
   {/if}
   {#if presence}
-    <span class="badge" style:padding="{size >= 40 ? 3 : 2}px">
-      <Presence kind={presence} size={dot} />
+    <span class="badge">
+      <Presence kind={presence} size={dot} {cut} pad={size >= 40 ? 3 : 2} />
     </span>
   {/if}
 </span>
@@ -64,7 +64,5 @@
     right: -4px;
     bottom: -4px;
     display: grid;
-    border-radius: 50%;
-    background: var(--cut);
   }
 </style>
