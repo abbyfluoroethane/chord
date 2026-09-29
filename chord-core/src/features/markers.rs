@@ -38,7 +38,7 @@ fn nc(name: &str) -> NcName {
 
 /// A command from the public API.
 pub(crate) enum Command {
-    MarkRead { peer: BareJid, reply: Reply },
+    MarkRead { peer: String, reply: Reply },
 }
 
 impl ClientHandle {
@@ -47,6 +47,16 @@ impl ClientHandle {
     /// marker (XEP-0333) for that message. It sends no marker if that message was read
     /// already.
     pub async fn mark_read(&self, peer: BareJid) -> Result<(), ClientError> {
+        self.mark_read_peer(peer.to_string()).await
+    }
+
+    /// Like `mark_read`, for the private messages between us and the occupant `nick` of
+    /// `room`. The marker goes to the room outbox, so it waits for the join.
+    pub async fn mark_read_private(&self, room: BareJid, nick: String) -> Result<(), ClientError> {
+        self.mark_read_peer(format!("{room}/{nick}")).await
+    }
+
+    async fn mark_read_peer(&self, peer: String) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Markers(Command::MarkRead { peer, reply }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
@@ -66,9 +76,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
 pub(crate) fn offline_with_store(store: &Store, account_id: i64, command: Command) {
     match command {
         Command::MarkRead { peer, reply } => {
-            let result = newest_incoming(store, account_id, peer.as_str())
+            let result = newest_incoming(store, account_id, &peer)
                 .and_then(|newest| match newest {
-                    Some(n) => set_last_read(store, account_id, peer.as_str(), n.rowid),
+                    Some(n) => set_last_read(store, account_id, &peer, n.rowid),
                     None => Ok(()),
                 })
                 .map_err(|e| ClientError::Invalid(format!("store: {e}")));
@@ -115,7 +125,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     };
     // A marker with a body is a normal message too. Apply it, and let the caller store it.
     let handled = incoming.message.bodies.is_empty();
-    let peer = incoming.peer.as_str();
+    let peer = incoming.peer;
     let target =
         match crate::store::queries::find_message(ctx.store.conn(), ctx.account_id, peer, id) {
             Ok(Some(row)) => row,
@@ -146,9 +156,11 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     };
     match result {
         Ok(true) => {
-            ctx.changed(ViewKey::Timeline(incoming.peer.clone()));
+            if let Some(key) = message_ext::timeline_key(peer) {
+                ctx.changed(key);
+            }
             if incoming.direction == Direction::Out {
-                changed_channel_list(ctx, incoming.peer, incoming.kind);
+                changed_channel_list(ctx, peer, incoming.kind);
             }
         }
         Ok(false) => {}
@@ -192,11 +204,11 @@ fn set_last_read(store: &Store, account_id: i64, peer: &str, rowid: i64) -> rusq
     Ok(())
 }
 
-fn changed_channel_list(ctx: &mut Ctx<'_>, peer: &BareJid, kind: MessageKind) {
-    match kind {
+fn changed_channel_list(ctx: &mut Ctx<'_>, peer: &str, kind: MessageKind) {
+    match (kind, BareJid::new(peer)) {
         // `mark_room` also marks the channel list of each space of the room.
-        MessageKind::Groupchat => muc::mark_room(ctx, peer),
-        MessageKind::Chat => ctx.changed(ViewKey::ChannelList(ChannelScope::Home)),
+        (MessageKind::Groupchat, Ok(room)) => muc::mark_room(ctx, &room),
+        _ => ctx.changed(ViewKey::ChannelList(ChannelScope::Home)),
     }
 }
 
@@ -234,10 +246,13 @@ fn newest_incoming(store: &Store, account_id: i64, peer: &str) -> rusqlite::Resu
         .optional()
 }
 
-fn mark_read(ctx: &mut Ctx<'_>, peer: &BareJid) -> Result<(), ClientError> {
+/// `peer` is the stored peer: a bare JID, or room@service/nick for private messages.
+fn mark_read(ctx: &mut Ctx<'_>, peer: &str) -> Result<(), ClientError> {
+    let to: Jid = peer
+        .parse()
+        .map_err(|e| ClientError::Invalid(format!("bad peer {peer}: {e}")))?;
     let store_error = |e: rusqlite::Error| ClientError::Invalid(format!("store: {e}"));
-    let Some(newest) =
-        newest_incoming(ctx.store, ctx.account_id, peer.as_str()).map_err(store_error)?
+    let Some(newest) = newest_incoming(ctx.store, ctx.account_id, peer).map_err(store_error)?
     else {
         return Ok(());
     };
@@ -246,7 +261,7 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &BareJid) -> Result<(), ClientError> {
         .conn()
         .query_row(
             "SELECT last_read FROM read_state WHERE account_id = ?1 AND peer = ?2",
-            params![ctx.account_id, peer.as_str()],
+            params![ctx.account_id, peer],
             |row| row.get(0),
         )
         .optional()
@@ -254,18 +269,15 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &BareJid) -> Result<(), ClientError> {
     if last_read.is_some_and(|n| n >= newest.rowid) {
         return Ok(());
     }
-    set_last_read(ctx.store, ctx.account_id, peer.as_str(), newest.rowid).map_err(store_error)?;
+    set_last_read(ctx.store, ctx.account_id, peer, newest.rowid).map_err(store_error)?;
     changed_channel_list(ctx, peer, newest.kind);
 
     // In a room the marker names the stanza-id. In a chat it names the `id` attribute.
     let (reference, mut message) = match newest.kind {
-        MessageKind::Groupchat => (
-            newest.stanza_id.clone(),
-            Message::groupchat(Jid::from(peer.clone())),
-        ),
+        MessageKind::Groupchat => (newest.stanza_id.clone(), Message::groupchat(to.clone())),
         MessageKind::Chat => (
             newest.message_id.clone().or(newest.origin_id.clone()),
-            Message::chat(Jid::from(peer.clone())),
+            Message::chat(to.clone()),
         ),
     };
     let Some(reference) = reference else {
@@ -282,7 +294,7 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &BareJid) -> Result<(), ClientError> {
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
     // The read position moved already. A marker that cannot go out changes nothing.
-    if let Err(e) = message_ext::send_to_peer(ctx, newest.kind, peer, message) {
+    if let Err(e) = message_ext::send_to_peer(ctx, newest.kind, &to, message) {
         log::debug!("no displayed marker to {peer}: {e}");
     }
     Ok(())
@@ -306,8 +318,8 @@ mod tests {
     const PEER: &str = "bob@chord.localhost";
     const ROOM: &str = "dev@rooms.chord.localhost";
 
-    fn peer() -> BareJid {
-        BareJid::new(PEER).unwrap()
+    fn peer() -> String {
+        PEER.to_owned()
     }
 
     fn put(h: &Harness, key: &str, dir: Direction, kind: MessageKind, peer: &str) -> i64 {
@@ -352,7 +364,7 @@ mod tests {
         m: &Message,
         dir: Direction,
         kind: MessageKind,
-        peer: &BareJid,
+        peer: &str,
     ) -> bool {
         let sender = "x";
         let incoming = Incoming {
@@ -407,7 +419,10 @@ mod tests {
         let m = marker("displayed", NS_MARKERS, "b");
         assert!(deliver(&mut h, &m, Direction::In, MessageKind::Chat, &p));
         assert_eq!(statuses(&h), ["displayed", "displayed", "sent"]);
-        assert!(h.take_dirty().contains(&ViewKey::Timeline(p.clone())));
+        assert!(
+            h.take_dirty()
+                .contains(&ViewKey::Timeline(BareJid::new(PEER).unwrap()))
+        );
         // A received marker never lowers a status.
         let m = marker("received", NS_MARKERS, "c");
         deliver(&mut h, &m, Direction::In, MessageKind::Chat, &p);
@@ -467,7 +482,7 @@ mod tests {
             &m,
             Direction::In,
             MessageKind::Groupchat,
-            &room
+            room.as_str()
         ));
         assert_eq!(statuses(&h), ["displayed"]);
         assert_eq!(last_read(&h, ROOM), None);
@@ -505,7 +520,7 @@ mod tests {
         let room = BareJid::new(ROOM).unwrap();
         put(&h, "s9", Direction::In, MessageKind::Groupchat, ROOM);
         h.state.muc.nicks.insert(room.clone(), "alice".into());
-        h.with_ctx(|ctx| mark_read(ctx, &room)).unwrap();
+        h.with_ctx(|ctx| mark_read(ctx, room.as_str())).unwrap();
         let sent = h.take_sent();
         let Stanza::Message(m) = &sent[0] else {
             panic!()
@@ -529,5 +544,33 @@ mod tests {
         );
         assert!(matches!(answer.try_recv(), Ok(Some(Ok(())))));
         assert_eq!(last_read(&h, PEER), Some(b));
+    }
+
+    #[test]
+    fn displayed_markers_in_a_private_message() {
+        let mut h = Harness::new();
+        let peer = format!("{ROOM}/bob");
+        let room = BareJid::new(ROOM).unwrap();
+        put(&h, "a", Direction::Out, MessageKind::Chat, &peer);
+        let b = put(&h, "b", Direction::In, MessageKind::Chat, &peer);
+        // The occupant read our message.
+        let m = marker("displayed", NS_MARKERS, "a");
+        assert!(deliver(&mut h, &m, Direction::In, MessageKind::Chat, &peer));
+        assert_eq!(statuses(&h), ["displayed"]);
+        assert!(
+            h.take_dirty()
+                .contains(&ViewKey::PrivateTimeline(room.clone(), "bob".into()))
+        );
+        // We read theirs: the marker goes to the occupant.
+        h.state.muc.nicks.insert(room, "alice".into());
+        h.with_ctx(|ctx| mark_read(ctx, &peer)).unwrap();
+        assert_eq!(last_read(&h, &peer), Some(b));
+        let sent = h.take_sent();
+        let Stanza::Message(m) = &sent[0] else {
+            panic!()
+        };
+        assert_eq!(m.type_, xmpp_parsers::message::MessageType::Chat);
+        assert_eq!(m.to, Some(Jid::new(&peer).unwrap()));
+        assert_eq!(marker_of(m).map(|(_, id, _)| id), Some("b"));
     }
 }

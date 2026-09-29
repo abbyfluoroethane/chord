@@ -8,13 +8,13 @@
 //! it. The code that stores an incoming body must call it.
 
 use futures_channel::oneshot;
-use jid::{BareJid, Jid};
+use jid::Jid;
 use rusqlite::params;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::minidom::rxml::NcName;
 
-use super::message_ext::Outgoing;
+use super::message_ext::{self, Outgoing};
 use super::{Ctx, FeatureCommand, chat, muc};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, MessageKind};
@@ -132,7 +132,9 @@ fn send_reply(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), Clie
         .ok_or_else(|| invalid("the message has no id to reply to"))?
         .to_owned();
     // In a chat the sender is the bare JID. In a room it is room@service/nick.
+    let private = message_ext::is_private(&row.peer);
     let sender = match row.kind {
+        MessageKind::Chat if private => row.sender.clone(),
         MessageKind::Chat => row
             .sender
             .parse::<Jid>()
@@ -140,7 +142,8 @@ fn send_reply(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), Clie
             .map_err(|_| invalid("bad sender"))?,
         MessageKind::Groupchat => row.sender.clone(),
     };
-    let peer: BareJid = row.peer.parse().map_err(|_| invalid("bad peer"))?;
+    let peer_jid: Jid = row.peer.parse().map_err(|_| invalid("bad peer"))?;
+    let peer = peer_jid.to_bare();
 
     let mut out = Outgoing::default();
     out.payloads.push(
@@ -177,6 +180,10 @@ fn send_reply(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), Clie
     };
 
     let origin_id = match row.kind {
+        MessageKind::Chat if private => {
+            let nick = peer_jid.resource().map(|r| r.as_str()).unwrap_or_default();
+            muc::send_private_message(ctx, &peer, nick, wire_body, out)?
+        }
         MessageKind::Chat => chat::send_message(ctx, Jid::from(peer), wire_body, out),
         MessageKind::Groupchat => muc::send_message(ctx, &peer, wire_body, out)?,
     };
@@ -198,6 +205,7 @@ mod tests {
     use super::*;
     use crate::features::testing::Harness;
     use crate::store::queries::{Direction, KeyKind, MessageExtras, NewMessage};
+    use jid::BareJid;
     use xmpp_parsers::stanza::Stanza;
 
     const PEER: &str = "bob@chord.localhost";

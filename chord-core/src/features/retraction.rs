@@ -6,7 +6,6 @@
 //! (XEP-0425) is not supported.
 
 use futures_channel::oneshot;
-use jid::BareJid;
 use rusqlite::params;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::minidom::Element;
@@ -122,8 +121,8 @@ fn apply(ctx: &mut Ctx<'_>, row: &MessageRow, timestamp: Option<i64>) {
         ctx.store_error("store a retraction", e);
         return;
     }
-    if let Ok(peer) = BareJid::new(&row.peer) {
-        ctx.changed(ViewKey::Timeline(peer));
+    if let Some(key) = message_ext::timeline_key(&row.peer) {
+        ctx.changed(key);
     }
     ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
 }
@@ -147,12 +146,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let Some(id) = retracted_id(incoming.message) else {
         return false;
     };
-    let row = match queries::find_message(
-        ctx.store.conn(),
-        ctx.account_id,
-        incoming.peer.as_str(),
-        &id,
-    ) {
+    let row = match queries::find_message(ctx.store.conn(), ctx.account_id, incoming.peer, &id) {
         Ok(Some(row)) => row,
         Ok(None) => {
             log::debug!("retraction of {id} dropped: no such message");
@@ -182,7 +176,7 @@ mod tests {
     use crate::features::corrections::tests::store_row;
     use crate::features::testing::Harness;
     use crate::store::queries::Direction;
-    use jid::Jid;
+    use jid::{BareJid, Jid};
     use xmpp_parsers::stanza::Stanza;
 
     const BOB: &str = "bob@chord.localhost";
@@ -199,12 +193,11 @@ mod tests {
     }
 
     fn deliver(h: &mut Harness, m: &Message, sender: &str) -> bool {
-        let peer = BareJid::new(BOB).unwrap();
         let incoming = Incoming {
             message: m,
             kind: MessageKind::Chat,
             direction: Direction::In,
-            peer: &peer,
+            peer: BOB,
             sender,
             timestamp: None,
         };
@@ -334,5 +327,64 @@ mod tests {
         };
         assert_eq!(retracted_id(m).as_deref(), Some("s2"));
         assert!(row(&h, &item).retracted);
+    }
+
+    #[test]
+    fn retraction_in_a_private_message() {
+        let mut h = Harness::new();
+        let peer = format!("{ROOM}/bob");
+        let sender = format!("{ROOM}/alice");
+        h.state
+            .muc
+            .nicks
+            .insert(BareJid::new(ROOM).unwrap(), "alice".into());
+        // An outgoing retraction goes to the occupant.
+        let item = store_row(
+            &h,
+            MessageKind::Chat,
+            Direction::Out,
+            &peer,
+            &sender,
+            "m1",
+            None,
+        );
+        h.with_ctx(|ctx| retract(ctx, &item)).unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(m.to, Some(Jid::new(&peer).unwrap()));
+        assert_eq!(retracted_id(m).as_deref(), Some("m1"));
+        assert!(row(&h, &item).retracted);
+        // An incoming one needs the same occupant.
+        let item = store_row(
+            &h,
+            MessageKind::Chat,
+            Direction::In,
+            &peer,
+            &peer,
+            "m2",
+            None,
+        );
+        let m = retraction("m2");
+        let inc = |h: &mut Harness, sender: &str| {
+            let incoming = Incoming {
+                message: &m,
+                kind: MessageKind::Chat,
+                direction: Direction::In,
+                peer: &peer,
+                sender,
+                timestamp: None,
+            };
+            h.with_ctx(|ctx| on_message(ctx, &incoming))
+        };
+        assert!(inc(&mut h, &format!("{ROOM}/carol")));
+        assert!(!row(&h, &item).retracted);
+        assert!(inc(&mut h, &peer));
+        assert!(row(&h, &item).retracted);
+        assert!(h.take_dirty().contains(&ViewKey::PrivateTimeline(
+            BareJid::new(ROOM).unwrap(),
+            "bob".into()
+        )));
     }
 }

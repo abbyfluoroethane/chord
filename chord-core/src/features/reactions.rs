@@ -17,7 +17,6 @@ use super::{Ctx, FeatureCommand, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::json::{from_array, to_array};
 use crate::store::queries::{self, Direction, MessageKind};
-use crate::views::ViewKey;
 
 /// XEP-0334 namespace, for the `<store/>` hint. xmpp-parsers 0.23 has no hints module.
 const NS_HINTS: &str = "urn:xmpp:hints";
@@ -195,9 +194,11 @@ fn react(ctx: &mut Ctx<'_>, item_id: &str, emojis: Vec<String>) -> Result<(), Cl
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
-    message_ext::send_to_peer(ctx, row.kind, &to.to_bare(), message)?;
+    message_ext::send_to_peer(ctx, row.kind, &to, message)?;
     save(ctx, row.rowid, &ctx.account.to_string(), &emojis).map_err(store_error)?;
-    ctx.changed(ViewKey::Timeline(to.to_bare()));
+    if let Some(key) = message_ext::timeline_key(&row.peer) {
+        ctx.changed(key);
+    }
     Ok(())
 }
 
@@ -224,8 +225,8 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     else {
         return false;
     };
-    let peer = incoming.peer.to_string();
-    let row = match queries::find_message(ctx.store.conn(), ctx.account_id, &peer, &reactions.id) {
+    let peer = incoming.peer;
+    let row = match queries::find_message(ctx.store.conn(), ctx.account_id, peer, &reactions.id) {
         Ok(Some(row)) => row,
         Ok(None) => {
             log::debug!(
@@ -242,6 +243,8 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let sender = match (incoming.direction, incoming.kind) {
         (Direction::Out, _) => ctx.account.to_string(),
         (_, MessageKind::Groupchat) => incoming.sender.to_owned(),
+        // A private message: the occupant JID names the sender.
+        (_, MessageKind::Chat) if message_ext::is_private(peer) => incoming.sender.to_owned(),
         (_, MessageKind::Chat) => incoming
             .sender
             .split('/')
@@ -252,7 +255,11 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let mut emojis = clean(reactions.reactions.into_iter().map(|r| r.emoji).collect());
     emojis.truncate(MAX_EMOJIS);
     match save(ctx, row.rowid, &sender, &emojis) {
-        Ok(()) => ctx.changed(ViewKey::Timeline(incoming.peer.clone())),
+        Ok(()) => {
+            if let Some(key) = message_ext::timeline_key(peer) {
+                ctx.changed(key);
+            }
+        }
         Err(e) => ctx.store_error("save reactions", e),
     }
     true
@@ -263,6 +270,7 @@ mod tests {
     use super::*;
     use crate::features::testing::{ACCOUNT, Harness};
     use crate::store::queries::{KeyKind, MessageExtras, NewMessage};
+    use crate::views::ViewKey;
     use jid::BareJid;
     use xmpp_parsers::stanza::Stanza;
 
@@ -322,12 +330,11 @@ mod tests {
         peer: &str,
         sender: &str,
     ) -> bool {
-        let peer = BareJid::new(peer).unwrap();
         let inc = Incoming {
             message,
             kind,
             direction: dir,
-            peer: &peer,
+            peer,
             sender,
             timestamp: None,
         };
@@ -555,5 +562,45 @@ mod tests {
         h.with_ctx(|ctx| toggle(ctx, &id, "👍".into())).unwrap();
         assert_eq!(senders(&h, row), vec![(ACCOUNT.into(), strs(&["🎉"]))]);
         assert_eq!(h.take_sent().len(), 3);
+    }
+
+    #[test]
+    fn reactions_in_a_private_message() {
+        let mut h = Harness::new();
+        let peer = format!("{ROOM}/bob");
+        let (row, id) = add(&h, MessageKind::Chat, &peer, "m1", "s1");
+        // An incoming reaction is stored under the occupant JID.
+        let m = reactions_message("m1", &["👍"]);
+        assert!(incoming(
+            &mut h,
+            &m,
+            MessageKind::Chat,
+            Direction::In,
+            &peer,
+            &peer
+        ));
+        assert_eq!(senders(&h, row), vec![(peer.clone(), strs(&["👍"]))]);
+        assert!(h.take_dirty().contains(&ViewKey::PrivateTimeline(
+            BareJid::new(ROOM).unwrap(),
+            "bob".into()
+        )));
+        // An outgoing reaction goes to the occupant.
+        h.state
+            .muc
+            .nicks
+            .insert(BareJid::new(ROOM).unwrap(), "alice".into());
+        h.with_ctx(|ctx| react(ctx, &id, strs(&["🎉"]))).unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = &sent[..] else {
+            panic!("expected one message");
+        };
+        assert_eq!(m.type_, MessageType::Chat);
+        assert_eq!(m.to.as_ref().unwrap().to_string(), peer);
+        assert!(
+            m.payloads
+                .iter()
+                .any(|p| p.is("x", crate::features::muc::NS_MUC_USER))
+        );
+        assert!(senders(&h, row).contains(&(ACCOUNT.into(), strs(&["🎉"]))));
     }
 }

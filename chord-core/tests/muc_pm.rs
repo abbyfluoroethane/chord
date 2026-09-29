@@ -172,6 +172,7 @@ async fn private_message_stays_out_of_the_room_timeline() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].sender_name, a_nick);
     assert!(!items[0].outgoing);
+    let private_items = items;
 
     let mut public = bob.timeline(room.clone()).await.unwrap();
     let items = wait_items(&mut public, |i| i.iter().any(|m| m.body == "public")).await;
@@ -186,11 +187,28 @@ async fn private_message_stays_out_of_the_room_timeline() {
     assert!(items[0].outgoing);
     assert_eq!(items[0].body, "psst");
 
+    // Bob reacts to the private message, and Alice sees the reaction on her row.
+    let bob_item = private_items[0].id.clone();
+    bob.react(bob_item, vec!["\u{1F44D}".into()])
+        .await
+        .expect("bob reacts");
+    let mut alice_again = alice
+        .private_timeline(room.clone(), b_nick.clone())
+        .await
+        .unwrap();
+    let items = wait_items(&mut alice_again, |i| {
+        i.iter().any(|m| !m.reactions.is_empty())
+    })
+    .await;
+    assert_eq!(items[0].reactions.len(), 1);
+    assert_eq!(items[0].reactions[0].emoji, "\u{1F44D}");
+    assert!(!items[0].reactions[0].mine);
+
     alice.leave_room(room.clone()).await.unwrap();
     bob.leave_room(room.clone()).await.unwrap();
     let _ = tokio::time::timeout(TIMEOUT, alice.logout()).await;
     let _ = tokio::time::timeout(TIMEOUT, bob.logout()).await;
-    drop((alice, bob, private, public, alice_private));
+    drop((alice, bob, private, public, alice_private, alice_again));
     let _ = tokio::time::timeout(TIMEOUT, alice_task).await;
     let _ = tokio::time::timeout(TIMEOUT, bob_task).await;
 }

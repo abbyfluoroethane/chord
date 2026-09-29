@@ -26,7 +26,7 @@ use crate::store::queries::{self, Direction, KeyKind, MessageExtras, MessageKind
 use crate::views::{ChannelScope, ViewKey};
 
 const NS_MUC_OWNER: &str = "http://jabber.org/protocol/muc#owner";
-const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
+pub(crate) const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
@@ -541,6 +541,18 @@ fn send_private(
     nick: &str,
     body: String,
 ) -> Result<String, ClientError> {
+    send_private_message(ctx, room, nick, body, Outgoing::default())
+}
+
+/// Send a private message with extra payloads and references (for example a reply), and
+/// store it. Returns its origin-id. See `send_private`.
+pub(crate) fn send_private_message(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    nick: &str,
+    body: String,
+    out: Outgoing,
+) -> Result<String, ClientError> {
     // While the join runs, the occupant list is not complete. Then the message waits
     // in the outbox, and the room answers with an error if the nick is not there.
     let joined = ctx.state.muc.nicks.contains_key(room);
@@ -558,6 +570,8 @@ fn send_private(
     message
         .payloads
         .push(Element::builder("x", NS_MUC_USER).build());
+    message.payloads.extend(message_ext::outgoing_payloads(ctx));
+    message.payloads.extend(out.payloads);
     message.id = Some(Id(origin_id.clone()));
     send_to_room(ctx, room, message)?;
     let our_nick = ctx
@@ -583,7 +597,7 @@ fn send_private(
         extras: MessageExtras {
             message_id: Some(origin_id.clone()),
             origin_id: Some(origin_id.clone()),
-            ..MessageExtras::default()
+            ..out.extras
         },
     };
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
@@ -602,7 +616,7 @@ fn private_changed(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str) {
 /// JID of a room that we know (XEP-0045, section 7.5). It comes live, as a carbon of a
 /// message that another client sent, or from the archive. Returns false if `message` is
 /// no private message. With `live`, also report it as `MessageReceived`. Corrections,
-/// reactions, and markers are not supported in private messages.
+/// reactions, retractions, and markers work as in a chat.
 pub(crate) fn store_private(
     ctx: &mut Ctx<'_>,
     message: &Message,
@@ -631,9 +645,6 @@ pub(crate) fn store_private(
     if !is_room(ctx, &room) {
         return false;
     }
-    let Some(body) = message_ext::body(message) else {
-        return true;
-    };
     let peer = format!("{room}/{nick}");
     let sender = match direction {
         Direction::In => from.to_string(),
@@ -641,6 +652,21 @@ pub(crate) fn store_private(
             "{room}/{}",
             our_nick(ctx, &room).unwrap_or_else(|| ctx.account.to_string())
         ),
+    };
+    let incoming = Incoming {
+        message,
+        kind: MessageKind::Chat,
+        direction,
+        peer: &peer,
+        sender: &sender,
+        timestamp,
+    };
+    // Corrections, retractions, reactions, and markers change earlier messages.
+    if message_ext::intercept(ctx, &incoming) {
+        return true;
+    }
+    let Some(body) = message_ext::body(message) else {
+        return true;
     };
 
     if let (Some(stanza_id), Some(origin_id)) = (&ids.stanza_id, &ids.origin_id) {
@@ -682,6 +708,7 @@ pub(crate) fn store_private(
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
+            message_ext::after_store(ctx, &incoming, &stored);
             if live {
                 ctx.emit(ClientEvent::MessageReceived(stored));
             }
@@ -885,7 +912,7 @@ fn store(
         message,
         kind: MessageKind::Groupchat,
         direction,
-        peer: room,
+        peer: room.as_str(),
         sender: &sender_jid,
         timestamp,
     };

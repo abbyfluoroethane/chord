@@ -70,7 +70,7 @@ fn store(
         message,
         kind: MessageKind::Chat,
         direction,
-        peer: &peer,
+        peer: peer.as_str(),
         sender: &sender,
         timestamp,
     };

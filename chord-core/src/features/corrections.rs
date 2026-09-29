@@ -5,7 +5,7 @@
 //! room. `find_message` matches it against the three ids that we store.
 
 use futures_channel::oneshot;
-use jid::{BareJid, Jid};
+use jid::Jid;
 use rusqlite::params;
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::message_correct::Replace;
@@ -16,7 +16,6 @@ use super::message_ext::{self, Incoming};
 use super::{Ctx, new_id};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, Direction, MessageKind, MessageRow};
-use crate::views::ViewKey;
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 
@@ -78,10 +77,11 @@ pub(super) fn original_id(row: &MessageRow) -> Option<&str> {
 }
 
 /// True if `sender` may change the message in `row`: the same bare JID in a chat, the same
-/// occupant JID in a room.
+/// occupant JID in a room or in a private message.
 pub(super) fn same_sender(row: &MessageRow, sender: &str) -> bool {
     match row.kind {
         MessageKind::Groupchat => row.sender == sender,
+        MessageKind::Chat if message_ext::is_private(&row.peer) => row.sender == sender,
         MessageKind::Chat => match (Jid::new(&row.sender), Jid::new(sender)) {
             (Ok(a), Ok(b)) => a.to_bare() == b.to_bare(),
             _ => false,
@@ -89,12 +89,10 @@ pub(super) fn same_sender(row: &MessageRow, sender: &str) -> bool {
     }
 }
 
-/// The own message with this timeline id, and its peer. Fails when the message is not
-/// ours, or when it is in a room that we have not joined.
-pub(super) fn own_message(
-    ctx: &Ctx<'_>,
-    item_id: &str,
-) -> Result<(MessageRow, BareJid), ClientError> {
+/// The own message with this timeline id, and the JID that its changes go to: the bare
+/// JID of the chat or room, or the occupant JID of a private message. Fails when the
+/// message is not ours.
+pub(super) fn own_message(ctx: &Ctx<'_>, item_id: &str) -> Result<(MessageRow, Jid), ClientError> {
     let row = queries::find_by_timeline_id(ctx.store.conn(), ctx.account_id, item_id)
         .map_err(|e| ClientError::Invalid(format!("store: {e}")))?
         .ok_or_else(|| ClientError::Invalid(format!("no message {item_id}")))?;
@@ -103,15 +101,15 @@ pub(super) fn own_message(
             "only our own messages can change".into(),
         ));
     }
-    let peer = BareJid::new(&row.peer)
+    let peer = Jid::new(&row.peer)
         .map_err(|e| ClientError::Invalid(format!("bad peer {}: {e}", row.peer)))?;
     Ok((row, peer))
 }
 
 /// A new message to the peer of `row`, with the type of the row and a fresh id that is
 /// also its origin-id. It has no body and no row in the store.
-pub(super) fn new_message(row: &MessageRow, peer: &BareJid) -> Message {
-    let to = Jid::from(peer.clone());
+pub(super) fn new_message(row: &MessageRow, to: &Jid) -> Message {
+    let to = to.clone();
     let id = new_id();
     let mut message = match row.kind {
         MessageKind::Chat => Message::chat(to),
@@ -165,8 +163,8 @@ fn apply(ctx: &mut Ctx<'_>, row: &MessageRow, body: &str, timestamp: Option<i64>
         ctx.store_error("store a correction", e);
         return;
     }
-    if let Ok(peer) = BareJid::new(&row.peer) {
-        ctx.changed(ViewKey::Timeline(peer));
+    if let Some(key) = message_ext::timeline_key(&row.peer) {
+        ctx.changed(key);
     }
 }
 
@@ -188,7 +186,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let target = queries::find_message(
         ctx.store.conn(),
         ctx.account_id,
-        incoming.peer.as_str(),
+        incoming.peer,
         &replace.id.0,
     );
     let row = match target {
@@ -218,6 +216,8 @@ pub(crate) mod tests {
     use super::*;
     use crate::features::testing::Harness;
     use crate::store::queries::{KeyKind, MessageExtras, NewMessage};
+    use crate::views::ViewKey;
+    use jid::BareJid;
     use xmpp_parsers::stanza::Stanza;
 
     const BOB: &str = "bob@chord.localhost";
@@ -276,12 +276,11 @@ pub(crate) mod tests {
     }
 
     fn deliver(h: &mut Harness, m: &Message, sender: &str) -> bool {
-        let peer = BareJid::new(BOB).unwrap();
         let incoming = Incoming {
             message: m,
             kind: MessageKind::Chat,
             direction: Direction::In,
-            peer: &peer,
+            peer: BOB,
             sender,
             timestamp: Some(5000),
         };
@@ -412,5 +411,78 @@ pub(crate) mod tests {
         let item = store_row(&h, MessageKind::Chat, Direction::In, BOB, BOB, "m1", None);
         assert!(h.with_ctx(|ctx| edit(ctx, &item, "x".into())).is_err());
         assert!(h.take_sent().is_empty());
+    }
+
+    #[test]
+    fn outgoing_edit_of_a_private_message() {
+        let mut h = Harness::new();
+        let peer = format!("{ROOM}/bob");
+        let item = store_row(
+            &h,
+            MessageKind::Chat,
+            Direction::Out,
+            &peer,
+            &format!("{ROOM}/alice"),
+            "m1",
+            None,
+        );
+        h.state
+            .muc
+            .nicks
+            .insert(BareJid::new(ROOM).unwrap(), "alice".into());
+        h.with_ctx(|ctx| edit(ctx, &item, "fixed".into())).unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(m.type_, MessageType::Chat);
+        assert_eq!(m.to, Some(Jid::new(&peer).unwrap()));
+        assert!(
+            m.payloads
+                .iter()
+                .any(|p| p.is("x", crate::features::muc::NS_MUC_USER))
+        );
+        assert!(
+            m.payloads
+                .iter()
+                .any(|p| Replace::try_from(p.clone()).is_ok())
+        );
+        assert_eq!(row(&h, &item).body, "fixed");
+        assert!(h.take_dirty().contains(&ViewKey::PrivateTimeline(
+            BareJid::new(ROOM).unwrap(),
+            "bob".into()
+        )));
+    }
+
+    #[test]
+    fn incoming_edit_of_a_private_message_needs_the_same_occupant() {
+        let mut h = Harness::new();
+        let peer = format!("{ROOM}/bob");
+        let item = store_row(
+            &h,
+            MessageKind::Chat,
+            Direction::In,
+            &peer,
+            &peer,
+            "m1",
+            None,
+        );
+        let m = correction("m1", "new");
+        let incoming = |h: &mut Harness, sender: &str| {
+            let inc = Incoming {
+                message: &m,
+                kind: MessageKind::Chat,
+                direction: Direction::In,
+                peer: &peer,
+                sender,
+                timestamp: Some(5000),
+            };
+            h.with_ctx(|ctx| on_message(ctx, &inc))
+        };
+        // Another occupant of the same room may not edit it.
+        assert!(incoming(&mut h, &format!("{ROOM}/carol")));
+        assert_eq!(row(&h, &item).body, "old");
+        assert!(incoming(&mut h, &peer));
+        assert_eq!(row(&h, &item).body, "new");
     }
 }
