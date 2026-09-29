@@ -75,6 +75,18 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
         let [hi, lo] = [s[6].to_be_bytes(), s[7].to_be_bytes()];
         return is_public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
     }
+    // The deprecated IPv4-compatible form ::a.b.c.d (but not :: and ::1, checked below).
+    if s[..6] == [0, 0, 0, 0, 0, 0] && (s[6] != 0 || s[7] > 1) {
+        let [hi, lo] = [s[6].to_be_bytes(), s[7].to_be_bytes()];
+        return is_public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
+    }
+    // 6to4, 2002:a.b.c.d::/48: the IPv4 address is in the second and third segments.
+    if s[0] == 0x2002 {
+        let [hi, lo] = [s[1].to_be_bytes(), s[2].to_be_bytes()];
+        if !is_public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1])) {
+            return false;
+        }
+    }
     !(ip.is_unspecified()
         || ip.is_loopback()
         || ip.is_multicast()
@@ -708,5 +720,21 @@ mod tests {
             CACHE_ENTRIES,
             "a second put does not grow it"
         );
+    }
+
+    #[test]
+    fn embedded_private_v4_in_v6_is_not_public() {
+        use std::str::FromStr;
+        for text in [
+            "::127.0.0.1",
+            "::10.0.0.1",
+            "2002:c0a8:0101::1",
+            "2002:7f00:0001::",
+        ] {
+            let ip = IpAddr::from_str(text).unwrap();
+            assert!(!is_public_ip(ip), "{text}");
+        }
+        // A 6to4 address of a public IPv4 host stays public.
+        assert!(is_public_ip(IpAddr::from_str("2002:0808:0808::1").unwrap()));
     }
 }
