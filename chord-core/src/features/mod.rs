@@ -20,6 +20,7 @@ pub mod mam;
 pub mod markers;
 pub mod message_ext;
 pub mod muc;
+pub mod notify;
 pub mod presence;
 pub mod pubsub;
 pub mod push;
@@ -138,6 +139,7 @@ pub(crate) enum FeatureCommand {
     Replies(replies::Command),
     Markers(markers::Command),
     Push(push::Command),
+    Notify(notify::Command),
 }
 
 /// Everything a feature function can use.
@@ -385,6 +387,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Replies(c) => replies::on_command(ctx, c),
         FeatureCommand::Markers(c) => markers::on_command(ctx, c),
         FeatureCommand::Push(c) => push::on_command(ctx, c),
+        FeatureCommand::Notify(c) => notify::on_command(ctx, c),
     }
 }
 
@@ -405,6 +408,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Push(push::Command::List { reply }) => {
             let _ = reply.send(push::list(store, account_id));
         }
+        FeatureCommand::Notify(c) => notify::run(store, account_id, c),
         FeatureCommand::Markers(c) => {
             markers::offline_with_store(store, account_id, c);
             return true;

@@ -4,6 +4,7 @@
 
 use chord_core::actor as core_actor;
 use chord_core::features::avatars::Avatar as CoreAvatar;
+use chord_core::features::notify as core_notify;
 use chord_core::features::push::PushRegistration as CorePushRegistration;
 use chord_core::features::roster::{Contact as CoreContact, Subscription as CoreSubscription};
 use chord_core::features::spaces::{JoinOutcome as CoreJoinOutcome, SpaceInfo as CoreSpaceInfo};
@@ -426,8 +427,83 @@ pub enum ClientEvent {
     SubscriptionRequest {
         jid: String,
     },
+    /// A live message that should notify the user.
+    Notification {
+        notification: Notification,
+    },
     /// An event that this binding version does not know.
     Unknown,
+}
+
+/// How much a chat, room, or private chat may notify.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum NotificationLevel {
+    All,
+    Mentions,
+    None,
+}
+
+impl From<core_notify::NotificationLevel> for NotificationLevel {
+    fn from(l: core_notify::NotificationLevel) -> Self {
+        match l {
+            core_notify::NotificationLevel::All => Self::All,
+            core_notify::NotificationLevel::Mentions => Self::Mentions,
+            core_notify::NotificationLevel::None => Self::None,
+        }
+    }
+}
+
+impl From<NotificationLevel> for core_notify::NotificationLevel {
+    fn from(l: NotificationLevel) -> Self {
+        match l {
+            NotificationLevel::All => Self::All,
+            NotificationLevel::Mentions => Self::Mentions,
+            NotificationLevel::None => Self::None,
+        }
+    }
+}
+
+/// The notification level of a peer, and the end of its mute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct NotificationSetting {
+    pub level: NotificationLevel,
+    /// Unix time in ms.
+    pub mute_until: Option<i64>,
+}
+
+impl From<core_notify::NotificationSetting> for NotificationSetting {
+    fn from(s: core_notify::NotificationSetting) -> Self {
+        Self {
+            level: s.level.into(),
+            mute_until: s.mute_until,
+        }
+    }
+}
+
+/// A message that should notify the user.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct Notification {
+    pub peer: String,
+    pub room: Option<String>,
+    pub sender: String,
+    pub sender_name: String,
+    pub body_preview: String,
+    pub mention: bool,
+    pub item_id: String,
+}
+
+impl From<core_notify::Notification> for Notification {
+    fn from(n: core_notify::Notification) -> Self {
+        Self {
+            peer: n.peer,
+            room: n.room.map(|r| r.to_string()),
+            sender: n.sender,
+            sender_name: n.sender_name,
+            body_preview: n.body_preview,
+            mention: n.mention,
+            item_id: n.item_id,
+        }
+    }
 }
 
 impl From<core_actor::ClientEvent> for ClientEvent {
@@ -441,6 +517,9 @@ impl From<core_actor::ClientEvent> for ClientEvent {
             E::Notice(text) => Self::Notice { text },
             E::SubscriptionRequest(jid) => Self::SubscriptionRequest {
                 jid: jid.to_string(),
+            },
+            E::Notification(n) => Self::Notification {
+                notification: n.into(),
             },
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,

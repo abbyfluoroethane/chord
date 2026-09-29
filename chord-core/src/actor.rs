@@ -97,6 +97,8 @@ pub enum ClientEvent {
     Notice(String),
     /// A contact asks to see our presence. Call `approve_subscription` or `deny_subscription`.
     SubscriptionRequest(BareJid),
+    /// A live incoming message that the notification policy says should notify the user.
+    Notification(crate::features::notify::Notification),
 }
 
 /// An error from a `ClientHandle` call.
@@ -810,6 +812,11 @@ mod tests {
             seen.extend(drain(&mut events));
             seen
         });
+        // The notification policy adds a Notification event. Its own tests check it.
+        let seen: Vec<_> = seen
+            .into_iter()
+            .filter(|e| !matches!(e, ClientEvent::Notification(_)))
+            .collect();
 
         assert_eq!(
             seen[0],

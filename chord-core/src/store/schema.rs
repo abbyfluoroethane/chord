@@ -194,4 +194,16 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE read_state ADD COLUMN marker_sent INTEGER;
     UPDATE read_state SET marker_sent = last_read;
     "#,
+    // Version 5: notification levels.
+    r#"
+    -- The notification level of a chat, a room, or a private chat with a room occupant.
+    -- A peer without a row has the default level. mute_until is Unix time in ms.
+    CREATE TABLE notification_levels (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        peer       TEXT NOT NULL,             -- as messages.peer stores it
+        level      TEXT NOT NULL,             -- all, mentions, or none
+        mute_until INTEGER,
+        PRIMARY KEY (account_id, peer)
+    );
+    "#,
 ];

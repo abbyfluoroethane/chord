@@ -822,7 +822,7 @@ pub(crate) fn store_private(
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
-            message_ext::after_store(ctx, &incoming, &stored);
+            message_ext::after_store(ctx, &incoming, &stored, live);
             if live {
                 ctx.emit(ClientEvent::MessageReceived(stored));
             }
@@ -1086,7 +1086,7 @@ fn store(
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
-            message_ext::after_store(ctx, &incoming, &stored);
+            message_ext::after_store(ctx, &incoming, &stored, live);
             if live {
                 ctx.emit(ClientEvent::MessageReceived(stored));
             }

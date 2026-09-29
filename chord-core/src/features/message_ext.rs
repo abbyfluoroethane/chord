@@ -17,7 +17,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::oob::Oob;
 
 use super::chat::MessageIds;
-use super::{Ctx, corrections, markers, muc, reactions, replies, retraction};
+use super::{Ctx, corrections, markers, muc, notify, reactions, replies, retraction};
 use crate::actor::ClientError;
 use crate::store::queries::{Direction, MessageExtras, MessageKind, StoredMessage};
 use crate::views::ViewKey;
@@ -87,9 +87,15 @@ pub(crate) fn body(message: &Message) -> Option<String> {
         .or_else(|| message.get_best_body(vec![]).map(|(_, body)| body.clone()))
 }
 
-/// A new message is in the store.
-pub(crate) fn after_store(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>, stored: &StoredMessage) {
+/// A new message is in the store. `live` is false for a message from the archive.
+pub(crate) fn after_store(
+    ctx: &mut Ctx<'_>,
+    incoming: &Incoming<'_>,
+    stored: &StoredMessage,
+    live: bool,
+) {
     markers::after_store(ctx, incoming, stored);
+    notify::after_store(ctx, incoming, stored, live);
 }
 
 /// Payloads for every outgoing chat or groupchat message.

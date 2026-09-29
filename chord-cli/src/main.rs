@@ -22,6 +22,7 @@
 //!   pm <room> <nick> <text>         private message to a room occupant
 //!   read-private <room> <nick>      mark a private chat as read (also with --offline)
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
+//!   notify <jid> [all|mentions|none [--until <unix-ms>]]   also with --offline
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!
@@ -74,7 +75,8 @@ space-add-member <service> <node> <jid> | space-delete <service> <node> | contac
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | moderate <item-id> [reason] | \
-push-enable <service> <node> | push-disable <service> [node] | push-list";
+push-enable <service> <node> | push-disable <service> [node] | push-list | \
+notify <jid> [all|mentions|none [--until <unix-ms>]]";
 
 /// Global options.
 pub struct Opts {
@@ -229,6 +231,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "push-enable",
         "push-disable",
         "push-list",
+        "notify",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
@@ -243,6 +246,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "read"
             | "read-private"
             | "push-list"
+            | "notify"
     );
     if needs_session && opts.offline {
         return Err(format!("{command} needs a session, not --offline").into());
@@ -287,6 +291,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("moderate", args) => actions::moderate(&client, args).await,
         ("push-enable", [service, node]) => actions::push_enable(&client, service, node).await,
         ("push-disable", args) => actions::push_disable(&client, args).await,
+        ("notify", args) => actions::notify(&client, args).await,
         ("push-list", []) => actions::push_list(opts, &client).await,
         _ => Err(USAGE.to_owned().into()),
     };
@@ -444,6 +449,13 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
             }
             ClientEvent::ConnectionState(ConnectionState::Disconnected) => break,
             ClientEvent::ConnectionState(state) => println!("connection: {state:?}"),
+            ClientEvent::Notification(n) => println!(
+                "notify: {} in {}: {}{}",
+                n.sender_name,
+                n.peer,
+                n.body_preview,
+                if n.mention { " (mention)" } else { "" }
+            ),
             ClientEvent::Notice(notice) => println!("notice: {notice}"),
             ClientEvent::SubscriptionRequest(jid) => println!("{jid} asks to see your presence"),
             other => log::debug!("event: {other:?}"),

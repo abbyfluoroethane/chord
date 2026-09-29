@@ -484,6 +484,32 @@ impl ChordClient {
             .await
     }
 
+    /// Set the notification level of a chat, a room, or a room occupant
+    /// (room@service/nick). `mute_until` is a Unix time in ms. Works offline.
+    pub async fn set_notification_level(
+        &self,
+        peer: String,
+        level: NotificationLevel,
+        mute_until: Option<i64>,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move {
+            h.set_notification_level(peer, level.into(), mute_until)
+                .await
+        })
+        .await
+    }
+
+    /// The notification level of a peer. Works offline.
+    pub async fn notification_level(
+        &self,
+        peer: String,
+    ) -> Result<NotificationSetting, ChordError> {
+        let setting = self
+            .call(move |h| async move { h.notification_level(peer).await })
+            .await?;
+        Ok(setting.into())
+    }
+
     /// Mark a private chat with a room occupant as read.
     pub async fn mark_read_private(&self, room: String, nick: String) -> Result<(), ChordError> {
         let room = parse_bare(&room)?;

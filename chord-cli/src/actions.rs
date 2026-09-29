@@ -420,6 +420,41 @@ pub async fn push_list(opts: &Opts, client: &Client) -> Result<(), CliError> {
     Ok(())
 }
 
+/// `notify <jid> [all|mentions|none [--until <unix-ms>]]`: set the notification level of a
+/// chat, room, or occupant (room@service/nick). Without a level, show it. Works offline.
+pub async fn notify(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    use chord_core::features::notify::NotificationLevel;
+    let usage =
+        || CliError::from("usage: notify <jid> [all|mentions|none [--until <unix-ms>]]".to_owned());
+    let (peer, rest) = args.split_first().ok_or_else(usage)?;
+    let (level, until) = match rest {
+        [] => {
+            let now = client
+                .handle
+                .notification_level((*peer).to_owned())
+                .await
+                .map_err(err)?;
+            println!(
+                "{peer}: {} (muted until {:?})",
+                now.level.as_str(),
+                now.mute_until
+            );
+            return Ok(());
+        }
+        [level] => (level, None),
+        [level, "--until", ms] => (level, Some(ms.parse::<i64>().map_err(|_| usage())?)),
+        _ => return Err(usage()),
+    };
+    let level = NotificationLevel::parse(level).ok_or_else(usage)?;
+    client
+        .handle
+        .set_notification_level((*peer).to_owned(), level, until)
+        .await
+        .map_err(err)?;
+    println!("{peer}: {}", level.as_str());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::content_type;
