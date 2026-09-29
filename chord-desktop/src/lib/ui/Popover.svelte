@@ -76,10 +76,14 @@
       }
     };
     const resize = () => place();
+    // Place it again when its content changes size, for example a field that grows.
+    const observer = new ResizeObserver(() => place());
+    observer.observe(el);
     document.addEventListener('pointerdown', down, true);
     window.addEventListener('keydown', key);
     window.addEventListener('resize', resize);
     return () => {
+      observer.disconnect();
       document.removeEventListener('pointerdown', down, true);
       window.removeEventListener('keydown', key);
       window.removeEventListener('resize', resize);

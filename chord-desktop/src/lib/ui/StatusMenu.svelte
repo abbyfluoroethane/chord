@@ -28,6 +28,30 @@
     onclose();
   }
 
+  // The field wraps a long status and grows with it. Enter saves: a status has no
+  // line breaks.
+  let field = $state<HTMLTextAreaElement>();
+
+  function grow() {
+    if (!field) return;
+    field.style.height = 'auto';
+    // scrollHeight has no border: add the 1px border of each side.
+    field.style.height = `${field.scrollHeight + 2}px`;
+  }
+
+  $effect(() => {
+    void text;
+    grow();
+  });
+
+  function keydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      app.setStatus(text);
+      onclose();
+    }
+  }
+
   function clear() {
     text = '';
     app.setStatus(null);
@@ -60,15 +84,17 @@
 
     <form class="status" onsubmit={save}>
       <label class="sr-only" for="status-text">Status</label>
-      <input
+      <textarea
         id="status-text"
         class="input"
-        type="text"
+        rows="1"
         maxlength="128"
         placeholder="Set a status"
         autocomplete="off"
-        bind:value={text}
-      />
+        bind:this={field}
+        bind:value={() => text, (v) => (text = v.replace(/\s*\n\s*/g, ' '))}
+        onkeydown={keydown}
+      ></textarea>
       {#if app.me.status}
         <button type="button" class="clear" aria-label="Clear status" onclick={clear}>
           <Icon icon={X} size={16} />
@@ -126,16 +152,26 @@
   .status {
     position: relative;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     padding: var(--space-1);
   }
   .status .input {
     width: 100%;
     min-width: 0;
     padding-right: 32px;
+    box-sizing: border-box;
+    height: auto;
+    min-height: 40px;
+    padding-top: 9px;
+    padding-bottom: 9px;
+    resize: none;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    line-height: 20px;
   }
   .clear {
     position: absolute;
+    top: 10px;
     right: 8px;
     display: grid;
     place-items: center;
