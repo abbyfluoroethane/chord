@@ -4,8 +4,8 @@
 //! HTTP PUT, then we send a chat message with the GET URL. It needs the disco scan of the
 //! server to be complete: `features::on_command` holds the command until then.
 //!
-//! Only 1:1 chats work. A room gets `ClientError::Unsupported`, until the MUC feature
-//! has a way to send a message with an OOB payload.
+//! For a room, the URL goes out as a groupchat message (through the MUC outbox if the
+//! join still runs).
 
 use std::collections::HashMap;
 
@@ -126,10 +126,6 @@ fn start_upload(
 ) -> Result<(), (ClientError, Reply)> {
     if filename.is_empty() {
         return Err((ClientError::Invalid("the file name is empty".into()), reply));
-    }
-    if is_room(ctx, &to) {
-        let e = ClientError::Unsupported("upload to a room".into());
-        return Err((e, reply));
     }
     let (service, info) = match ctx.state.disco.find_feature(NS_UPLOAD) {
         Some((jid, info)) => (jid.clone(), info),
@@ -338,8 +334,15 @@ pub(crate) fn on_put_done(ctx: &mut Ctx<'_>, done: PutDone) {
                 url: get_url.clone(),
                 desc: None,
             };
-            chat::send_with_oob(ctx, transfer.to, get_url.clone(), Some(oob));
-            let _ = transfer.reply.send(Ok(get_url));
+            if is_room(ctx, &transfer.to) {
+                let room = transfer.to.to_bare();
+                let sent =
+                    super::muc::send_with_payload(ctx, &room, get_url.clone(), Some(oob.into()));
+                let _ = transfer.reply.send(sent.map(|_| get_url));
+            } else {
+                chat::send_with_oob(ctx, transfer.to, get_url.clone(), Some(oob));
+                let _ = transfer.reply.send(Ok(get_url));
+            }
         }
         Err(e) => {
             let _ = transfer.reply.send(Err(ClientError::Server(e)));
@@ -602,21 +605,29 @@ mod tests {
     }
 
     #[test]
-    fn a_room_is_unsupported() {
+    fn a_room_gets_a_groupchat_message_with_the_url() {
         let mut h = harness(None);
+        let room = jid::BareJid::new("room@rooms.chord.localhost").unwrap();
         h.store
             .conn()
             .execute(
-                "INSERT INTO rooms (account_id, jid) VALUES (?1, 'room@rooms.chord.localhost')",
-                [h.account_id],
+                "INSERT INTO rooms (account_id, jid, joined) VALUES (?1, ?2, 1)",
+                rusqlite::params![h.account_id, room.as_str()],
             )
             .unwrap();
-        let answer = command(&mut h, "room@rooms.chord.localhost", vec![1]);
-        assert!(matches!(
-            result_of(answer),
-            Err(ClientError::Unsupported(_))
-        ));
-        assert!(h.take_sent().is_empty());
+        h.state.muc.nicks.insert(room.clone(), "alice".into());
+        let answer = command(&mut h, room.as_str(), vec![1]);
+        let payload = slot("https://up.example/put", "https://up.example/get");
+        answer_slot(&mut h, IqResponse::Result(Some(payload)));
+        let put = take_put(&mut h).unwrap();
+        finish(&mut h, put.id, Ok(()));
+        assert_eq!(result_of(answer).unwrap(), "https://up.example/get");
+        let sent = h.take_sent();
+        let Some(Stanza::Message(m)) = sent.iter().find(|s| matches!(s, Stanza::Message(_))) else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(m.type_, xmpp_parsers::message::MessageType::Groupchat);
+        assert!(m.payloads.iter().any(|p| Oob::try_from(p.clone()).is_ok()));
     }
 
     #[test]

@@ -470,6 +470,17 @@ pub(crate) fn send_chat(ctx: &mut Ctx<'_>, to: Jid, body: String) -> Result<Stri
 /// runs), the message waits in the outbox and goes out when the join completes. The
 /// send starts the join if none runs.
 pub(crate) fn send(ctx: &mut Ctx<'_>, room: &BareJid, body: String) -> Result<String, ClientError> {
+    send_with_payload(ctx, room, body, None)
+}
+
+/// Send a groupchat message with an extra payload (for example an XEP-0066 OOB URL), and
+/// store it. Returns its origin-id. See `send`.
+pub(crate) fn send_with_payload(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    body: String,
+    payload: Option<Element>,
+) -> Result<String, ClientError> {
     let nick = match ctx.state.muc.nicks.get(room).cloned() {
         Some(nick) => Some(nick),
         None if room_row(ctx, room).is_some() => {
@@ -490,6 +501,9 @@ pub(crate) fn send(ctx: &mut Ctx<'_>, room: &BareJid, body: String) -> Result<St
         .with_payload(OriginId {
             id: origin_id.clone(),
         });
+    if let Some(payload) = payload {
+        message.payloads.push(payload);
+    }
     message.id = Some(Id(origin_id.clone()));
     if nick.is_some() {
         ctx.send(message);
