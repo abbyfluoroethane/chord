@@ -11,6 +11,7 @@
 //! synchronous, has no `Send` bound, and a test can call it with no session.
 
 pub mod avatars;
+pub mod blocking;
 pub mod bookmarks;
 pub mod carbons;
 pub mod chat;
@@ -83,6 +84,7 @@ pub(crate) enum Pending {
     Upload(upload::Pending),
     Avatars(avatars::Pending),
     Push(push::Pending),
+    Blocking(blocking::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -143,6 +145,7 @@ pub(crate) enum FeatureCommand {
     Push(push::Command),
     Notify(notify::Command),
     ChatStates(chat_states::Command),
+    Blocking(blocking::Command),
 }
 
 /// Everything a feature function can use.
@@ -291,7 +294,10 @@ fn on_presence(ctx: &mut Ctx<'_>, presence: Presence) {
 fn on_iq_request(ctx: &mut Ctx<'_>, iq: Iq) {
     let handled = match &iq {
         Iq::Get { .. } | Iq::Set { .. } => {
-            disco::on_iq(ctx, &iq) || roster::on_iq(ctx, &iq) || ping_reply(ctx, &iq)
+            disco::on_iq(ctx, &iq)
+                || roster::on_iq(ctx, &iq)
+                || blocking::on_iq(ctx, &iq)
+                || ping_reply(ctx, &iq)
         }
         // Results and errors without a pending entry: late answers. Ignore them.
         Iq::Result { .. } | Iq::Error { .. } => true,
@@ -352,6 +358,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Upload(p) => upload::on_response(ctx, p, response),
         Pending::Avatars(p) => avatars::on_response(ctx, p, response),
         Pending::Push(p) => push::on_response(ctx, p, response),
+        Pending::Blocking(p) => blocking::on_response(ctx, p, response),
     }
 }
 
@@ -363,6 +370,11 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Spaces(_)
             | FeatureCommand::Upload(_)
             | FeatureCommand::Push(push::Command::Enable { .. })
+            | FeatureCommand::Blocking(
+                blocking::Command::Block { .. }
+                    | blocking::Command::Unblock { .. }
+                    | blocking::Command::UnblockAll { .. }
+            )
     );
     if needs_services && !ctx.state.disco.complete {
         ctx.state.deferred.push(command);
@@ -373,6 +385,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
 
 /// Service discovery finished. Run the commands that waited for it.
 pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
+    blocking::on_services_ready(ctx);
     for command in std::mem::take(&mut ctx.state.deferred) {
         dispatch(ctx, command);
     }
@@ -394,6 +407,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Push(c) => push::on_command(ctx, c),
         FeatureCommand::Notify(c) => notify::on_command(ctx, c),
         FeatureCommand::ChatStates(c) => chat_states::on_command(ctx, c),
+        FeatureCommand::Blocking(c) => blocking::on_command(ctx, c),
     }
 }
 
@@ -417,6 +431,9 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Push(push::Command::List { reply }) => {
             let _ = reply.send(push::list(store, account_id));
         }
+        FeatureCommand::Blocking(blocking::Command::List { reply }) => {
+            let _ = reply.send(blocking::list(store, account_id));
+        }
         FeatureCommand::Notify(c) => notify::run(store, account_id, c),
         FeatureCommand::Markers(c) => {
             markers::offline_with_store(store, account_id, c);
@@ -434,6 +451,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Replies(c) => replies::offline(c),
         FeatureCommand::Push(c) => push::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
+        FeatureCommand::Blocking(c) => blocking::offline(c),
     }
     false
 }

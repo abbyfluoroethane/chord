@@ -133,6 +133,8 @@ pub struct Contact {
     /// We pre-approved the subscription request of this contact (RFC 6121, 3.4). The
     /// server accepts the request for us when it comes.
     pub approved: bool,
+    /// The blocklist of the account (XEP-0191) holds this contact.
+    pub blocked: bool,
 }
 
 impl ClientHandle {
@@ -672,7 +674,9 @@ fn delete_contact(conn: &Connection, account_id: i64, jid: &BareJid) -> rusqlite
     .map(|_| ())
 }
 
-const CONTACT_COLUMNS: &str = "jid, name, subscription, ask, groups";
+const CONTACT_COLUMNS: &str = "jid, name, subscription, ask, groups,
+     EXISTS(SELECT 1 FROM blocked_jids b
+            WHERE b.account_id = contacts.account_id AND b.jid = contacts.jid)";
 
 fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>> {
     let jid: String = row.get(0)?;
@@ -686,6 +690,7 @@ fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>
         ask: flags & ASK_BIT != 0,
         groups: groups_from_json(&groups),
         approved: flags & APPROVED_BIT != 0,
+        blocked: row.get::<_, i64>(5).unwrap_or(0) != 0,
     }))
 }
 

@@ -95,6 +95,8 @@ pub struct ChannelItem {
     pub joined: bool,
     pub last_activity: Option<i64>,
     pub unread: u32,
+    /// For a direct chat: the blocklist holds the peer.
+    pub blocked: bool,
 }
 
 /// A space in the space rail.
@@ -203,6 +205,7 @@ impl From<core_views::ChannelItem> for ChannelItem {
             joined: i.joined,
             last_activity: i.last_activity,
             unread: i.unread,
+            blocked: i.blocked,
         }
     }
 }
@@ -449,6 +452,8 @@ pub enum ClientEvent {
         peer: String,
         typers: Vec<String>,
     },
+    /// The blocklist changed (XEP-0191). Read it again with `blocked_contacts`.
+    BlockListChanged,
     /// An event that this binding version does not know.
     Unknown,
 }
@@ -598,6 +603,7 @@ impl From<core_actor::ClientEvent> for ClientEvent {
                 password,
             },
             E::Typing { peer, typers } => Self::Typing { peer, typers },
+            E::BlockListChanged => Self::BlockListChanged,
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,
         }
@@ -637,6 +643,8 @@ pub struct Contact {
     pub groups: Vec<String>,
     /// We pre-approved the subscription request of this contact.
     pub approved: bool,
+    /// The blocklist (XEP-0191) holds this contact.
+    pub blocked: bool,
 }
 
 impl From<CoreContact> for Contact {
@@ -648,6 +656,7 @@ impl From<CoreContact> for Contact {
             ask: c.ask,
             groups: c.groups,
             approved: c.approved,
+            blocked: c.blocked,
         }
     }
 }
@@ -800,6 +809,7 @@ mod tests {
             joined: true,
             last_activity: Some(5),
             unread: 3,
+            blocked: false,
         }
     }
 
@@ -900,9 +910,11 @@ mod tests {
             ask: false,
             groups: vec!["g".into()],
             approved: true,
+            blocked: true,
         }
         .into();
         assert_eq!(c.jid, "a@b");
         assert_eq!(c.subscription, SubscriptionState::Both);
+        assert!(c.blocked);
     }
 }

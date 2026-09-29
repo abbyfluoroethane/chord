@@ -258,6 +258,7 @@ pub async fn contacts(opts: &Opts, client: &Client) -> Result<(), CliError> {
                 .opt_str("name", c.name.as_deref())
                 .str("subscription", sub(c.subscription))
                 .bool("ask", c.ask)
+                .bool("blocked", c.blocked)
                 .raw(
                     "groups",
                     &array(c.groups.iter().map(|g| Obj::new().str("name", g).finish())),
@@ -270,7 +271,8 @@ pub async fn contacts(opts: &Opts, client: &Client) -> Result<(), CliError> {
         for c in &contacts {
             let name = c.name.as_deref().unwrap_or("");
             let ask = if c.ask { ", asked" } else { "" };
-            println!("  {} {name} ({}{ask})", c.jid, sub(c.subscription));
+            let blocked = if c.blocked { ", blocked" } else { "" };
+            println!("  {} {name} ({}{ask}{blocked})", c.jid, sub(c.subscription));
         }
     }
     Ok(())
@@ -290,6 +292,56 @@ pub async fn contact_add(client: &Client, args: &[&str]) -> Result<(), CliError>
         .await
         .map_err(err)?;
     println!("added {jid} and asked to see their presence");
+    Ok(())
+}
+
+/// `block <jid>`: block an address (XEP-0191).
+pub async fn block(client: &Client, jid: &str) -> Result<(), CliError> {
+    let jid = bare(jid)?;
+    client
+        .handle
+        .block_contact(jid.clone())
+        .await
+        .map_err(err)?;
+    println!("blocked {jid}");
+    Ok(())
+}
+
+/// `unblock <jid>` or `unblock --all`.
+pub async fn unblock(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    match args {
+        ["--all"] => {
+            client.handle.unblock_all().await.map_err(err)?;
+            println!("unblocked everyone");
+        }
+        [jid] => {
+            let jid = bare(jid)?;
+            client
+                .handle
+                .unblock_contact(jid.clone())
+                .await
+                .map_err(err)?;
+            println!("unblocked {jid}");
+        }
+        _ => return Err("usage: unblock <jid|--all>".to_owned().into()),
+    }
+    Ok(())
+}
+
+/// `blocked`: the blocked addresses in the store. Works offline.
+pub async fn blocked(opts: &Opts, client: &Client) -> Result<(), CliError> {
+    let list = client.handle.blocked_contacts().await.map_err(err)?;
+    if opts.json {
+        let items = list
+            .iter()
+            .map(|j| Obj::new().str("jid", j.as_str()).finish());
+        println!("{}", array(items));
+    } else {
+        println!("blocked ({})", list.len());
+        for jid in &list {
+            println!("  {jid}");
+        }
+    }
     Ok(())
 }
 

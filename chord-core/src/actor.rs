@@ -135,6 +135,9 @@ pub enum ClientEvent {
         peer: String,
         typers: Vec<String>,
     },
+    /// The blocklist changed (XEP-0191): a fetch, a push, or an answer to a block or
+    /// unblock command. Read the list again with `blocked_contacts`, or the contact list.
+    BlockListChanged,
 }
 
 /// An error from a `ClientHandle` call.

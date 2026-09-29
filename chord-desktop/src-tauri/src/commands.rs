@@ -655,6 +655,28 @@ pub async fn preapprove_subscription(state: State<'_, AppState>, jid: String) ->
     Ok(state.handle()?.preapprove_subscription(bare(&jid)?).await?)
 }
 
+/// Block an address (XEP-0191). Fails with `unsupported` when the server cannot.
+#[tauri::command]
+pub async fn block_contact(state: State<'_, AppState>, jid: String) -> Res<()> {
+    Ok(state.handle()?.block_contact(bare(&jid)?).await?)
+}
+
+#[tauri::command]
+pub async fn unblock_contact(state: State<'_, AppState>, jid: String) -> Res<()> {
+    Ok(state.handle()?.unblock_contact(bare(&jid)?).await?)
+}
+
+#[tauri::command]
+pub async fn unblock_all(state: State<'_, AppState>) -> Res<()> {
+    Ok(state.handle()?.unblock_all().await?)
+}
+
+/// The blocked addresses. Works offline.
+#[tauri::command]
+pub async fn blocked_contacts(state: State<'_, AppState>) -> Res<Vec<BareJid>> {
+    Ok(state.handle()?.blocked_contacts().await?)
+}
+
 // ---------------------------------------------------------------- avatars, levels, push
 
 /// Ask the server for the avatar of `owner`, and store it. The `chord-avatar` scheme then

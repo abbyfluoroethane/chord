@@ -218,4 +218,13 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, service, node, jid)
     );
     "#,
+    // 7: the blocklist of XEP-0191. The server owns it. This table holds a copy for
+    // offline reads and for the `blocked` flags.
+    r#"
+    CREATE TABLE blocked_jids (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        jid        TEXT NOT NULL,             -- as the server lists it: bare, domain, or full
+        PRIMARY KEY (account_id, jid)
+    );
+    "#,
 ];

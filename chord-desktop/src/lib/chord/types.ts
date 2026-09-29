@@ -70,6 +70,8 @@ export interface ChannelItem {
   /** Unix ms. */
   lastActivity: number | null;
   unread: number;
+  /** Direct chats only: the blocklist holds the peer. */
+  blocked: boolean;
 }
 
 export interface SpaceItem {
@@ -190,7 +192,9 @@ export type ClientEvent =
       data: { room: Jid; from: Jid; reason: string | null; password: string | null };
     }
   /** `typers` holds bare JIDs in a chat and nicks in a room. Empty: nobody types. */
-  | { type: 'typing'; data: { peer: string; typers: string[] } };
+  | { type: 'typing'; data: { peer: string; typers: string[] } }
+  /** The blocklist changed. Read it again with `blockedContacts`. */
+  | { type: 'blockListChanged' };
 
 // ---------------------------------------------------------------- values
 
@@ -239,6 +243,8 @@ export interface Contact {
   ask: boolean;
   groups: string[];
   approved: boolean;
+  /** The blocklist (XEP-0191) holds this contact. */
+  blocked: boolean;
 }
 
 export interface PushRegistration {

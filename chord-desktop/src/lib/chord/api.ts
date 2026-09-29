@@ -9,6 +9,7 @@ import type {
   ClientEvent,
   Contact,
   JoinOutcome,
+  Jid,
   JoinRequest,
   ListDiff,
   MemberItem,
@@ -239,6 +240,13 @@ export const addSpaceMember = (service: string, node: string, member: string) =>
 // ---------------------------------------------------------------- contacts
 
 export const contacts = () => invoke<Contact[]>('contacts');
+
+/** XEP-0191. Fails with an `unsupported` error when the server has no blocking support. */
+export const blockContact = (jid: string) => invoke<void>('block_contact', { jid });
+export const unblockContact = (jid: string) => invoke<void>('unblock_contact', { jid });
+export const unblockAll = () => invoke<void>('unblock_all');
+/** Reads the stored copy of the blocklist, so it works offline. */
+export const blockedContacts = () => invoke<Jid[]>('blocked_contacts');
 export const addContact = (jid: string, name?: string) =>
   invoke<void>('add_contact', { jid, name: name ?? null });
 export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });

@@ -43,6 +43,7 @@ impl Show for ChannelItem {
             .as_deref()
             .map(|c| format!("[{c}] "))
             .unwrap_or_default();
+        let blocked = if self.blocked { "  (blocked)" } else { "" };
         let joined = if self.joined { "" } else { "  (not joined)" };
         let unread = if self.unread > 0 {
             format!("  [{} unread]", self.unread)
@@ -50,7 +51,7 @@ impl Show for ChannelItem {
             String::new()
         };
         format!(
-            "{category}{kind}{}{in_room}  <{}>{joined}{unread}",
+            "{category}{kind}{}{in_room}  <{}>{joined}{blocked}{unread}",
             self.name, self.jid
         )
     }
@@ -79,6 +80,7 @@ impl Show for ChannelItem {
             .bool("joined", self.joined)
             .opt_num("last_activity", self.last_activity)
             .num("unread", i64::from(self.unread))
+            .bool("blocked", self.blocked)
             .finish()
     }
 }

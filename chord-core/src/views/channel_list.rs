@@ -67,6 +67,8 @@ pub struct ChannelItem {
     /// Incoming messages after our read position (XEP-0333). With no read position,
     /// every incoming message counts.
     pub unread: u32,
+    /// For a direct chat: the blocklist (XEP-0191) holds the peer. Always false otherwise.
+    pub blocked: bool,
 }
 
 impl ViewItem for ChannelItem {
@@ -83,6 +85,9 @@ pub(crate) fn query(q: &QueryCtx<'_>, scope: &ChannelScope) -> rusqlite::Result<
     };
     for item in &mut items {
         item.unread = unread(q, &item.jid)?;
+        if item.kind == ChannelKind::Direct {
+            item.blocked = crate::features::blocking::is_blocked(q.store, q.account_id, &item.jid);
+        }
     }
     Ok(items)
 }
@@ -131,6 +136,7 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
             joined: true,
             last_activity: Some(last),
             unread: 0,
+            blocked: false,
         });
     }
     let mut stmt = conn.prepare_cached(
@@ -154,6 +160,7 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
             joined: row.get::<_, i64>(2)? != 0,
             last_activity: row.get(3)?,
             unread: 0,
+            blocked: false,
         })
     })?;
     for room in rooms {
@@ -184,6 +191,7 @@ fn space(q: &QueryCtx<'_>, service: &str, node: &str) -> rusqlite::Result<Vec<Ch
             joined: row.get::<_, i64>(3)? != 0,
             last_activity: row.get(4)?,
             unread: 0,
+            blocked: false,
         })
     })?;
     rows.collect()

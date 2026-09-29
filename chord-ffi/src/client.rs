@@ -948,6 +948,35 @@ impl ChordClient {
             .await?;
         Ok(list.into_iter().map(Into::into).collect())
     }
+
+    // ---- Blocking ----
+
+    /// Block an address (XEP-0191). Fails when the server has no blocking support.
+    pub async fn block_contact(&self, jid: String) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.block_contact(jid).await })
+            .await
+    }
+
+    /// Unblock an address.
+    pub async fn unblock_contact(&self, jid: String) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.unblock_contact(jid).await })
+            .await
+    }
+
+    /// Clear the whole blocklist.
+    pub async fn unblock_all(&self) -> Result<(), ChordError> {
+        self.call(|h| async move { h.unblock_all().await }).await
+    }
+
+    /// The blocked addresses, from the stored copy. Works offline.
+    pub async fn blocked_contacts(&self) -> Result<Vec<String>, ChordError> {
+        let list = self
+            .call(|h| async move { h.blocked_contacts().await })
+            .await?;
+        Ok(list.into_iter().map(|j| j.to_string()).collect())
+    }
 }
 
 #[cfg(test)]

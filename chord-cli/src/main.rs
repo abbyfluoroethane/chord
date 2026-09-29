@@ -17,6 +17,7 @@
 //!   space-delete <service> <node> | space-leave <service> <node> | space-pending
 //!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
 //!   contacts | contact-add <jid> [name]
+//!   block <jid> | unblock <jid|--all> | blocked (blocked works --offline)
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
 //!   reply <item-id> <text>          <item-id> is the id in `timeline --json`
 //!   read <jid>                      mark as read (also with --offline)
@@ -79,6 +80,7 @@ upload <jid> <file> | space-browse | space-join <service> <node> | \
 space-create <name> [--private | --authorize] | space-add-room <service> <node> <room> [name] | \
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
+block <jid> | unblock <jid|--all> | blocked | \
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | moderate <item-id> [reason] | \
@@ -233,6 +235,9 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "space-approve",
         "space-deny",
         "contacts",
+        "block",
+        "unblock",
+        "blocked",
         "contact-add",
         "edit",
         "retract",
@@ -267,6 +272,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "read-private"
             | "typing"
             | "push-list"
+            | "blocked"
             | "notify"
             | "space-pending"
     );
@@ -313,6 +319,9 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             actions::space_answer(&client, service, node, jid, false).await
         }
         ("contacts", []) => actions::contacts(opts, &client).await,
+        ("block", [jid]) => actions::block(&client, jid).await,
+        ("unblock", args) => actions::unblock(&client, args).await,
+        ("blocked", []) => actions::blocked(opts, &client).await,
         ("contact-add", args) => actions::contact_add(&client, args).await,
         ("edit", [item, text]) => actions::edit(&client, item, text).await,
         ("retract", [item]) => actions::retract(&client, item).await,
@@ -502,6 +511,7 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
                 n.body_preview,
                 if n.mention { " (mention)" } else { "" }
             ),
+            ClientEvent::BlockListChanged => println!("blocklist changed"),
             ClientEvent::Notice(notice) => println!("notice: {notice}"),
             ClientEvent::SubscriptionRequest(jid) => println!("{jid} asks to see your presence"),
             ClientEvent::RoomInvite {
