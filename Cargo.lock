@@ -136,6 +136,7 @@ name = "chord-cli"
 version = "0.1.0"
 dependencies = [
  "chord-core",
+ "log",
  "tokio",
 ]
 
@@ -145,7 +146,9 @@ version = "0.1.0"
 dependencies = [
  "futures-core",
  "jid",
+ "log",
  "rusqlite",
+ "sasl",
  "tokio",
  "tokio-xmpp",
  "xmpp-parsers",

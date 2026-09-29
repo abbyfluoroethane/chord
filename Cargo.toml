@@ -17,3 +17,8 @@ jid = "0.12"
 futures-core = "0.3"
 rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = "1"
+# SASL credentials and channel binding for the login in session/native.rs.
+# Same version as tokio-xmpp 6.0.0 uses.
+sasl = "0.5"
+# Logging facade. tokio-xmpp logs through it too.
+log = "0.4"

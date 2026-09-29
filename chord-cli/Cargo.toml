@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 chord-core.workspace = true
+log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

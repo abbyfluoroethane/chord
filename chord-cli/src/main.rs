@@ -9,27 +9,108 @@
 //!   CHORD_JID        account, for example alice@chord.localhost
 //!   CHORD_PASSWORD   password (never an argument, so it stays out of the shell history)
 //!   CHORD_SERVER     "srv" (default), "starttls://host:port", or "tcp://host:port" (no TLS)
+//!   CHORD_LOG        log level on stderr: error, warn, info, debug, or trace (default: no log)
+//!
+//! Exit codes:
+//!   0  success
+//!   1  other error (bad usage, bad environment variable, send failure)
+//!   2  login rejected (wrong username or password, account disabled, ...)
+//!   3  server unreachable, or its TLS certificate is invalid
+//!   4  login timed out
 
+use std::fmt;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::native::NativeSession;
-use chord_core::session::{ServerAddr, Session, SessionConfig, SessionEvent, Stream};
+use chord_core::session::{
+    ConnectError, DisconnectReason, ServerAddr, Session, SessionConfig, SessionEvent, Stream,
+};
 use chord_core::xmpp_parsers::iq::Iq;
 use chord_core::xmpp_parsers::message::Message;
 use chord_core::xmpp_parsers::ping::Ping;
 use chord_core::xmpp_parsers::presence::Presence;
 use chord_core::xmpp_parsers::stanza::Stanza;
 
-/// `tokio-xmpp` retries a failed login forever, so the CLI stops waiting after this time.
+/// `connect` returns after the login, so `Connected` must arrive at once. This is a safety limit.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const USAGE: &str = "usage: chord-cli login | send <jid> <text> | listen [--once]";
+
+/// An error, and the exit code that goes with it.
+enum CliError {
+    Connect(ConnectError),
+    Other(String),
+}
+
+impl CliError {
+    fn exit_code(&self) -> u8 {
+        match self {
+            Self::Connect(ConnectError::AuthFailed(_)) => 2,
+            Self::Connect(ConnectError::Unreachable(_) | ConnectError::TlsInvalid(_)) => 3,
+            Self::Connect(ConnectError::Timeout) => 4,
+            Self::Other(_) => 1,
+        }
+    }
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Connect(e) => e.fmt(f),
+            Self::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl From<ConnectError> for CliError {
+    fn from(e: ConnectError) -> Self {
+        Self::Connect(e)
+    }
+}
+
+impl From<String> for CliError {
+    fn from(msg: String) -> Self {
+        Self::Other(msg)
+    }
+}
+
+/// A minimal logger on stderr. `CHORD_LOG` sets the level.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{} {}] {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn init_logger() {
+    let Ok(value) = std::env::var("CHORD_LOG") else {
+        return;
+    };
+    match value.parse::<log::LevelFilter>() {
+        Ok(level) if level != log::LevelFilter::Off => {
+            if log::set_logger(&StderrLogger).is_ok() {
+                log::set_max_level(level);
+            }
+        }
+        _ => eprintln!("warning: CHORD_LOG must be error, warn, info, debug, or trace"),
+    }
+}
 
 type Events = <NativeSession as Session>::Events;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    init_logger();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
@@ -37,13 +118,13 @@ async fn main() -> ExitCode {
         ["send", to, text] => send(to, text).await,
         ["listen"] => listen(false).await,
         ["listen", "--once"] => listen(true).await,
-        _ => Err(USAGE.to_owned()),
+        _ => Err(USAGE.to_owned().into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(msg) => {
-            eprintln!("error: {msg}");
-            ExitCode::FAILURE
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(e.exit_code())
         }
     }
 }
@@ -56,11 +137,7 @@ fn config() -> Result<SessionConfig, String> {
         None | Some("srv") => ServerAddr::Srv,
         Some(s) => parse_server(s)?,
     };
-    Ok(SessionConfig {
-        jid,
-        password,
-        server,
-    })
+    Ok(SessionConfig::new(jid, password, server))
 }
 
 fn parse_server(s: &str) -> Result<ServerAddr, String> {
@@ -82,13 +159,10 @@ fn parse_server(s: &str) -> Result<ServerAddr, String> {
 }
 
 /// Start a session and wait for `Connected`.
-async fn connect() -> Result<(NativeSession, Events, Jid), String> {
+async fn connect() -> Result<(NativeSession, Events, Jid), CliError> {
     let config = config()?;
-    let account = config.jid.clone();
-    let mut session = NativeSession::connect(config)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut events = session.events().ok_or("no event stream")?;
+    let mut session = NativeSession::connect(config).await?;
+    let mut events = session.events().ok_or("no event stream".to_owned())?;
     let wait = async {
         while let Some(event) = next(&mut events).await {
             if let SessionEvent::Connected { bound_jid, .. } = event {
@@ -99,25 +173,22 @@ async fn connect() -> Result<(NativeSession, Events, Jid), String> {
     };
     match tokio::time::timeout(CONNECT_TIMEOUT, wait).await {
         Ok(Some(bound_jid)) => Ok((session, events, bound_jid)),
-        Ok(None) => Err("session closed before login".to_owned()),
+        Ok(None) => Err("session closed before login".to_owned().into()),
         Err(_) => {
             session.disconnect().await;
-            Err(format!(
-                "no login as {account} after {}s. Examine the password and CHORD_SERVER.",
-                CONNECT_TIMEOUT.as_secs()
-            ))
+            Err(ConnectError::Timeout.into())
         }
     }
 }
 
-async fn login() -> Result<(), String> {
+async fn login() -> Result<(), CliError> {
     let (session, _events, bound_jid) = connect().await?;
     println!("logged in as {bound_jid}");
     session.disconnect().await;
     Ok(())
 }
 
-async fn send(to: &str, text: &str) -> Result<(), String> {
+async fn send(to: &str, text: &str) -> Result<(), CliError> {
     let to = Jid::new(to).map_err(|e| format!("bad JID {to}: {e}"))?;
     let (session, mut events, bound_jid) = connect().await?;
     let message = Message::chat(to.clone()).with_body("".into(), text.to_owned());
@@ -149,13 +220,11 @@ async fn send(to: &str, text: &str) -> Result<(), String> {
             println!("sent to {to}: {text}");
             Ok(())
         }
-        _ => Err(format!(
-            "no confirmation from the server for the message to {to}"
-        )),
+        _ => Err(format!("no confirmation from the server for the message to {to}").into()),
     }
 }
 
-async fn listen(once: bool) -> Result<(), String> {
+async fn listen(once: bool) -> Result<(), CliError> {
     let (session, mut events, bound_jid) = connect().await?;
     // Initial presence, so that the server routes chat messages to this resource.
     session
@@ -177,6 +246,10 @@ async fn listen(once: bool) -> Result<(), String> {
                 }
             }
             SessionEvent::Connected { resumed, .. } => println!("reconnected (resumed: {resumed})"),
+            SessionEvent::Disconnected(DisconnectReason::AuthFailed(failure)) => {
+                session.disconnect().await;
+                return Err(ConnectError::AuthFailed(failure).into());
+            }
             SessionEvent::Disconnected(reason) => println!("disconnected: {reason:?}"),
         }
     }

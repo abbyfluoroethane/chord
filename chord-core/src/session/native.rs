@@ -1,28 +1,57 @@
 //! `Session` implementation on `tokio-xmpp`. The only module that imports `tokio_xmpp`.
 //!
-//! A background task owns the `StanzaStream`. `StanzaStream` does the reconnects and
-//! XEP-0198 stream management. It reports `StreamEvent::Resumed` when stream management
-//! restores the session, and `StreamEvent::Reset` when the server lost the session state.
+//! Ownership (spec rev 5): `StanzaStream` owns stream management and resumption.
+//! Chord owns the login and its retry loop. `connect` does the first login itself, so it
+//! can return a typed `ConnectError`. It then gives the logged-in stream to
+//! `StanzaStream::new` through a connector closure. On each reconnect, the connector runs
+//! the same login in `retry_login`, which stops on a fatal SASL failure.
+//!
+//! Search for `TOKIO-XMPP-COPY` to find the code that copies `tokio-xmpp` internals.
 
+use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use core::time::Duration;
+use std::borrow::Cow;
+use std::collections::BTreeSet;
+use std::io;
 
 use futures_core::Stream;
 use jid::Jid;
-use tokio::sync::mpsc;
+use sasl::client::Mechanism;
+use sasl::client::mechanisms::Scram;
+use sasl::common::scram::{Sha1, Sha256};
+use sasl::common::{ChannelBinding, Credentials};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio_xmpp::connect::{DnsConfig, StartTlsServerConnector, TcpServerConnector};
-use tokio_xmpp::stanzastream::{Event, StanzaStream, StreamEvent};
-use tokio_xmpp::xmlstream::Timeouts;
+use tokio_xmpp::connect::{
+    DnsConfig, ServerConnector, StartTlsServerConnector, TcpServerConnector,
+};
+use tokio_xmpp::error::AuthError;
+use tokio_xmpp::rustls;
+use tokio_xmpp::stanzastream::{Connection, Event, StanzaStream, StreamEvent};
+use tokio_xmpp::xmlstream::{StreamHeader, Timeouts};
+use xmpp_parsers::ns;
 use xmpp_parsers::stanza::Stanza;
 
-use super::{DisconnectReason, ServerAddr, Session, SessionConfig, SessionError, SessionEvent};
+use super::{
+    AuthFailure, ConnectError, DisconnectReason, SaslRetry, ServerAddr, Session, SessionConfig,
+    SessionError, SessionEvent, sasl_retry,
+};
 
 /// Size of the inbound and outbound queues.
 const QUEUE_DEPTH: usize = 64;
 
-/// Time limit for a clean close. See the comment in `run`.
-const CLOSE_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(5);
+/// Time limit for a clean close of the `StanzaStream`.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// First and largest delay between two login attempts. Same values as `new_c2s`.
+const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// After a fatal auth failure on a reconnect, the connector waits this long for Chord to
+/// close the session. Then it drops the slot anyway, so it never holds it forever.
+const FATAL_SLOT_HOLD: Duration = Duration::from_secs(10);
 
 enum Command {
     Send(Box<Stanza>),
@@ -50,48 +79,29 @@ impl Stream for NativeEvents {
 impl Session for NativeSession {
     type Events = NativeEvents;
 
-    async fn connect(config: SessionConfig) -> Result<Self, SessionError> {
+    async fn connect(config: SessionConfig) -> Result<Self, ConnectError> {
         let SessionConfig {
             jid,
             password,
             server,
+            login_timeout,
         } = config;
         let domain = jid.domain().as_str().to_owned();
         let jid = Jid::from(jid);
-        let timeouts = Timeouts::default();
-        // `new_c2s` does not fail. It retries in the background until the login succeeds.
-        let stream = match server {
-            ServerAddr::Srv => StanzaStream::new_c2s(
-                StartTlsServerConnector::from(DnsConfig::srv_default_client(&domain)),
-                jid,
-                password,
-                timeouts,
-                QUEUE_DEPTH,
-            ),
-            ServerAddr::StartTls { host, port } => StanzaStream::new_c2s(
-                StartTlsServerConnector::from(DnsConfig::no_srv(&host, port)),
-                jid,
-                password,
-                timeouts,
-                QUEUE_DEPTH,
-            ),
-            ServerAddr::InsecureTcp { host, port } => StanzaStream::new_c2s(
-                TcpServerConnector::from(DnsConfig::no_srv(&host, port)),
-                jid,
-                password,
-                timeouts,
-                QUEUE_DEPTH,
-            ),
-        };
-
-        let (commands, command_rx) = mpsc::channel(QUEUE_DEPTH);
-        let (event_tx, event_rx) = mpsc::channel(QUEUE_DEPTH);
-        let task = tokio::spawn(run(stream, command_rx, event_tx));
-        Ok(Self {
-            commands,
-            events: Some(NativeEvents(event_rx)),
-            task,
-        })
+        match server {
+            ServerAddr::Srv => {
+                let server = StartTlsServerConnector::from(DnsConfig::srv_default_client(&domain));
+                start(server, jid, password, login_timeout).await
+            }
+            ServerAddr::StartTls { host, port } => {
+                let server = StartTlsServerConnector::from(DnsConfig::no_srv(&host, port));
+                start(server, jid, password, login_timeout).await
+            }
+            ServerAddr::InsecureTcp { host, port } => {
+                let server = TcpServerConnector::from(DnsConfig::no_srv(&host, port));
+                start(server, jid, password, login_timeout).await
+            }
+        }
     }
 
     async fn send(&self, stanza: Stanza) -> Result<(), SessionError> {
@@ -112,11 +122,147 @@ impl Session for NativeSession {
     }
 }
 
+/// Do the first login, then hand the stream to a new `StanzaStream`.
+async fn start<C: ServerConnector>(
+    server: C,
+    jid: Jid,
+    password: String,
+    login_timeout: Duration,
+) -> Result<NativeSession, ConnectError> {
+    let first = tokio::time::timeout(login_timeout, first_login(&server, &jid, &password))
+        .await
+        .map_err(|_| ConnectError::Timeout)??;
+
+    let attempt = move || {
+        let (server, jid, password) = (server.clone(), jid.clone(), password.clone());
+        async move { login(server, &jid, &password).await }
+    };
+    Ok(NativeSession::spawn(Some(first), attempt, login_timeout))
+}
+
+/// The first login. Retries only a temporary SASL failure, until the caller's timeout.
+async fn first_login<C: ServerConnector>(
+    server: &C,
+    jid: &Jid,
+    password: &str,
+) -> Result<Connection, ConnectError> {
+    let mut delay = FIRST_RETRY_DELAY;
+    loop {
+        match login(server.clone(), jid, password).await {
+            Ok(connection) => return Ok(connection),
+            Err(LoginError::Fatal(failure)) => return Err(ConnectError::AuthFailed(failure)),
+            Err(LoginError::Unreachable(msg)) => return Err(ConnectError::Unreachable(msg)),
+            Err(LoginError::TlsInvalid(msg)) => return Err(ConnectError::TlsInvalid(msg)),
+            Err(LoginError::Temporary(msg)) => {
+                log::info!("temporary login failure: {msg}. Retrying in {delay:?}.");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(MAX_RETRY_DELAY);
+            }
+        }
+    }
+}
+
+impl NativeSession {
+    /// Start the `StanzaStream` and the task that maps its events.
+    ///
+    /// `first` goes to the first connector call. Each later call runs `retry_login`
+    /// with `attempt`. With `first` set to `None`, the first call also runs `retry_login`.
+    fn spawn<F, Fut>(first: Option<Connection>, attempt: F, login_timeout: Duration) -> Self
+    where
+        F: FnMut() -> Fut + Clone + Send + 'static,
+        Fut: Future<Output = Result<Connection, LoginError>> + Send + 'static,
+    {
+        let (auth_tx, auth_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut first = first;
+        let connector = Box::new(
+            move |_: Option<String>, slot: oneshot::Sender<Connection>| {
+                if let Some(connection) = first.take() {
+                    // The receiver lives in the worker, which called us. It cannot be gone yet.
+                    let _ = slot.send(connection);
+                    return;
+                }
+                tokio::spawn(retry_login(
+                    attempt.clone(),
+                    slot,
+                    auth_tx.clone(),
+                    shutdown_rx.clone(),
+                    login_timeout,
+                ));
+            },
+        );
+        let stream = StanzaStream::new(connector, QUEUE_DEPTH);
+
+        let (commands, command_rx) = mpsc::channel(QUEUE_DEPTH);
+        let (event_tx, event_rx) = mpsc::channel(QUEUE_DEPTH);
+        let task = tokio::spawn(run(stream, command_rx, event_tx, auth_rx, shutdown_tx));
+        Self {
+            commands,
+            events: Some(NativeEvents(event_rx)),
+            task,
+        }
+    }
+}
+
+/// The reconnect login loop.
+///
+/// TOKIO-XMPP-COPY: this is the retry loop of `StanzaStream::new_c2s` in tokio-xmpp 6.0.0
+/// (src/stanzastream/mod.rs:128-181), with these changes:
+/// - A fatal SASL failure stops the loop and goes to `auth_failed`. `new_c2s` retries it
+///   forever (mod.rs:170-179).
+/// - The loop stops when `shutdown` turns true. `new_c2s` has no stop.
+/// - Each attempt has a time limit.
+///
+/// The loop never holds `slot` forever. It drops `slot` on shutdown, or `FATAL_SLOT_HOLD`
+/// after a fatal failure. tokio-xmpp 6.0.0 then panics in the worker task
+/// (stanzastream/worker.rs:180-183 and 548-549). Tokio catches that panic, and the worker
+/// ends. This is the only way to end a worker that waits for a connection.
+async fn retry_login<T, F, Fut>(
+    mut attempt: F,
+    slot: oneshot::Sender<T>,
+    auth_failed: mpsc::UnboundedSender<AuthFailure>,
+    mut shutdown: watch::Receiver<bool>,
+    login_timeout: Duration,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, LoginError>>,
+{
+    let mut delay = FIRST_RETRY_DELAY;
+    loop {
+        let result = tokio::select! {
+            result = tokio::time::timeout(login_timeout, attempt()) => result,
+            _ = shutdown.wait_for(|stop| *stop) => return,
+        };
+        match result {
+            Ok(Ok(connection)) => {
+                let _ = slot.send(connection);
+                return;
+            }
+            Ok(Err(LoginError::Fatal(failure))) => {
+                log::warn!("login failed on reconnect: {failure}. Stopping.");
+                let _ = auth_failed.send(failure);
+                let _ =
+                    tokio::time::timeout(FATAL_SLOT_HOLD, shutdown.wait_for(|stop| *stop)).await;
+                return;
+            }
+            Ok(Err(error)) => log::info!("reconnect failed: {error}. Retrying in {delay:?}."),
+            Err(_) => log::info!("reconnect timed out. Retrying in {delay:?}."),
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = shutdown.wait_for(|stop| *stop) => return,
+        }
+        delay = (delay * 2).min(MAX_RETRY_DELAY);
+    }
+}
+
 /// Own the stream. Forward commands to it, and map its events to `SessionEvent`.
 async fn run(
     mut stream: StanzaStream,
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<SessionEvent>,
+    mut auth_failed: mpsc::UnboundedReceiver<AuthFailure>,
+    shutdown: watch::Sender<bool>,
 ) {
     // `StreamEvent::Resumed` does not carry the JID, so keep the one from the last `Reset`.
     let mut bound_jid: Option<Jid> = None;
@@ -127,15 +273,13 @@ async fn run(
                     // The token reports delivery progress. Nothing uses it yet.
                     let _token = stream.send(stanza).await;
                 }
-                Some(Command::Close) | None => {
-                    // TODO(tokio-xmpp 6.0.0): `StanzaStream::close` never returns while the stream
-                    // waits for a login (for example, a wrong password). The worker polls only the
-                    // reconnect slot in that state (stanzastream/worker.rs:150-159). A time limit
-                    // stops the wait. The library reconnect task keeps its retry loop until exit.
-                    let _ = tokio::time::timeout(CLOSE_TIMEOUT, stream.close()).await;
-                    break;
-                }
+                Some(Command::Close) | None => break,
             },
+            Some(failure) = auth_failed.recv() => {
+                let reason = DisconnectReason::AuthFailed(failure);
+                let _ = events.send(SessionEvent::Disconnected(reason)).await;
+                break;
+            }
             event = next_event(&mut stream) => {
                 let mapped = match event {
                     Some(Event::Stanza(stanza)) => SessionEvent::Stanza(Box::new(stanza)),
@@ -158,6 +302,12 @@ async fn run(
             }
         }
     }
+    // Stop a pending reconnect first. It drops its slot, the worker ends, and then
+    // `close` returns at once. While the stream is connected, no reconnect runs.
+    let _ = shutdown.send(true);
+    // `StanzaStream::close` does not return while the worker waits for a connection
+    // (stanzastream/worker.rs:150-159), so it gets a time limit.
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, stream.close()).await;
     let _ = events
         .send(SessionEvent::Disconnected(DisconnectReason::Closed))
         .await;
@@ -165,4 +315,317 @@ async fn run(
 
 async fn next_event(stream: &mut StanzaStream) -> Option<Event> {
     core::future::poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
+}
+
+/// Why one login attempt failed.
+#[derive(Debug)]
+enum LoginError {
+    /// Stop. New credentials or a server change are necessary.
+    Fatal(AuthFailure),
+    /// A temporary SASL failure. Retry with backoff.
+    Temporary(String),
+    Unreachable(String),
+    TlsInvalid(String),
+}
+
+impl core::fmt::Display for LoginError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Fatal(failure) => write!(f, "{failure}"),
+            Self::Temporary(msg) | Self::Unreachable(msg) | Self::TlsInvalid(msg) => {
+                f.write_str(msg)
+            }
+        }
+    }
+}
+
+/// Connect, do SASL, and restart the stream. Returns a stream that is ready to bind.
+///
+/// TOKIO-XMPP-COPY: this is `client_auth` from tokio-xmpp 6.0.0
+/// (src/client/login.rs:113-138). That function is not public (client/mod.rs:33).
+/// Changes:
+/// - The errors map to `LoginError`, so the callers can stop on a fatal SASL failure.
+/// - The channel binding from the connector goes to SASL, as in the original, except when
+///   the server offers no `-PLUS` mechanism. Then it is `ChannelBinding::Unsupported`.
+///   With binding data, the sasl crate names SCRAM only as `-PLUS`
+///   (sasl-0.5.2 src/client/mechanisms/scram.rs:103-108), so `client_login` skips SCRAM
+///   and falls back to PLAIN (client/login.rs:36-45).
+/// - It logs the SASL mechanism.
+async fn login<C: ServerConnector>(
+    server: C,
+    jid: &Jid,
+    password: &str,
+) -> Result<Connection, LoginError> {
+    let username = jid
+        .node()
+        .ok_or_else(|| LoginError::Fatal(AuthFailure::Local("the JID has no local part".into())))?
+        .as_str();
+
+    let (stream, channel_binding) = server
+        .connect(jid, ns::JABBER_CLIENT, Timeouts::default())
+        .await
+        .map_err(map_error)?;
+    let (features, stream) = stream
+        .recv_features()
+        .await
+        .map_err(|e| map_error(e.into()))?;
+
+    let offers_plus = features
+        .sasl_mechanisms
+        .iter()
+        .any(|m| m.ends_with("-PLUS"));
+    let channel_binding = match channel_binding {
+        ChannelBinding::TlsUnique(_) | ChannelBinding::TlsExporter(_) if !offers_plus => {
+            ChannelBinding::Unsupported
+        }
+        other => other,
+    };
+    let creds = Credentials::default()
+        .with_username(username)
+        .with_password(password)
+        .with_channel_binding(channel_binding);
+    let mechanism = chosen_mechanism(&creds, &features.sasl_mechanisms);
+
+    let stream = tokio_xmpp::client_login(stream, features.sasl_mechanisms, creds)
+        .await
+        .map_err(map_error)?;
+    log::info!(
+        "SASL mechanism accepted: {}",
+        mechanism.as_deref().unwrap_or("unknown")
+    );
+
+    let stream = stream
+        .send_header(StreamHeader {
+            to: Some(Cow::Borrowed(jid.domain().as_str())),
+            from: None,
+            id: None,
+        })
+        .await
+        .map_err(|e| map_error(e.into()))?;
+    let (features, stream) = stream
+        .recv_features()
+        .await
+        .map_err(|e| map_error(e.into()))?;
+    Ok(Connection {
+        stream: stream.box_stream(),
+        features,
+        identity: jid.clone(),
+    })
+}
+
+/// The mechanism that `client_login` picks: the first local one that the server offers.
+/// TOKIO-XMPP-COPY: same order as tokio-xmpp 6.0.0 src/client/login.rs:36-41.
+fn chosen_mechanism(creds: &Credentials, offered: &BTreeSet<String>) -> Option<String> {
+    let scram256 = Scram::<Sha256>::from_credentials(creds.clone()).ok()?;
+    let scram1 = Scram::<Sha1>::from_credentials(creds.clone()).ok()?;
+    [scram256.name(), scram1.name(), "PLAIN", "ANONYMOUS"]
+        .into_iter()
+        .find(|name| offered.contains(*name))
+        .map(str::to_owned)
+}
+
+fn map_error(error: tokio_xmpp::Error) -> LoginError {
+    match error {
+        tokio_xmpp::Error::Auth(AuthError::Fail(condition)) => match sasl_retry(&condition) {
+            SaslRetry::Retry => LoginError::Temporary(format!("SASL {condition:?}")),
+            SaslRetry::Stop => LoginError::Fatal(AuthFailure::Sasl(condition)),
+        },
+        tokio_xmpp::Error::Auth(AuthError::NoMechanism) => {
+            LoginError::Fatal(AuthFailure::NoMechanism)
+        }
+        tokio_xmpp::Error::Auth(other) => LoginError::Fatal(AuthFailure::Local(other.to_string())),
+        // rustls handshake errors arrive as `Error::Io` (connect/tls_common.rs:154-157).
+        tokio_xmpp::Error::Io(ref e) if is_certificate_error(e) => {
+            LoginError::TlsInvalid(error.to_string())
+        }
+        other => LoginError::Unreachable(other.to_string()),
+    }
+}
+
+fn is_certificate_error(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        .is_some_and(|e| {
+            matches!(
+                e,
+                rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::SaslCondition;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    type Scripted<T> = std::vec::IntoIter<Result<T, LoginError>>;
+
+    /// A fake login that returns scripted results and counts its calls.
+    fn scripted<T>(
+        results: Vec<Result<T, LoginError>>,
+    ) -> (
+        Arc<AtomicUsize>,
+        impl FnMut() -> core::future::Ready<Result<T, LoginError>>,
+    ) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let mut results: Scripted<T> = results.into_iter();
+        let attempt = move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            core::future::ready(results.next().expect("no more scripted results"))
+        };
+        (calls, attempt)
+    }
+
+    fn not_authorized() -> LoginError {
+        LoginError::Fatal(AuthFailure::Sasl(SaslCondition::NotAuthorized))
+    }
+
+    const LOGIN_TIMEOUT: Duration = Duration::from_secs(15);
+
+    #[tokio::test(start_paused = true)]
+    async fn fatal_failure_reports_once_and_drops_slot_on_shutdown() {
+        let (calls, attempt) = scripted::<u32>(vec![Err(not_authorized())]);
+        let (slot, slot_rx) = oneshot::channel();
+        let (auth_tx, mut auth_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(retry_login(
+            attempt,
+            slot,
+            auth_tx,
+            shutdown_rx,
+            LOGIN_TIMEOUT,
+        ));
+
+        let failure = auth_rx.recv().await.unwrap();
+        assert_eq!(failure, AuthFailure::Sasl(SaslCondition::NotAuthorized));
+        // The loop waits for the shutdown and does not try again.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(!task.is_finished());
+
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap();
+        assert!(slot_rx.await.is_err(), "the slot is dropped, not filled");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fatal_failure_without_shutdown_releases_slot_after_hold() {
+        let (_, attempt) = scripted::<u32>(vec![Err(not_authorized())]);
+        let (slot, slot_rx) = oneshot::channel();
+        let (auth_tx, _auth_rx) = mpsc::unbounded_channel();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let start = tokio::time::Instant::now();
+        tokio::spawn(retry_login(
+            attempt,
+            slot,
+            auth_tx,
+            shutdown_rx,
+            LOGIN_TIMEOUT,
+        ));
+        assert!(slot_rx.await.is_err());
+        assert_eq!(start.elapsed(), FATAL_SLOT_HOLD);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn temporary_failures_retry_with_backoff_then_fill_slot() {
+        let temporary = || LoginError::Temporary("SASL TemporaryAuthFailure".into());
+        let unreachable = || LoginError::Unreachable("connection refused".into());
+        let (calls, attempt) = scripted(vec![Err(temporary()), Err(unreachable()), Ok(7_u32)]);
+        let (slot, slot_rx) = oneshot::channel();
+        let (auth_tx, mut auth_rx) = mpsc::unbounded_channel();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let start = tokio::time::Instant::now();
+        tokio::spawn(retry_login(
+            attempt,
+            slot,
+            auth_tx,
+            shutdown_rx,
+            LOGIN_TIMEOUT,
+        ));
+
+        assert_eq!(slot_rx.await.unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        // Delays of 1 s and 2 s.
+        assert_eq!(start.elapsed(), Duration::from_secs(3));
+        assert!(
+            auth_rx.try_recv().is_err(),
+            "no auth failure for a temporary error"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_during_backoff_stops_the_loop() {
+        let (calls, attempt) =
+            scripted::<u32>(vec![Err(LoginError::Unreachable("refused".into()))]);
+        let (slot, slot_rx) = oneshot::channel();
+        let (auth_tx, _auth_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(retry_login(
+            attempt,
+            slot,
+            auth_tx,
+            shutdown_rx,
+            LOGIN_TIMEOUT,
+        ));
+        tokio::task::yield_now().await;
+        shutdown_tx.send(true).unwrap();
+        task.await.unwrap();
+        assert!(slot_rx.await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// The whole path, with the real `StanzaStream` worker and a fake login: a reconnect
+    /// fails with `not-authorized`. The session reports `AuthFailed`, then `Closed`, and
+    /// the session task ends.
+    #[tokio::test]
+    async fn auth_failure_on_reconnect_closes_session_without_zombie() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let attempt = move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async { Err::<Connection, _>(not_authorized()) }
+        };
+        let start = Instant::now();
+        // With no first connection, the first connector call already runs `retry_login`,
+        // the same as a reconnect.
+        let mut session = NativeSession::spawn(None, attempt, LOGIN_TIMEOUT);
+        let mut events = session.events().unwrap();
+
+        async fn next(events: &mut NativeEvents) -> Option<SessionEvent> {
+            let fut = core::future::poll_fn(|cx| Pin::new(&mut *events).poll_next(cx));
+            tokio::time::timeout(Duration::from_secs(6), fut)
+                .await
+                .expect("event within 6 s")
+        }
+        match next(&mut events).await {
+            Some(SessionEvent::Disconnected(DisconnectReason::AuthFailed(failure))) => {
+                assert_eq!(failure, AuthFailure::Sasl(SaslCondition::NotAuthorized));
+            }
+            other => panic!("expected AuthFailed, got {other:?}"),
+        }
+        assert!(matches!(
+            next(&mut events).await,
+            Some(SessionEvent::Disconnected(DisconnectReason::Closed))
+        ));
+        assert!(next(&mut events).await.is_none(), "no event after Closed");
+        tokio::time::timeout(Duration::from_secs(1), session.task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(6),
+            "took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "no retry after a fatal failure"
+        );
+    }
 }

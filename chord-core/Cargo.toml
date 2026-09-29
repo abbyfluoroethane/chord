@@ -7,14 +7,20 @@ license.workspace = true
 [features]
 default = ["native-session"]
 # The tokio-xmpp session. Turn it off for the wasm32 build.
-native-session = ["dep:tokio-xmpp", "dep:tokio"]
+native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl"]
 
 [dependencies]
 xmpp-parsers.workspace = true
 jid.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true
+log.workspace = true
+sasl = { workspace = true, optional = true }
 # insecure-tcp: plain TCP for the local test server (ServerAddr::InsecureTcp).
 tokio-xmpp = { workspace = true, optional = true, features = ["insecure-tcp"] }
 # Only session/native.rs and runtime.rs use tokio.
 tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time"] }
+
+[dev-dependencies]
+# Paused time for the retry loop tests in session/native.rs.
+tokio = { workspace = true, features = ["test-util", "macros", "rt", "time", "sync"] }

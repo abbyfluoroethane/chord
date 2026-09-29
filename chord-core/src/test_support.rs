@@ -10,7 +10,7 @@ use std::rc::Rc;
 use futures_core::Stream;
 use xmpp_parsers::stanza::Stanza;
 
-use crate::session::{Session, SessionConfig, SessionError, SessionEvent};
+use crate::session::{ConnectError, Session, SessionConfig, SessionError, SessionEvent};
 
 /// A `Session` that returns scripted events and records the stanzas it gets.
 pub struct FakeSession {
@@ -54,7 +54,7 @@ impl FakeSession {
 impl Session for FakeSession {
     type Events = FakeEvents;
 
-    async fn connect(_config: SessionConfig) -> Result<Self, SessionError> {
+    async fn connect(_config: SessionConfig) -> Result<Self, ConnectError> {
         Ok(Self::scripted(Vec::new()))
     }
 
