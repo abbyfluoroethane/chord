@@ -1,8 +1,8 @@
 <script lang="ts">
   // The circle rail: Home, circles, local folders, add button.
   // Drag a circle onto another to make a folder. Drop near an edge to reorder.
-  import House from 'lucide-svelte/icons/house';
   import Plus from 'lucide-svelte/icons/plus';
+  import ChordMark from './ChordMark.svelte';
   import CircleIcon from './CircleIcon.svelte';
   import Icon from './Icon.svelte';
   import RailFolder from './RailFolder.svelte';
@@ -97,7 +97,7 @@
     mentions={home.mentions}
     onclick={() => app.selectSpace(HOME)}
   >
-    <Icon icon={House} size={22} />
+    <ChordMark size={28} />
   </RailItem>
 
   <div class="sep" role="separator"></div>

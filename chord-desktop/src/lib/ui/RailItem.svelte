@@ -87,6 +87,8 @@
     border-color: var(--ink);
   }
   .tile.home {
+    /* Home is always a squircle, with the Chord mark. */
+    border-radius: var(--radius-circle-icon);
     background: var(--brand);
     color: var(--on-brand);
   }
