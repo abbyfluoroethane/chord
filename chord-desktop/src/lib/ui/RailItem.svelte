@@ -73,6 +73,7 @@
     font-size: 16px;
     overflow: hidden;
     transition:
+      border-width var(--dur-fast) var(--ease-out),
       width var(--dur-fast) var(--ease-out),
       height var(--dur-fast) var(--ease-out),
       border-radius var(--dur-fast) var(--ease-out),
@@ -87,23 +88,15 @@
   .tile.folder {
     width: 44px;
     height: 44px;
+    /* A squircle has no ring: the face fills the tile. The pill shows the selection. */
+    border-width: 0;
     border-radius: var(--radius-circle-icon);
-  }
-  .tile:hover {
-    border-color: var(--ink-muted);
-  }
-  .tile.selected {
-    border-color: var(--ink);
   }
   .tile.home {
     /* Home is always a squircle, with the Chord mark. */
     border-radius: var(--radius-circle-icon);
     background: var(--brand);
     color: var(--on-brand);
-  }
-  .tile.home:hover,
-  .tile.home.selected {
-    border-color: var(--ink);
   }
   .tile.add {
     background: transparent;
