@@ -1,3 +1,4 @@
 /target
 dev/prosody/.env
 dev/prosody/certs/
+.claude/worktrees/

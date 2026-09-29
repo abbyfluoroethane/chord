@@ -22,6 +22,10 @@ tokio = "1"
 sasl = "0.5"
 # Logging facade. tokio-xmpp logs through it too.
 log = "0.4"
+# Channels for the actor. No tokio, so they also work on wasm32.
+futures-channel = "0.3"
+# XEP-0359 origin-ids. xmpp-parsers already depends on it with v4.
+uuid = { version = "1", features = ["v4"] }
 
 # panic = "unwind" is required. Do not set panic = "abort" in any profile.
 #

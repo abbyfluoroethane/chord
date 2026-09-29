@@ -1,4 +1,4 @@
-//! Test helpers: a fake `Session` with scripted events, and a small executor.
+//! Test helpers: a fake `Session` with scripted events, and two small executors.
 
 use core::future::Future;
 use core::pin::{Pin, pin};
@@ -8,36 +8,95 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use futures_core::Stream;
+use xmpp_parsers::iq::Iq;
 use xmpp_parsers::stanza::Stanza;
 
 use crate::session::{ConnectError, Session, SessionConfig, SessionError, SessionEvent};
 
+type Queue = Rc<RefCell<VecDeque<SessionEvent>>>;
+
 /// A `Session` that returns scripted events and records the stanzas it gets.
+///
+/// It also acts as a small server: it answers each `<iq type='get'/>` with an empty
+/// result, so that pings work.
 pub struct FakeSession {
     events: Option<FakeEvents>,
+    queue: Queue,
     sent: Rc<RefCell<Vec<Stanza>>>,
     closed: bool,
 }
 
-/// The scripted event stream. It ends after the last event.
-pub struct FakeEvents(VecDeque<SessionEvent>);
+/// The scripted event stream.
+pub struct FakeEvents {
+    queue: Queue,
+    /// End the stream when the queue is empty. Otherwise stay pending, like a live session.
+    end_when_empty: bool,
+}
 
 impl Stream for FakeEvents {
     type Item = SessionEvent;
 
-    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<SessionEvent>> {
-        Poll::Ready(self.0.pop_front())
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<SessionEvent>> {
+        match self.queue.borrow_mut().pop_front() {
+            Some(event) => Poll::Ready(Some(event)),
+            None if self.end_when_empty => Poll::Ready(None),
+            None => Poll::Pending,
+        }
     }
 }
 
+/// What the next `FakeSession::connect` on this thread returns.
+struct Prepared {
+    result: Result<Vec<SessionEvent>, ConnectError>,
+    sent: Rc<RefCell<Vec<Stanza>>>,
+}
+
+thread_local! {
+    static NEXT_CONNECT: RefCell<Option<Prepared>> = const { RefCell::new(None) };
+}
+
 impl FakeSession {
-    /// A session that returns `events` in order.
+    /// A session that returns `events` in order, then ends its event stream.
     pub fn scripted(events: Vec<SessionEvent>) -> Self {
+        Self::new(events, Rc::default(), true)
+    }
+
+    fn new(
+        events: Vec<SessionEvent>,
+        sent: Rc<RefCell<Vec<Stanza>>>,
+        end_when_empty: bool,
+    ) -> Self {
+        let queue: Queue = Rc::new(RefCell::new(events.into()));
         Self {
-            events: Some(FakeEvents(events.into())),
-            sent: Rc::default(),
+            events: Some(FakeEvents {
+                queue: Rc::clone(&queue),
+                end_when_empty,
+            }),
+            queue,
+            sent,
             closed: false,
         }
+    }
+
+    /// Make the next `connect` on this thread succeed with a live session that returns
+    /// `events` and then stays open. Returns a handle to the stanzas it gets.
+    pub fn prepare_connect(events: Vec<SessionEvent>) -> Rc<RefCell<Vec<Stanza>>> {
+        let sent = Rc::<RefCell<Vec<Stanza>>>::default();
+        let prepared = Prepared {
+            result: Ok(events),
+            sent: Rc::clone(&sent),
+        };
+        NEXT_CONNECT.with(|next| *next.borrow_mut() = Some(prepared));
+        sent
+    }
+
+    /// Make the next `connect` on this thread fail with `error`.
+    pub fn prepare_connect_error(error: ConnectError) {
+        let prepared = Prepared {
+            result: Err(error),
+            sent: Rc::default(),
+        };
+        NEXT_CONNECT.with(|next| *next.borrow_mut() = Some(prepared));
     }
 
     /// A handle to the stanzas that `send` got. It stays valid after `disconnect`.
@@ -55,12 +114,31 @@ impl Session for FakeSession {
     type Events = FakeEvents;
 
     async fn connect(_config: SessionConfig) -> Result<Self, ConnectError> {
-        Ok(Self::scripted(Vec::new()))
+        match NEXT_CONNECT.with(|next| next.borrow_mut().take()) {
+            Some(Prepared {
+                result: Ok(events),
+                sent,
+            }) => Ok(Self::new(events, sent, false)),
+            Some(Prepared {
+                result: Err(error), ..
+            }) => Err(error),
+            None => Ok(Self::scripted(Vec::new())),
+        }
     }
 
     async fn send(&self, stanza: Stanza) -> Result<(), SessionError> {
         if self.closed {
             return Err(SessionError::Closed);
+        }
+        if let Stanza::Iq(Iq::Get { id, from: None, .. }) = &stanza {
+            let result = Iq::Result {
+                from: None,
+                to: None,
+                id: id.clone(),
+                payload: None,
+            };
+            let event = SessionEvent::Stanza(Box::new(result.into()));
+            self.queue.borrow_mut().push_back(event);
         }
         self.sent.borrow_mut().push(stanza);
         Ok(())
@@ -81,6 +159,24 @@ pub fn block_on<F: Future>(fut: F) -> F::Output {
         Poll::Ready(value) => value,
         Poll::Pending => panic!("block_on: the future is pending. Fakes must be ready at once."),
     }
+}
+
+/// Poll `background` and `test` in turn until `test` is ready. Panics after many rounds,
+/// so that a test that waits forever fails instead of hanging.
+pub fn run_with<B: Future, T: Future>(background: B, test: T) -> T::Output {
+    let mut background = pin!(background);
+    let mut test = pin!(test);
+    let mut background_done = false;
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..10_000 {
+        if let Poll::Ready(value) = test.as_mut().poll(&mut cx) {
+            return value;
+        }
+        if !background_done {
+            background_done = background.as_mut().poll(&mut cx).is_ready();
+        }
+    }
+    panic!("run_with: the test did not finish");
 }
 
 /// Get the next item of a stream.

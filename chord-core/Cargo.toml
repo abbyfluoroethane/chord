@@ -18,6 +18,8 @@ jid.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true
 log.workspace = true
+futures-channel.workspace = true
+uuid.workspace = true
 sasl = { workspace = true, optional = true }
 tokio-xmpp = { workspace = true, optional = true }
 # Only session/native.rs and runtime.rs use tokio.

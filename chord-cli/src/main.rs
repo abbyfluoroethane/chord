@@ -11,6 +11,7 @@
 //!   CHORD_SERVER     "srv" (default) or "starttls://host:port". With the dev-insecure
 //!                    feature also "tcp://host:port" (no TLS).
 //!   SSL_CERT_FILE    optional PEM file of trusted CAs. It replaces the system trust store.
+//!   CHORD_DB         account database (default: ~/.local/share/chord/<jid>.sqlite3)
 //!   CHORD_LOG        log level on stderr: error, warn, info, debug, or trace (default: no log)
 //!
 //! Exit codes:
@@ -21,19 +22,22 @@
 //!   4  login timed out
 
 use std::fmt;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use chord_core::actor::{
+    self, ClientEvent, ClientEvents, ClientHandle, ConnectionState, LoginError,
+};
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::native::NativeSession;
 use chord_core::session::{
     ConnectError, DisconnectReason, ServerAddr, Session, SessionConfig, SessionEvent, Stream,
 };
-use chord_core::xmpp_parsers::iq::Iq;
-use chord_core::xmpp_parsers::message::Message;
-use chord_core::xmpp_parsers::ping::Ping;
+use chord_core::store::Store;
 use chord_core::xmpp_parsers::presence::Presence;
 use chord_core::xmpp_parsers::stanza::Stanza;
+use tokio::task::JoinHandle;
 
 /// `connect` returns after the login, so `Connected` must arrive at once. This is a safety limit.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -165,7 +169,77 @@ fn parse_server(s: &str) -> Result<ServerAddr, String> {
     }
 }
 
-/// Start a session and wait for `Connected`.
+/// The path of the account database: `CHORD_DB`, or `~/.local/share/chord/<jid>.sqlite3`.
+fn db_path(jid: &BareJid) -> Result<PathBuf, CliError> {
+    if let Some(path) = std::env::var_os("CHORD_DB") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME").ok_or("set HOME or CHORD_DB".to_owned())?;
+    let dir = PathBuf::from(home).join(".local/share/chord");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    Ok(dir.join(format!("{jid}.sqlite3")))
+}
+
+/// Start the actor, log in, and wait for `Connected`.
+async fn start_client() -> Result<(ClientHandle, ClientEvents, JoinHandle<()>, Jid), CliError> {
+    let config = config()?;
+    let path = db_path(&config.jid)?;
+    let store = Store::open(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+    let (handle, mut events, actor) = actor::new::<NativeSession>(store);
+    let task = tokio::spawn(actor.run());
+
+    handle.login(config).await.map_err(|e| match e {
+        LoginError::Connect(e) => CliError::Connect(e),
+        LoginError::ActorGone => CliError::Other(e.to_string()),
+    })?;
+    let wait = async {
+        while let Some(event) = next(&mut events).await {
+            if let ClientEvent::ConnectionState(ConnectionState::Connected { bound_jid, .. }) =
+                event
+            {
+                return Some(bound_jid);
+            }
+        }
+        None
+    };
+    match tokio::time::timeout(CONNECT_TIMEOUT, wait).await {
+        Ok(Some(bound_jid)) => Ok((handle, events, task, bound_jid)),
+        Ok(None) => Err("session closed before login".to_owned().into()),
+        Err(_) => Err(ConnectError::Timeout.into()),
+    }
+}
+
+/// Log out, stop the actor, and wait for it.
+async fn stop_client(handle: ClientHandle, task: JoinHandle<()>) -> Result<(), CliError> {
+    // Logout waits until the server answers a ping, so the server has every stanza.
+    let logged_out = tokio::time::timeout(CONNECT_TIMEOUT, handle.logout()).await;
+    drop(handle);
+    let _ = tokio::time::timeout(CONNECT_TIMEOUT, task).await;
+    logged_out.map_err(|_| "no answer from the server at logout".to_owned().into())
+}
+
+async fn login() -> Result<(), CliError> {
+    let (handle, _events, task, bound_jid) = start_client().await?;
+    println!("logged in as {bound_jid}");
+    stop_client(handle, task).await
+}
+
+async fn send(to: &str, text: &str) -> Result<(), CliError> {
+    let to = Jid::new(to).map_err(|e| format!("bad JID {to}: {e}"))?;
+    let (handle, _events, task, _) = start_client().await?;
+    let id = handle
+        .send_chat(to.clone(), text.to_owned())
+        .await
+        .map_err(|e| e.to_string())?;
+    stop_client(handle, task)
+        .await
+        .map_err(|_| format!("no confirmation from the server for the message to {to}"))?;
+    println!("sent to {to}: {text} (origin-id {id})");
+    Ok(())
+}
+
+/// `listen` uses the session directly: it needs initial presence, and the actor has no
+/// presence feature yet.
 async fn connect() -> Result<(NativeSession, Events, Jid), CliError> {
     let config = config()?;
     let mut session = NativeSession::connect(config).await?;
@@ -185,49 +259,6 @@ async fn connect() -> Result<(NativeSession, Events, Jid), CliError> {
             session.disconnect().await;
             Err(ConnectError::Timeout.into())
         }
-    }
-}
-
-async fn login() -> Result<(), CliError> {
-    let (session, _events, bound_jid) = connect().await?;
-    println!("logged in as {bound_jid}");
-    session.disconnect().await;
-    Ok(())
-}
-
-async fn send(to: &str, text: &str) -> Result<(), CliError> {
-    let to = Jid::new(to).map_err(|e| format!("bad JID {to}: {e}"))?;
-    let (session, mut events, bound_jid) = connect().await?;
-    let message = Message::chat(to.clone()).with_body("".into(), text.to_owned());
-    session
-        .send(message.into())
-        .await
-        .map_err(|e| e.to_string())?;
-
-    // The server handles stanzas in order. When the ping reply arrives, the server has the message.
-    let ping_id = "chord-cli-ping";
-    let server = Jid::new(bound_jid.domain().as_str()).map_err(|e| e.to_string())?;
-    let ping = Iq::from_get(ping_id, Ping).with_to(server);
-    session.send(ping.into()).await.map_err(|e| e.to_string())?;
-    let acked = tokio::time::timeout(CONNECT_TIMEOUT, async {
-        while let Some(event) = next(&mut events).await {
-            if let SessionEvent::Stanza(stanza) = event
-                && let Stanza::Iq(iq) = *stanza
-                && iq.id() == ping_id
-            {
-                return true;
-            }
-        }
-        false
-    })
-    .await;
-    session.disconnect().await;
-    match acked {
-        Ok(true) => {
-            println!("sent to {to}: {text}");
-            Ok(())
-        }
-        _ => Err(format!("no confirmation from the server for the message to {to}").into()),
     }
 }
 
@@ -264,6 +295,6 @@ async fn listen(once: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn next(events: &mut Events) -> Option<SessionEvent> {
-    std::future::poll_fn(|cx| std::pin::Pin::new(&mut *events).poll_next(cx)).await
+async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
+    std::future::poll_fn(|cx| std::pin::Pin::new(&mut *stream).poll_next(cx)).await
 }
