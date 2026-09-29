@@ -5,6 +5,9 @@
 //! carbon from another device, or the echo of a room) moves the read position. The unread
 //! count of the channel list comes from `read_state.last_read` (a `messages.id`).
 //!
+//! A `mark_read` while offline sends its marker at the next session (`on_connected`).
+//! `read_state.marker_sent` holds the newest message that a marker went out for.
+//!
 //! We never send `<received/>` markers on our own, for privacy. `mark_read` sends a
 //! `<displayed/>` marker, because the user asks for it.
 
@@ -72,13 +75,14 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
 }
 
 /// A command while no session is up, with the store. `mark_read` moves the read position
-/// and sends no marker. The caller must mark the channel list as changed.
+/// and sends no marker now. `on_connected` sends it in the next session. The caller must
+/// mark the channel list as changed.
 pub(crate) fn offline_with_store(store: &Store, account_id: i64, command: Command) {
     match command {
         Command::MarkRead { peer, reply } => {
             let result = newest_incoming(store, account_id, &peer)
                 .and_then(|newest| match newest {
-                    Some(n) => set_last_read(store, account_id, &peer, n.rowid),
+                    Some(n) => set_last_read(store, account_id, &peer, n.rowid, false),
                     None => Ok(()),
                 })
                 .map_err(|e| ClientError::Invalid(format!("store: {e}")));
@@ -150,7 +154,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
         Direction::In => set_status(ctx, peer, level, target.rowid, false),
         // A marker from our own account only counts when it says displayed.
         Direction::Out if level == Level::Displayed && !receipt => {
-            set_last_read(ctx.store, ctx.account_id, peer, target.rowid).map(|()| true)
+            set_last_read(ctx.store, ctx.account_id, peer, target.rowid, true).map(|()| true)
         }
         Direction::Out => Ok(false),
     };
@@ -194,12 +198,23 @@ fn set_status(
     Ok(changed > 0)
 }
 
-/// Move the read position of `peer` to `rowid`. Never moves it back.
-fn set_last_read(store: &Store, account_id: i64, peer: &str, rowid: i64) -> rusqlite::Result<()> {
+/// Move the read position of `peer` to `rowid`. Never moves it back. With `marker_sent`,
+/// a displayed marker for `rowid` is out already (we sent it, or another device did).
+fn set_last_read(
+    store: &Store,
+    account_id: i64,
+    peer: &str,
+    rowid: i64,
+    marker_sent: bool,
+) -> rusqlite::Result<()> {
     store.conn().execute(
-        "INSERT INTO read_state (account_id, peer, last_read) VALUES (?1, ?2, ?3)
-         ON CONFLICT (account_id, peer) DO UPDATE SET last_read = MAX(last_read, excluded.last_read)",
-        params![account_id, peer, rowid],
+        "INSERT INTO read_state (account_id, peer, last_read, marker_sent)
+         VALUES (?1, ?2, ?3, CASE WHEN ?4 THEN ?3 END)
+         ON CONFLICT (account_id, peer) DO UPDATE SET
+            last_read = MAX(last_read, excluded.last_read),
+            marker_sent = CASE WHEN ?4
+                THEN MAX(COALESCE(marker_sent, 0), excluded.last_read) ELSE marker_sent END",
+        params![account_id, peer, rowid, marker_sent],
     )?;
     Ok(())
 }
@@ -229,21 +244,25 @@ fn newest_incoming(store: &Store, account_id: i64, peer: &str) -> rusqlite::Resu
              WHERE account_id = ?1 AND peer = ?2 AND direction = 'in'
              ORDER BY id DESC LIMIT 1",
         )?
-        .query_row(params![account_id, peer], |row| {
-            let kind: String = row.get(1)?;
-            Ok(Newest {
-                rowid: row.get(0)?,
-                kind: if kind == "groupchat" {
-                    MessageKind::Groupchat
-                } else {
-                    MessageKind::Chat
-                },
-                message_id: row.get(2)?,
-                origin_id: row.get(3)?,
-                stanza_id: row.get(4)?,
-            })
-        })
+        .query_row(params![account_id, peer], |row| newest_from_row(row, 0))
         .optional()
+}
+
+/// Read a `Newest` from the columns `id, kind, message_id, origin_id, stanza_id`, which
+/// start at `first`.
+fn newest_from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Newest> {
+    let kind: String = row.get(first + 1)?;
+    Ok(Newest {
+        rowid: row.get(first)?,
+        kind: if kind == "groupchat" {
+            MessageKind::Groupchat
+        } else {
+            MessageKind::Chat
+        },
+        message_id: row.get(first + 2)?,
+        origin_id: row.get(first + 3)?,
+        stanza_id: row.get(first + 4)?,
+    })
 }
 
 /// `peer` is the stored peer: a bare JID, or room@service/nick for private messages.
@@ -256,22 +275,33 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &str) -> Result<(), ClientError> {
     else {
         return Ok(());
     };
-    let last_read: Option<i64> = ctx
+    let state: Option<(i64, Option<i64>)> = ctx
         .store
         .conn()
         .query_row(
-            "SELECT last_read FROM read_state WHERE account_id = ?1 AND peer = ?2",
+            "SELECT last_read, marker_sent FROM read_state WHERE account_id = ?1 AND peer = ?2",
             params![ctx.account_id, peer],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(store_error)?;
-    if last_read.is_some_and(|n| n >= newest.rowid) {
+    let last_read = state.map(|s| s.0);
+    let marker_sent = state.and_then(|s| s.1);
+    // A marker that waits (we marked the chat as read while offline) goes out now.
+    if marker_sent.is_some_and(|n| n >= newest.rowid) {
         return Ok(());
     }
-    set_last_read(ctx.store, ctx.account_id, peer, newest.rowid).map_err(store_error)?;
-    changed_channel_list(ctx, peer, newest.kind);
+    if last_read.is_none_or(|n| n < newest.rowid) {
+        set_last_read(ctx.store, ctx.account_id, peer, newest.rowid, false).map_err(store_error)?;
+        changed_channel_list(ctx, peer, newest.kind);
+    }
+    send_marker(ctx, peer, &to, &newest);
+    Ok(())
+}
 
+/// Send a displayed marker for `newest`, and record that it went out. A marker that cannot
+/// go out (a room that we left) stays pending. The read position moves on its own.
+fn send_marker(ctx: &mut Ctx<'_>, peer: &str, to: &Jid, newest: &Newest) {
     // In a room the marker names the stanza-id. In a chat it names the `id` attribute.
     let (reference, mut message) = match newest.kind {
         MessageKind::Groupchat => (newest.stanza_id.clone(), Message::groupchat(to.clone())),
@@ -282,7 +312,9 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &str) -> Result<(), ClientError> {
     };
     let Some(reference) = reference else {
         log::debug!("newest message of {peer} has no id for a marker");
-        return Ok(());
+        // Nothing can name this message. Do not try again.
+        mark_sent(ctx, peer, newest.rowid);
+        return;
     };
     message.id = Some(Id(new_id()));
     message.payloads.push(
@@ -293,11 +325,65 @@ fn mark_read(ctx: &mut Ctx<'_>, peer: &str) -> Result<(), ClientError> {
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
-    // The read position moved already. A marker that cannot go out changes nothing.
-    if let Err(e) = message_ext::send_to_peer(ctx, newest.kind, &to, message) {
-        log::debug!("no displayed marker to {peer}: {e}");
+    match message_ext::send_to_peer(ctx, newest.kind, to, message) {
+        Ok(()) => mark_sent(ctx, peer, newest.rowid),
+        Err(e) => log::debug!("no displayed marker to {peer}: {e}"),
     }
-    Ok(())
+}
+
+fn mark_sent(ctx: &mut Ctx<'_>, peer: &str, rowid: i64) {
+    if let Err(e) = ctx.store.conn().execute(
+        "UPDATE read_state SET marker_sent = MAX(COALESCE(marker_sent, 0), ?3)
+         WHERE account_id = ?1 AND peer = ?2",
+        params![ctx.account_id, peer, rowid],
+    ) {
+        ctx.store_error("store a marker state", e);
+    }
+}
+
+/// A new session is up: send the displayed markers that wait. That is a read position
+/// (`last_read`, an incoming message) that is newer than the last marker that we sent.
+/// This happens when the user reads a chat while offline. A room gets its marker through
+/// the room outbox, after the join. We send none to a room that we do not join.
+pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
+    let pending = ctx
+        .store
+        .conn()
+        .prepare_cached(
+            "SELECT rs.peer, m.id, m.kind, m.message_id, m.origin_id, m.stanza_id
+             FROM read_state rs JOIN messages m
+               ON m.account_id = rs.account_id AND m.id = rs.last_read
+             WHERE rs.account_id = ?1 AND m.direction = 'in'
+               AND (rs.marker_sent IS NULL OR rs.marker_sent < rs.last_read)
+             ORDER BY rs.peer",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![ctx.account_id], |row| {
+                Ok((row.get::<_, String>(0)?, newest_from_row(row, 1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        });
+    let pending = match pending {
+        Ok(pending) => pending,
+        Err(e) => {
+            ctx.store_error("read the pending markers", e);
+            return;
+        }
+    };
+    for (peer, newest) in pending {
+        let Ok(to) = peer.parse::<Jid>() else {
+            continue;
+        };
+        // A room, or a private message of a room, needs a join that runs or is done.
+        // Otherwise the marker would force a join.
+        if (newest.kind == MessageKind::Groupchat || to.resource().is_some())
+            && !muc::is_joined_or_joining(ctx, &to.to_bare())
+        {
+            log::debug!("marker for {peer} waits: the room is not joined");
+            continue;
+        }
+        send_marker(ctx, &peer, &to, &newest);
+    }
 }
 
 /// A new message is in the store. Nothing to do: we never send a marker on our own.
@@ -572,5 +658,107 @@ mod tests {
         assert_eq!(m.type_, xmpp_parsers::message::MessageType::Chat);
         assert_eq!(m.to, Some(Jid::new(&peer).unwrap()));
         assert_eq!(marker_of(m).map(|(_, id, _)| id), Some("b"));
+    }
+
+    fn marker_sent(h: &Harness, peer: &str) -> Option<i64> {
+        h.store
+            .conn()
+            .query_row(
+                "SELECT marker_sent FROM read_state WHERE peer = ?1",
+                [peer],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    fn offline_mark(h: &Harness, peer: &str) {
+        let (reply, mut answer) = oneshot::channel();
+        offline_with_store(
+            &h.store,
+            h.account_id,
+            Command::MarkRead {
+                peer: peer.into(),
+                reply,
+            },
+        );
+        assert!(matches!(answer.try_recv(), Ok(Some(Ok(())))));
+    }
+
+    #[test]
+    fn a_marker_from_an_offline_read_goes_out_once_on_connect() {
+        let mut h = Harness::new();
+        put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        let b = put(&h, "b", Direction::In, MessageKind::Chat, PEER);
+        offline_mark(&h, PEER);
+        assert_eq!(marker_sent(&h, PEER), None);
+        h.with_ctx(on_connected);
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(m.to, Some(Jid::new(PEER).unwrap()));
+        assert_eq!(marker_of(m).map(|(_, id, _)| id), Some("b"));
+        assert_eq!(marker_sent(&h, PEER), Some(b));
+        // The next session has nothing to send.
+        h.with_ctx(on_connected);
+        assert!(h.take_sent().is_empty());
+        // A newer read moves the marker on.
+        let c = put(&h, "c", Direction::In, MessageKind::Chat, PEER);
+        offline_mark(&h, PEER);
+        h.with_ctx(on_connected);
+        assert_eq!(h.take_sent().len(), 1);
+        assert_eq!(marker_sent(&h, PEER), Some(c));
+    }
+
+    #[test]
+    fn a_marker_from_another_device_needs_no_marker_of_ours() {
+        let mut h = Harness::new();
+        put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        let m = marker("displayed", NS_MARKERS, "a");
+        assert!(deliver(&mut h, &m, Direction::Out, MessageKind::Chat, PEER));
+        h.with_ctx(on_connected);
+        assert!(h.take_sent().is_empty());
+        // A read position on an outgoing message needs none either.
+        let out = put(&h, "o", Direction::Out, MessageKind::Chat, PEER);
+        h.store
+            .conn()
+            .execute(
+                "UPDATE read_state SET last_read = ?1, marker_sent = NULL",
+                [out],
+            )
+            .unwrap();
+        h.with_ctx(on_connected);
+        assert!(h.take_sent().is_empty());
+    }
+
+    #[test]
+    fn a_room_marker_waits_for_the_join() {
+        let mut h = Harness::new();
+        let room = BareJid::new(ROOM).unwrap();
+        let s = put(&h, "s1", Direction::In, MessageKind::Groupchat, ROOM);
+        offline_mark(&h, ROOM);
+        // No join runs for this room: the marker stays pending.
+        h.with_ctx(on_connected);
+        assert!(h.take_sent().is_empty());
+        assert_eq!(marker_sent(&h, ROOM), None);
+        // The room is joined: the marker goes out.
+        h.state.muc.nicks.insert(room, "alice".into());
+        h.with_ctx(on_connected);
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(m.type_, xmpp_parsers::message::MessageType::Groupchat);
+        assert_eq!(marker_of(m).map(|(_, id, _)| id), Some("s1"));
+        assert_eq!(marker_sent(&h, ROOM), Some(s));
+    }
+
+    #[test]
+    fn mark_read_sends_a_marker_that_waits() {
+        let mut h = Harness::new();
+        put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        offline_mark(&h, PEER);
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        assert_eq!(h.take_sent().len(), 1);
     }
 }

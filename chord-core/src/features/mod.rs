@@ -238,6 +238,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     bookmarks::on_connected(ctx);
     mam::on_connected(ctx);
     muc::on_connected(ctx);
+    markers::on_connected(ctx);
     spaces::on_connected(ctx);
     avatars::on_connected(ctx);
 }

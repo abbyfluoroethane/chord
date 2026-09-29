@@ -187,4 +187,11 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, service, node)
     );
     "#,
+    // Version 4: pending displayed markers.
+    r#"
+    -- XEP-0333: the newest message (messages.id) that a displayed marker went out for.
+    -- A read position that is newer than this has a marker that still waits.
+    ALTER TABLE read_state ADD COLUMN marker_sent INTEGER;
+    UPDATE read_state SET marker_sent = last_read;
+    "#,
 ];
