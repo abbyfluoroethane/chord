@@ -40,20 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check that default builds exclude dev-insecure and insecure-tcp
-        shell: bash
-        run: |
-          set -euo pipefail
-          status=0
-          for pkg in chord-ffi chord-cli; do
-            tree="$(cargo tree -e features -p "$pkg")"
-            if echo "$tree" | grep -E 'dev-insecure|insecure-tcp'; then
-              echo "::error::$pkg enables dev-insecure or insecure-tcp in its default build."
-              status=1
-            else
-              echo "OK: $pkg does not enable dev-insecure or insecure-tcp."
-            fi
-          done
-          exit "$status"
+        run: ./dev/check-features.sh
 
   integration:
     runs-on: ubuntu-latest
