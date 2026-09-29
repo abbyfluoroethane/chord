@@ -58,6 +58,8 @@ pub(crate) enum Pending {
     /// The answer to the configuration of a new room, with the join replies that wait
     /// for it: others cannot enter the room until it is unlocked.
     InstantRoom(BareJid, Vec<Reply>),
+    /// The answer to a XEP-0425 moderation request.
+    Moderate(Reply),
 }
 
 /// A command from the public API.
@@ -225,6 +227,13 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             for reply in replies {
                 let _ = reply.send(result.clone());
             }
+        }
+        Pending::Moderate(reply) => {
+            let _ = reply.send(match response {
+                IqResponse::Result(_) => Ok(()),
+                IqResponse::Error(e) => Err(ClientError::Server(error_text(&e))),
+                IqResponse::Lost => Err(ClientError::NotConnected),
+            });
         }
     }
 }
@@ -898,8 +907,19 @@ fn store(
     let Some(from) = &message.from else {
         return;
     };
-    // A message from the room itself, with no nick, is a status text. Skip it.
+    // A message from the room itself, with no nick, is a status text. Skip it. It can also
+    // say that a moderator retracted a message (XEP-0425).
     let Some(nick) = from.resource() else {
+        let sender_jid = from.to_string();
+        let incoming = Incoming {
+            message,
+            kind: MessageKind::Groupchat,
+            direction: Direction::In,
+            peer: room.as_str(),
+            sender: &sender_jid,
+            timestamp,
+        };
+        super::retraction::on_moderation(ctx, &incoming);
         return;
     };
     let direction = if our_nick(ctx, room).as_deref() == Some(nick.as_str()) {
@@ -2019,5 +2039,33 @@ mod tests {
         );
         h.with_ctx(|ctx| on_presence(ctx, &late));
         assert!(occupant_nicks(&h).is_empty());
+    }
+
+    #[test]
+    fn a_moderation_from_the_room_retracts_a_message() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let m = groupchat("bob", "buy now", Some("s-9"), None);
+        h.with_ctx(|ctx| on_message(ctx, &m));
+        let mut retract = Message::groupchat(jid(ACCOUNT));
+        retract.from = Some(jid(ROOM));
+        retract.payloads.push(
+            Element::builder("retract", "urn:xmpp:message-retract:1")
+                .attr(
+                    xmpp_parsers::minidom::rxml::NcName::try_from("id").unwrap(),
+                    "s-9",
+                )
+                .append(Element::builder("moderated", "urn:xmpp:message-moderate:1").build())
+                .build(),
+        );
+        h.with_ctx(|ctx| on_message(ctx, &retract));
+        let rows = peer_rows(&h, ROOM);
+        assert_eq!(rows.len(), 1);
+        let retracted: Option<i64> = h
+            .store
+            .conn()
+            .query_row("SELECT retracted_at FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert!(retracted.is_some());
     }
 }
