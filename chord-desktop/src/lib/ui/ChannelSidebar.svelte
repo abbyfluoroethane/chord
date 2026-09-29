@@ -1,0 +1,132 @@
+<script lang="ts">
+  // Channel sidebar: circle header, channel list (or DMs on Home), user panel.
+  import Plus from 'lucide-svelte/icons/plus';
+  import Search from 'lucide-svelte/icons/search';
+  import ChannelRow from './ChannelRow.svelte';
+  import CircleDialog from './CircleDialog.svelte';
+  import CircleHeader from './CircleHeader.svelte';
+  import Icon from './Icon.svelte';
+  import UserPanel from './UserPanel.svelte';
+  import { app, HOME } from './app.svelte';
+  import { tooltip } from './tooltip';
+  import { ui } from './ui.svelte';
+
+  let creating = $state(false);
+  const isHome = $derived(app.selectedSpace === HOME);
+</script>
+
+<aside class="sidebar" aria-label={isHome ? 'Direct messages' : 'Channels'}>
+  {#if isHome}
+    <button class="header find" onclick={() => (ui.switcherOpen = true)}>
+      <Icon icon={Search} size={16} />
+      <span>Find or start a DM</span>
+      <kbd>Ctrl K</kbd>
+    </button>
+  {:else if app.currentSpace}
+    <CircleHeader name={app.currentSpace.name} space={app.selectedSpace} />
+  {/if}
+
+  <div class="scroll">
+    <div class="group">
+      <span class="label">{isHome ? 'Direct messages' : 'Channels'}</span>
+      {#if !isHome}
+        <button
+          class="add"
+          aria-label="Create channel"
+          use:tooltip={{ text: 'Create channel', side: 'top' }}
+          onclick={() => (creating = true)}
+        >
+          <Icon icon={Plus} size={16} />
+        </button>
+      {/if}
+    </div>
+    <ul>
+      {#each app.spaceChannels as c (c.jid)}
+        <li>
+          <ChannelRow channel={c} selected={c.jid === app.selectedJid} onclick={() => app.selectChannel(c.jid)} />
+        </li>
+      {/each}
+    </ul>
+  </div>
+
+  <UserPanel />
+</aside>
+
+{#if creating}
+  <CircleDialog kind="create-channel" space={app.selectedSpace} onclose={() => (creating = false)} />
+{/if}
+
+<style>
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: var(--sidebar-width);
+    background: var(--surface-200);
+    border-right: 1px solid var(--line);
+    min-height: 0;
+  }
+  .header.find {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    height: var(--bar-height);
+    flex: none;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--line);
+    color: var(--ink-muted);
+    text-align: left;
+    font-size: 14px;
+  }
+  .find:hover {
+    background: var(--hover);
+    color: var(--ink);
+  }
+  .find span {
+    flex: 1;
+  }
+  kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 0 4px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+  }
+  .scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: var(--space-4);
+  }
+  .group {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-3) var(--space-1) var(--space-4);
+  }
+  .label {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+  }
+  .add {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--ink-muted);
+  }
+  .add:hover {
+    color: var(--ink);
+    background: var(--hover);
+  }
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+</style>

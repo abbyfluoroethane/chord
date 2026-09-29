@@ -1,0 +1,16 @@
+/* Tooltips are plain elements on document.body, made by the tooltip action. */
+.chord-tooltip {
+  position: fixed;
+  z-index: 100;
+  max-width: 240px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-300);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 500;
+  pointer-events: none;
+  animation: arrive var(--dur-fast) var(--ease-out);
+}
