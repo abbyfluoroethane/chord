@@ -1,0 +1,15 @@
+# Local test server only. Not for upstream.
+# Advertise pubsub#manage-subscriptions in disco#info of the Prosody pubsub service.
+# The owner subscription handlers already work without it (see dev/prosody/notes/owner-subscriptions.md).
+# Target: /usr/lib/prosody/modules/mod_pubsub/pubsub.lib.lua inside the chord-prosody container.
+--- a/pubsub.lib.lua
++++ b/pubsub.lib.lua
+@@ -229,7 +229,7 @@
+ _M.node_metadata_form = node_metadata_form;
+ 
+ local service_method_feature_map = {
+-	add_subscription = { "subscribe", "subscription-options" };
++	add_subscription = { "subscribe", "subscription-options", "manage-subscriptions" };
+ 	create = { "create-nodes", "instant-nodes", "item-ids", "create-and-configure" };
+ 	delete = { "delete-nodes" };
+ 	get_items = { "retrieve-items" };
