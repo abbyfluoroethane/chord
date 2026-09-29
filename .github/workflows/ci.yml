@@ -7,8 +7,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-# Integration tests need the Docker Prosody server (see dev/). They are marked
-# #[ignore], so `cargo test` skips them. They do not run in CI.
+# Integration tests are #[ignore], so `cargo test` in the native job skips them.
+# The integration job starts the Docker Prosody server (dev/prosody/) and runs them.
 
 jobs:
   native:
@@ -54,3 +54,26 @@ jobs:
             fi
           done
           exit "$status"
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install mkcert
+        run: sudo apt-get update && sudo apt-get install -y mkcert
+      - name: Start the Prosody test server
+        run: |
+          printf 'ALICE_PASSWORD=%s\nBOB_PASSWORD=%s\n' "$(openssl rand -hex 12)" "$(openssl rand -hex 12)" > dev/prosody/.env
+          ./dev/prosody/setup.sh
+      - name: Trust the mkcert CA for this job
+        # rustls-native-certs reads SSL_CERT_FILE in place of the system trust store.
+        run: echo "SSL_CERT_FILE=$(mkcert -CAROOT)/rootCA.pem" >> "$GITHUB_ENV"
+      - name: Integration tests
+        run: cargo test --workspace -- --ignored
+      - name: Alice sends to bob over TLS
+        run: ./dev/send-demo.sh
+      - name: Server log
+        if: failure()
+        run: docker compose -f dev/prosody/docker-compose.yml logs --tail 200

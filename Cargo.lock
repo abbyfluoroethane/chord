@@ -159,6 +159,9 @@ dependencies = [
 [[package]]
 name = "chord-ffi"
 version = "0.1.0"
+dependencies = [
+ "chord-core",
+]
 
 [[package]]
 name = "chrono"

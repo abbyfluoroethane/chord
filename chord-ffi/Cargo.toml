@@ -5,3 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Default features only. chord-ffi must never enable dev-insecure. CI checks this.
+chord-core.workspace = true
