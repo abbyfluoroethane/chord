@@ -622,6 +622,13 @@ impl ChordClient {
             .await
     }
 
+    /// Change our nick in a room that we are in.
+    pub async fn change_nick(&self, room: String, nick: String) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        self.call(move |h| async move { h.change_nick(room, nick).await })
+            .await
+    }
+
     /// Add or update a bookmark.
     pub async fn add_bookmark(
         &self,

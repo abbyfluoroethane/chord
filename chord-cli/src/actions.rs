@@ -50,6 +50,18 @@ pub async fn join(client: &Client, args: &[&str]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// `nick <room> <nick>`: change our nick in a room.
+pub async fn nick(client: &Client, room: &str, nick: &str) -> Result<(), CliError> {
+    let room = bare(room)?;
+    client
+        .handle
+        .change_nick(room.clone(), nick.to_owned())
+        .await
+        .map_err(err)?;
+    println!("now {nick} in {room}");
+    Ok(())
+}
+
 /// `leave <room>`: leave the room and remove its bookmark.
 pub async fn leave(client: &Client, room: &str) -> Result<(), CliError> {
     let room = bare(room)?;

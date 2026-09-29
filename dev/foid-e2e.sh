@@ -108,6 +108,9 @@ b --offline space-pending | grep -qF "E2E $n" && fail "the join is still pending
 
 echo "6. room: both join $room, A sends, and B sees it"
 a join "$room" --nick chordtest >/dev/null
+# The server makes new rooms members-only. The owner grants B membership first.
+a room-member "$room" "$B" member >/dev/null
+a room-members "$room" member | grep -qF "$B" || fail "B is not a member of the room"
 b join "$room" --nick chordtest2 >/dev/null
 rtext="e2e $n room"
 a send "$room" "$rtext" >/dev/null
@@ -121,5 +124,45 @@ echo "8. A uploads a file to B"
 printf 'chord e2e %s\n' "$n" > "$work/e2e.txt"
 a upload "$B" "$work/e2e.txt" >/dev/null
 
+
+echo "9. B stays in the room, A sends a message and moderates it, and B sees it go"
+# ejabberd removes a moderated message from the room archive and does not archive the
+# moderation. So only occupants that are online at that time see it. B follows the room.
+b timeline "$room" --follow >/dev/null 2>&1 &
+follower=$!
+sleep 8
+mtext="e2e $n moderate me"
+a send "$room" "$mtext" >/dev/null
+# A CLI session ends before the room echo arrives. The next login gets the stanza-id.
+mid=$(a --json timeline "$room" --limit 20 | item "$mtext" "it['id']")
+[[ -n "$mid" ]] || fail "A has no item for its room message"
+sleep 3
+a moderate "$mid" "e2e test" >/dev/null
+sleep 6
+kill "$follower" 2>/dev/null || true
+wait "$follower" 2>/dev/null || true
+moderated=$(b --offline --json timeline "$room" --limit 20 | python3 -c "
+import json, sys
+items = json.load(sys.stdin)
+print(any(it['retracted'] and not it['outgoing'] for it in items[-3:]))")
+[[ "$moderated" == True ]] || fail "B does not see the moderation"
+
+echo "10. push: A registers a push node, lists it, and removes it"
+a push-enable push.chat.foid.space "chord-e2e-$n" >/dev/null
+a --offline push-list | grep -qF "chord-e2e-$n" || fail "the push registration is not stored"
+a push-disable push.chat.foid.space "chord-e2e-$n" >/dev/null
+a --offline push-list | grep -qF "chord-e2e-$n" && fail "the push registration is still stored"
+
+echo "11. notifications: A mutes the chat with B, offline"
+a --offline notify "$B" none >/dev/null
+a --offline notify "$B" | grep -q "none" || fail "the notification level is not stored"
+
+echo "12. A changes its nick in the room, and its next message still counts as its own"
+a nick "$room" "chordtest-$n" >/dev/null
+ntext="e2e $n after the nick change"
+a send "$room" "$ntext" >/dev/null
+own=$(a --json timeline "$room" --limit 20 | item "$ntext" "it['outgoing']")
+a nick "$room" chordtest >/dev/null
+[[ "$own" == True ]] || fail "A's message after the nick change is not its own: $own"
 
 echo "PASS: foid end-to-end run"

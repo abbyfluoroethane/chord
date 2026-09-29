@@ -156,7 +156,7 @@ fn moderate(ctx: &mut Ctx<'_>, item_id: &str, reason: Option<String>, reply: Rep
         }
         let room = BareJid::new(&row.peer)
             .map_err(|e| ClientError::Invalid(format!("bad peer {}: {e}", row.peer)))?;
-        if !ctx.state.muc.nicks.contains_key(&room) {
+        if !muc::knows_room(ctx, &room) {
             return Err(ClientError::Invalid(format!("not in the room {room}")));
         }
         let stanza_id = row
@@ -180,11 +180,13 @@ fn moderate(ctx: &mut Ctx<'_>, item_id: &str, reason: Option<String>, reply: Rep
         Ok((room, payload)) => {
             let iq = Iq::Set {
                 from: None,
-                to: Some(Jid::from(room)),
+                to: Some(Jid::from(room.clone())),
                 id: String::new(),
                 payload,
             };
-            ctx.request(iq, Pending::Muc(muc::Pending::Moderate(reply)));
+            // A moderator must be in the room. The IQ waits while the join runs.
+            let then = Pending::Muc(muc::Pending::Moderate(reply));
+            muc::request_in_room(ctx, &room, iq, then);
         }
         Err(e) => {
             let _ = reply.send(Err(e));

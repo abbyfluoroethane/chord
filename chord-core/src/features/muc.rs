@@ -101,6 +101,11 @@ pub(crate) struct State {
     previous: Vec<BareJid>,
     /// Messages for rooms that we are joining. They go out when the join completes.
     outbox: HashMap<BareJid, Vec<Message>>,
+    /// IQs that need our presence in a room (for example a XEP-0425 moderation), with the
+    /// feature that gets the answer. They go out when the join completes.
+    iq_outbox: HashMap<BareJid, Vec<(Iq, super::Pending)>>,
+    /// A nick change that arrived while the join ran. It runs when the join completes.
+    pending_nick: HashMap<BareJid, (String, Reply)>,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -536,6 +541,14 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
         }
         Command::ChangeNick { room, nick, reply } => {
             if ctx.state.muc.nicks.contains_key(&room) {
+                join_room(ctx, &room, Some(nick), None, Some(reply));
+            } else if ctx.state.muc.joins.contains_key(&room) {
+                // The join runs (for example the autojoin after login): change after it.
+                if let Some((_, old)) = ctx.state.muc.pending_nick.insert(room, (nick, reply)) {
+                    let _ = old.send(Err(ClientError::Invalid("a newer nick change".into())));
+                }
+            } else if room_row(ctx, &room).is_some() {
+                // A known room that we are not in: join it with the new nick.
                 join_room(ctx, &room, Some(nick), None, Some(reply));
             } else {
                 let _ = reply.send(Err(ClientError::Invalid(format!("not in the room {room}"))));
@@ -1086,10 +1099,30 @@ fn leave(ctx: &mut Ctx<'_>, room: &BareJid) -> Result<(), ClientError> {
     Ok(())
 }
 
+/// True if the domain of `jid` is a MUC service of our server (XEP-0045 disco identity
+/// `conference/text`).
+fn is_muc_service(ctx: &Ctx<'_>, jid: &BareJid) -> bool {
+    let domain = jid.domain().as_str();
+    ctx.state.disco.services.iter().any(|(service, info)| {
+        service.domain().as_str() == domain
+            && info
+                .identities
+                .iter()
+                .any(|i| i.category == "conference" && i.type_ == "text")
+    })
+}
+
 /// Send a message to a room or a contact. A room is a room that the account knows.
 pub(crate) fn send_chat(ctx: &mut Ctx<'_>, to: Jid, body: String) -> Result<String, ClientError> {
     let room = to.to_bare();
     if !is_room(ctx, &room) {
+        // A room on a MUC service that we have not joined: a chat message would not
+        // reach it. Service discovery names the MUC services.
+        if to.resource().is_none() && is_muc_service(ctx, &room) {
+            return Err(ClientError::Invalid(format!(
+                "{room} is a room: join it before you send to it"
+            )));
+        }
         return Ok(super::chat::send(ctx, to, body));
     }
     if let Some(nick) = to.resource() {
@@ -1764,6 +1797,12 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
         for message in ctx.state.muc.outbox.remove(room).unwrap_or_default() {
             ctx.send(message);
         }
+        for (iq, then) in ctx.state.muc.iq_outbox.remove(room).unwrap_or_default() {
+            ctx.request(iq, then);
+        }
+        if let Some((nick, reply)) = ctx.state.muc.pending_nick.remove(room) {
+            join_room(ctx, room, Some(nick), None, Some(reply));
+        }
     }
     mark_room(ctx, room);
 }
@@ -1774,7 +1813,45 @@ pub(crate) fn has_outbox(state: &State) -> bool {
 }
 
 /// Drop the queued messages of a room whose join failed, and say so.
+/// Whether we are in `room`, or know it well enough to join it again (a stored room).
+pub(crate) fn knows_room(ctx: &Ctx<'_>, room: &BareJid) -> bool {
+    ctx.state.muc.nicks.contains_key(room) || room_row(ctx, room).is_some()
+}
+
+/// Send an IQ that needs our presence in `room`. While the join runs, the IQ waits, and
+/// the send starts the join if none runs. Check `knows_room` first.
+pub(crate) fn request_in_room(ctx: &mut Ctx<'_>, room: &BareJid, iq: Iq, then: super::Pending) {
+    if ctx.state.muc.nicks.contains_key(room) {
+        ctx.request(iq, then);
+        return;
+    }
+    if !ctx.state.muc.joins.contains_key(room) {
+        join_room(ctx, room, None, None, None);
+    }
+    ctx.state
+        .muc
+        .iq_outbox
+        .entry(room.clone())
+        .or_default()
+        .push((iq, then));
+}
+
 fn drop_outbox(ctx: &mut Ctx<'_>, room: &BareJid) {
+    if let Some((_, reply)) = ctx.state.muc.pending_nick.remove(room) {
+        let _ = reply.send(Err(ClientError::Invalid(
+            "the join of the room failed".into(),
+        )));
+    }
+    // A waiting IQ gets an error answer, so that its command does not wait forever.
+    for (_, then) in ctx.state.muc.iq_outbox.remove(room).unwrap_or_default() {
+        let error = xmpp_parsers::stanza_error::StanzaError::new(
+            xmpp_parsers::stanza_error::ErrorType::Cancel,
+            xmpp_parsers::stanza_error::DefinedCondition::NotAcceptable,
+            "en",
+            "the join of the room failed",
+        );
+        super::on_iq_response(ctx, then, IqResponse::Error(error));
+    }
     if let Some(messages) = ctx.state.muc.outbox.remove(room) {
         ctx.emit(ClientEvent::Notice(format!(
             "{} message(s) to {room} were not sent: the join failed",
@@ -3259,5 +3336,25 @@ mod tests {
         assert!(value("FORM_TYPE").is_some());
         h.answer(is_muc, None);
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn a_send_to_an_unjoined_room_fails_instead_of_a_chat() {
+        use xmpp_parsers::disco::{DiscoInfoResult, Identity};
+        let mut h = Harness::new();
+        let info = DiscoInfoResult {
+            node: None,
+            identities: vec![Identity::new("conference", "text", "en", "Rooms")],
+            features: Default::default(),
+            extensions: vec![],
+        };
+        let service = jid(ROOM).to_bare().domain().to_string();
+        h.state.disco.services.push((jid(&service), info));
+        let result = h.with_ctx(|ctx| send_chat(ctx, jid(ROOM), "hi".into()));
+        assert!(matches!(result, Err(ClientError::Invalid(_))), "{result:?}");
+        assert!(h.take_sent().is_empty(), "no chat message goes out");
+        // A contact on the account domain still gets a chat message.
+        let result = h.with_ctx(|ctx| send_chat(ctx, jid("bob@chord.localhost"), "hi".into()));
+        assert!(result.is_ok());
     }
 }

@@ -23,6 +23,7 @@
 //!   pm <room> <nick> <text>         private message to a room occupant
 //!   read-private <room> <nick>      mark a private chat as read (also with --offline)
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
+//!   nick <room> <nick>              change our nick in a room
 //!   room-member <room> <jid> [member|admin|owner|none|outcast]   set an affiliation
 //!   room-members <room> [affiliation] | invite <room> <jid> [reason]
 //!   room-config <room> [--name N] [--public|--private] [--members-only|--open]
@@ -239,6 +240,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "pm",
         "read-private",
         "moderate",
+        "nick",
         "room-member",
         "room-members",
         "invite",
@@ -315,6 +317,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("pm", [room, nick, text]) => actions::pm(&client, room, nick, text).await,
         ("read-private", [room, nick]) => actions::read_private(&client, room, nick).await,
         ("moderate", args) => actions::moderate(&client, args).await,
+        ("nick", [room, nick]) => actions::nick(&client, room, nick).await,
         ("room-member", args) => actions::room_member(&client, args).await,
         ("room-members", args) => actions::room_members(&client, args).await,
         ("invite", args) => actions::invite(&client, args).await,
