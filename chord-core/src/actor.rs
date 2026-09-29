@@ -84,7 +84,8 @@ pub enum ConnectionState {
 #[non_exhaustive]
 pub enum ClientEvent {
     ConnectionState(ConnectionState),
-    /// A new chat message arrived and is in the database.
+    /// A new live chat message arrived and is in the database. Messages from the
+    /// archive (MAM) produce no event: they reach the frontends through the views.
     MessageReceived(StoredMessage),
     /// A feature has a notice for the user, for example a failed room join.
     Notice(String),

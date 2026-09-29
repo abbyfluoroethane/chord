@@ -15,7 +15,7 @@ use crate::views::{ChannelScope, ViewKey};
 /// (a copy of a message that another client sent) is outgoing.
 pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
     let ids = MessageIds::of(message, ctx.account);
-    store(ctx, message, ids, delay_ms(message));
+    store(ctx, message, ids, delay_ms(message), true);
 }
 
 /// Store a chat message from our account archive (MAM). `archive_id` is the MAM result
@@ -28,10 +28,24 @@ pub(crate) fn store_archived(
 ) {
     let mut ids = MessageIds::of(message, ctx.account);
     ids.stanza_id = Some(archive_id.to_owned());
-    store(ctx, message, ids, timestamp.or_else(|| delay_ms(message)));
+    // History is not news: it goes to the store and the views, but not to the events.
+    store(
+        ctx,
+        message,
+        ids,
+        timestamp.or_else(|| delay_ms(message)),
+        false,
+    );
 }
 
-fn store(ctx: &mut Ctx<'_>, message: &Message, ids: MessageIds, timestamp: Option<i64>) {
+/// Store a message. With `live`, also report it as `ClientEvent::MessageReceived`.
+fn store(
+    ctx: &mut Ctx<'_>,
+    message: &Message,
+    ids: MessageIds,
+    timestamp: Option<i64>,
+    live: bool,
+) {
     if !matches!(message.type_, MessageType::Chat | MessageType::Normal) {
         return;
     }
@@ -83,7 +97,9 @@ fn store(ctx: &mut Ctx<'_>, message: &Message, ids: MessageIds, timestamp: Optio
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
-            ctx.emit(ClientEvent::MessageReceived(stored));
+            if live {
+                ctx.emit(ClientEvent::MessageReceived(stored));
+            }
             ctx.changed(ViewKey::Timeline(peer));
             ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
         }
