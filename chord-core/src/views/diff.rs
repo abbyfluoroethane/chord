@@ -25,6 +25,38 @@ pub enum ListDiff<T> {
     Reset(Vec<T>),
 }
 
+/// The JSON shape of a `ListDiff`: `{"type": "insert", "index": 0, "item": {...}}`, and
+/// `{"type": "reset", "items": [...]}`. A newtype variant with a list cannot carry an
+/// internal tag, so this borrowed copy has the `Reset` fields by name.
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum DiffRepr<'a, T> {
+    Insert { index: usize, item: &'a T },
+    Update { index: usize, item: &'a T },
+    Remove { index: usize },
+    Reset { items: &'a [T] },
+}
+
+#[cfg(feature = "serde")]
+impl<T: serde::Serialize> serde::Serialize for ListDiff<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Insert { index, item } => DiffRepr::Insert {
+                index: *index,
+                item,
+            },
+            Self::Update { index, item } => DiffRepr::Update {
+                index: *index,
+                item,
+            },
+            Self::Remove { index } => DiffRepr::Remove { index: *index },
+            Self::Reset(items) => DiffRepr::Reset { items },
+        }
+        .serialize(serializer)
+    }
+}
+
 /// An item of a view. The key identifies the same item across two versions of the list.
 pub trait ViewItem: Clone + PartialEq {
     type Key: Eq + Hash + Clone;

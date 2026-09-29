@@ -89,6 +89,11 @@ pub(crate) enum Command {
 
 /// Our subscription state with a contact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum Subscription {
     /// Neither side sees the presence of the other.
     None,
@@ -113,6 +118,11 @@ impl Subscription {
 
 /// A contact of the roster.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct Contact {
     pub jid: BareJid,
     pub name: Option<String>,

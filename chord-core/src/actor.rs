@@ -70,6 +70,16 @@ pub(crate) enum Command {
 
 /// The connection state, as a UI shows it.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum ConnectionState {
     Connecting,
     Connected {
@@ -88,6 +98,16 @@ pub enum ConnectionState {
 /// An event from the actor. New variants can come in later versions.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum ClientEvent {
     ConnectionState(ConnectionState),
     /// A new live chat message arrived and is in the database. Messages from the
@@ -119,6 +139,16 @@ pub enum ClientEvent {
 
 /// An error from a `ClientHandle` call.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum ClientError {
     /// No session. Call `login` first.
     NotConnected,
@@ -276,6 +306,16 @@ impl Timeline {
 
 /// An error from `ClientHandle::login`.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum LoginError {
     Connect(ConnectError),
     ActorGone,

@@ -1,0 +1,267 @@
+// Typed wrappers for the Tauri commands (src-tauri/src/commands.rs). One function per
+// command. Each one returns a promise that rejects with a `ChordError`.
+
+import { Channel, invoke } from '@tauri-apps/api/core';
+import type {
+  ChannelItem,
+  ChannelScope,
+  ChordError,
+  ClientEvent,
+  Contact,
+  JoinOutcome,
+  JoinRequest,
+  ListDiff,
+  MemberItem,
+  NotificationLevel,
+  NotificationSetting,
+  OpenInfo,
+  PendingJoin,
+  PushRegistration,
+  RoomAffiliation,
+  RoomSettings,
+  Settings,
+  SpaceAccess,
+  SpaceInfo,
+  SpaceItem,
+  TimelineItem,
+} from './types';
+
+/** True if `error` has the shape of a `ChordError`. */
+export function isChordError(error: unknown): error is ChordError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    typeof (error as ChordError).code === 'string' &&
+    typeof (error as ChordError).message === 'string'
+  );
+}
+
+/** The text to show for a rejected command. */
+export function errorMessage(error: unknown): string {
+  if (isChordError(error)) return error.message;
+  return error instanceof Error ? error.message : String(error);
+}
+
+// ---------------------------------------------------------------- account
+
+/** Open the account on its database. Works offline. Call it once, before all else. */
+export const open = (account: string) => invoke<OpenInfo>('open', { account });
+
+/**
+ * Log in. With no `password`, the saved one is used. `server`: empty for a SRV lookup,
+ * or `starttls://host:port`. With `remember`, a good login saves the password in the
+ * system keychain.
+ */
+export const login = (opts: { password?: string; server?: string; remember?: boolean } = {}) =>
+  invoke<void>('login', {
+    password: opts.password ?? null,
+    server: opts.server ?? null,
+    remember: opts.remember ?? false,
+  });
+
+export const logout = () => invoke<void>('logout');
+export const savedPassword = (account: string) => invoke<boolean>('saved_password', { account });
+export const forgetPassword = (account: string) => invoke<void>('forget_password', { account });
+
+// ---------------------------------------------------------------- events
+
+/**
+ * Listen to the client events: connection state, notifications, typing, invites, notices.
+ * There is one listener: a second call replaces the first. Events from before the call
+ * arrive first (up to 200).
+ */
+export function listenEvents(onEvent: (event: ClientEvent) => void): Promise<void> {
+  const channel = new Channel<ClientEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>('events', { onEvent: channel });
+}
+
+// ---------------------------------------------------------------- views
+
+/** A running view subscription. */
+export interface ViewSubscription {
+  readonly id: number;
+  /** Stop the subscription. Safe to call twice. */
+  unsubscribe(): Promise<void>;
+}
+
+/** A timeline subscription. It can also load older messages. */
+export interface TimelineSubscription extends ViewSubscription {
+  /** Show `count` older messages. The diffs arrive through the same callback. */
+  paginateBack(count: number): Promise<void>;
+}
+
+function makeSubscription(id: number): ViewSubscription {
+  let stopped = false;
+  return {
+    id,
+    async unsubscribe() {
+      if (stopped) return;
+      stopped = true;
+      await invoke<void>('unsubscribe', { id });
+    },
+  };
+}
+
+async function subscribe<T>(
+  command: string,
+  args: Record<string, unknown>,
+  onDiff: (diff: ListDiff<T>) => void,
+): Promise<ViewSubscription> {
+  const channel = new Channel<ListDiff<T>>();
+  channel.onmessage = onDiff;
+  const id = await invoke<number>(command, { ...args, onDiff: channel });
+  return makeSubscription(id);
+}
+
+/** The spaces of the rail. The first diff is a `reset`. */
+export const subscribeSpaceList = (onDiff: (diff: ListDiff<SpaceItem>) => void) =>
+  subscribe<SpaceItem>('subscribe_space_list', {}, onDiff);
+
+/** The channels of Home or of one space. */
+export const subscribeChannelList = (
+  scope: ChannelScope,
+  onDiff: (diff: ListDiff<ChannelItem>) => void,
+) => subscribe<ChannelItem>('subscribe_channel_list', { scope }, onDiff);
+
+/** The members of a room, or the two people of a chat. */
+export const subscribeMemberList = (room: string, onDiff: (diff: ListDiff<MemberItem>) => void) =>
+  subscribe<MemberItem>('subscribe_member_list', { room }, onDiff);
+
+async function timelineSubscription(
+  command: string,
+  args: Record<string, unknown>,
+  onDiff: (diff: ListDiff<TimelineItem>) => void,
+): Promise<TimelineSubscription> {
+  const base = await subscribe<TimelineItem>(command, args, onDiff);
+  return {
+    ...base,
+    paginateBack: (count: number) => invoke<void>('timeline_paginate_back', { id: base.id, count }),
+  };
+}
+
+/**
+ * The messages of a room or a chat (`peer` is a bare JID). The first diff is a `reset`
+ * with the newest 50. Use `applyDiff` to keep a list. Call `unsubscribe` when the view
+ * goes away.
+ */
+export const subscribeTimeline = (peer: string, onDiff: (diff: ListDiff<TimelineItem>) => void) =>
+  timelineSubscription('subscribe_timeline', { peer }, onDiff);
+
+/** The private messages with one occupant of a room. */
+export const subscribePrivateTimeline = (
+  room: string,
+  nick: string,
+  onDiff: (diff: ListDiff<TimelineItem>) => void,
+) => timelineSubscription('subscribe_private_timeline', { room, nick }, onDiff);
+
+// ---------------------------------------------------------------- messages
+
+/** Send a chat message. Returns its origin-id. */
+export const sendChat = (to: string, body: string) => invoke<string>('send_chat', { to, body });
+export const editMessage = (itemId: string, body: string) =>
+  invoke<void>('edit_message', { itemId, body });
+export const retractMessage = (itemId: string) => invoke<void>('retract_message', { itemId });
+/** Delete the message of another user, as a room moderator. */
+export const moderateMessage = (itemId: string, reason?: string) =>
+  invoke<void>('moderate_message', { itemId, reason: reason ?? null });
+export const reply = (itemId: string, body: string) => invoke<void>('reply', { itemId, body });
+/** Replace our reactions to a message with `emojis`. */
+export const react = (itemId: string, emojis: string[]) => invoke<void>('react', { itemId, emojis });
+export const toggleReaction = (itemId: string, emoji: string) =>
+  invoke<void>('toggle_reaction', { itemId, emoji });
+export const markRead = (peer: string) => invoke<void>('mark_read', { peer });
+export const markReadPrivate = (room: string, nick: string) =>
+  invoke<void>('mark_read_private', { room, nick });
+/** Tell the peer that we type. See `ClientEvent` `typing` for what `peer` is. */
+export const setTyping = (peer: string, typing: boolean) =>
+  invoke<void>('set_typing', { peer, typing });
+/**
+ * Upload the file at `path` and send its URL to `to`. Rust reads the file (100 MB at
+ * most). Returns the URL. The type comes from the extension unless you pass one.
+ */
+export const upload = (to: string, path: string, contentType?: string) =>
+  invoke<string>('upload', { to, path, contentType: contentType ?? null });
+/** Fetch older messages of a chat or a room from the server archive. */
+export const loadOlder = (peer: string) => invoke<void>('load_older', { peer });
+
+// ---------------------------------------------------------------- rooms
+
+export const joinRoom = (room: string, nick: string, password?: string) =>
+  invoke<void>('join_room', { room, nick, password: password ?? null });
+export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
+export const changeNick = (room: string, nick: string) =>
+  invoke<void>('change_nick', { room, nick });
+export const sendPrivate = (room: string, nick: string, body: string) =>
+  invoke<string>('send_private', { room, nick, body });
+export const setRoomAffiliation = (
+  room: string,
+  jid: string,
+  affiliation: RoomAffiliation,
+  reason?: string,
+) => invoke<void>('set_room_affiliation', { room, jid, affiliation, reason: reason ?? null });
+/** The JIDs with one affiliation, each with its nick if the server gives one. */
+export const roomAffiliations = (room: string, affiliation: RoomAffiliation) =>
+  invoke<[string, string | null][]>('room_affiliations', { room, affiliation });
+export const inviteToRoom = (room: string, jid: string, reason?: string) =>
+  invoke<void>('invite_to_room', { room, jid, reason: reason ?? null });
+export const declineRoomInvite = (room: string, from: string, reason?: string) =>
+  invoke<void>('decline_room_invite', { room, from, reason: reason ?? null });
+export const configureRoom = (room: string, settings: RoomSettings) =>
+  invoke<void>('configure_room', { room, settings });
+
+// ---------------------------------------------------------------- spaces
+
+export const browseSpaces = () => invoke<SpaceInfo[]>('browse_spaces');
+export const joinSpace = (service: string, node: string) =>
+  invoke<JoinOutcome>('join_space', { service, node });
+export const leaveSpace = (service: string, node: string) =>
+  invoke<void>('leave_space', { service, node });
+/** Create a space. Returns `[service, node]`. */
+export const createSpace = (name: string, access: SpaceAccess) =>
+  invoke<[string, string]>('create_space', { name, access });
+export const deleteSpace = (service: string, node: string) =>
+  invoke<void>('delete_space', { service, node });
+export const pendingSpaceJoins = () => invoke<PendingJoin[]>('pending_space_joins');
+export const spaceJoinRequests = (service: string, node: string) =>
+  invoke<JoinRequest[]>('space_join_requests', { service, node });
+export const approveSpaceJoin = (service: string, node: string, jid: string) =>
+  invoke<void>('approve_space_join', { service, node, jid });
+export const denySpaceJoin = (service: string, node: string, jid: string) =>
+  invoke<void>('deny_space_join', { service, node, jid });
+export const addRoomToSpace = (service: string, node: string, room: string, name: string) =>
+  invoke<void>('add_room_to_space', { service, node, room, name });
+export const removeRoomFromSpace = (service: string, node: string, room: string) =>
+  invoke<void>('remove_room_from_space', { service, node, room });
+export const addSpaceMember = (service: string, node: string, member: string) =>
+  invoke<void>('add_space_member', { service, node, member });
+
+// ---------------------------------------------------------------- contacts
+
+export const contacts = () => invoke<Contact[]>('contacts');
+export const addContact = (jid: string, name?: string) =>
+  invoke<void>('add_contact', { jid, name: name ?? null });
+export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });
+/** Accept the request of a `subscriptionRequest` event. */
+export const approveSubscription = (jid: string) => invoke<void>('approve_subscription', { jid });
+export const denySubscription = (jid: string) => invoke<void>('deny_subscription', { jid });
+export const preapproveSubscription = (jid: string) =>
+  invoke<void>('preapprove_subscription', { jid });
+
+// ---------------------------------------------------------------- avatars, levels, push
+
+/** Ask the server for the avatar of `owner` and store it. `avatarUrl` then shows it. */
+export const refreshAvatar = (owner: string) => invoke<void>('refresh_avatar', { owner });
+/** `muteUntil` is a Unix time in ms. */
+export const setNotificationLevel = (peer: string, level: NotificationLevel, muteUntil?: number) =>
+  invoke<void>('set_notification_level', { peer, level, muteUntil: muteUntil ?? null });
+export const notificationLevel = (peer: string) =>
+  invoke<NotificationSetting>('notification_level', { peer });
+export const pushRegistrations = () => invoke<PushRegistration[]>('push_registrations');
+
+// ---------------------------------------------------------------- local settings
+
+/** The local settings (for example circle folders), or `{}`. */
+export const getSettings = () => invoke<Settings>('get_settings');
+/** Replace the local settings. Any JSON, 256 KB at most. */
+export const setSettings = (value: Settings) => invoke<void>('set_settings', { value });

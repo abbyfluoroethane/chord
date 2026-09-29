@@ -63,13 +63,35 @@ impl fmt::Debug for SessionConfig {
 
 /// Why the server or the client rejected the login.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum AuthFailure {
     /// The server sent a SASL `<failure/>` with this condition (RFC 6120, 6.5).
-    Sasl(SaslCondition),
+    Sasl(
+        #[cfg_attr(feature = "serde", serde(serialize_with = "serialize_condition"))] SaslCondition,
+    ),
     /// The server offers no SASL mechanism that the client supports.
     NoMechanism,
     /// The client stopped the login, for example because the server signature was wrong.
     Local(String),
+}
+
+/// Serialize a SASL condition as its name, for example `NotAuthorized`. The xmpp-parsers
+/// type has no serde support.
+#[cfg(feature = "serde")]
+fn serialize_condition<S: serde::Serializer>(
+    condition: &SaslCondition,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(&format_args!("{condition:?}"))
 }
 
 impl fmt::Display for AuthFailure {
@@ -113,6 +135,16 @@ pub fn sasl_retry(condition: &SaslCondition) -> SaslRetry {
 
 /// Why `connect` failed.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum ConnectError {
     /// The server rejected the credentials. Never retry. Ask for new credentials.
     AuthFailed(AuthFailure),
@@ -179,6 +211,16 @@ pub const TICK: core::time::Duration = core::time::Duration::from_secs(15);
 
 /// An error from `send`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        content = "data",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum SessionError {
     /// The session is closed. It sends no more stanzas.
     Closed,

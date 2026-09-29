@@ -22,6 +22,11 @@ type Reply<T> = oneshot::Sender<Result<T, ClientError>>;
 
 /// A push service that this account enabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct PushRegistration {
     /// The bare JID of the push service.
     pub service: String,

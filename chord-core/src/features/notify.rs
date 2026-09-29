@@ -26,6 +26,11 @@ const PREVIEW_CHARS: usize = 200;
 
 /// How much a peer may notify.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum NotificationLevel {
     /// Every incoming message notifies.
     All,
@@ -58,6 +63,11 @@ impl NotificationLevel {
 
 /// The setting of one peer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct NotificationSetting {
     pub level: NotificationLevel,
     /// Unix time in ms. Until then, the peer does not notify at all.
@@ -66,6 +76,11 @@ pub struct NotificationSetting {
 
 /// A message that should notify the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct Notification {
     /// The peer as `messages.peer` stores it. Use it with `notification_level`.
     pub peer: String,

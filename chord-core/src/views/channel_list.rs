@@ -7,6 +7,15 @@ use super::{QueryCtx, ViewItem};
 
 /// Which channels a list shows.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(
+        tag = "type",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum ChannelScope {
     /// Direct chats, and the rooms that are in no space.
     Home,
@@ -15,6 +24,15 @@ pub enum ChannelScope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(
+        tag = "type",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum ChannelKind {
     /// A 1:1 chat.
     Direct,
@@ -30,6 +48,11 @@ pub enum ChannelKind {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct ChannelItem {
     /// Bare JID of the room or the peer. `room/nick` for a private message channel.
     pub jid: String,

@@ -46,6 +46,11 @@ type MembersReply = oneshot::Sender<Result<Vec<(BareJid, Option<String>)>, Clien
 
 /// The affiliation of a JID with a room (XEP-0045, section 5.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum RoomAffiliation {
     Owner,
     Admin,
@@ -68,6 +73,11 @@ impl RoomAffiliation {
 
 /// Room settings that `configure_room` changes. A `None` field stays as it is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct RoomSettings {
     /// The name of the room (`muc#roomconfig_roomname`).
     pub name: Option<String>,

@@ -102,6 +102,11 @@ const MAX_ITEMS: &str = "256";
 
 /// A space that `browse_spaces` found.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct SpaceInfo {
     /// Pubsub service JID.
     pub service: String,
@@ -113,6 +118,11 @@ pub struct SpaceInfo {
 
 /// The result of `join_space`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum JoinOutcome {
     /// We are subscribed. The space is in the space list.
     Joined,
@@ -122,6 +132,11 @@ pub enum JoinOutcome {
 
 /// The access model of a new space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum SpaceAccess {
     /// Everyone can join.
     Open,
@@ -143,6 +158,11 @@ impl SpaceAccess {
 
 /// A join request that waits for the owner of a space (XEP-0060, 8.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JoinRequest {
     /// The JID that asks to join.
     pub jid: String,

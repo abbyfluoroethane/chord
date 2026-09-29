@@ -12,6 +12,10 @@ native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl", "dep:reqwest"]
 # chord-ffi and release builds must never enable it. CI checks this.
 dev-insecure = ["native-session", "tokio-xmpp/insecure-tcp"]
 
+# JSON output for the desktop app: Serialize on the view items and events, Deserialize on
+# the values that the UI sends back. Off by default. The wasm and FFI builds leave it off.
+serde = ["dep:serde", "jid/serde"]
+
 [dependencies]
 xmpp-parsers.workspace = true
 sha1.workspace = true
@@ -19,6 +23,7 @@ jid.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true
 log.workspace = true
+serde = { version = "1", features = ["derive"], optional = true }
 futures-channel.workspace = true
 uuid.workspace = true
 sasl = { workspace = true, optional = true }
@@ -36,3 +41,6 @@ uuid = { version = "1", features = ["js"] }
 [dev-dependencies]
 # Paused time for the retry loop tests in session/native.rs.
 tokio = { workspace = true, features = ["test-util", "macros", "rt", "time", "sync"] }
+
+# The JSON snapshot test of the serde feature (tests/serde_json.rs).
+serde_json = "1"

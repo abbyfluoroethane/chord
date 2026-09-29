@@ -7,6 +7,11 @@ use super::timeline::{avatar_hash, contact_name, local_part};
 use super::{QueryCtx, ViewItem};
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct MemberItem {
     /// Stable id: the nick in a room, the bare JID in a 1:1 chat.
     pub id: String,

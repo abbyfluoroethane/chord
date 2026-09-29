@@ -5,6 +5,11 @@ use rusqlite::params;
 use super::{QueryCtx, ViewItem};
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct SpaceItem {
     /// Pubsub service JID.
     pub service: String,

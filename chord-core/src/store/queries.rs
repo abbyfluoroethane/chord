@@ -4,6 +4,11 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 /// Which XEP-0359 id is the message key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum KeyKind {
     /// The stanza-id that our own server added.
     StanzaId,
@@ -34,6 +39,11 @@ impl KeyKind {
 
 /// The direction of a message, seen from the account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum Direction {
     In,
     Out,
@@ -62,6 +72,11 @@ impl Direction {
 
 /// A 1:1 chat message, or a MUC message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum MessageKind {
     Chat,
     Groupchat,
@@ -107,6 +122,11 @@ pub struct MessageExtras {
 
 /// A chat message, as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct StoredMessage {
     /// Row id in `messages`.
     pub rowid: i64,

@@ -16,6 +16,11 @@ pub const GROUP_GAP_MS: i64 = 5 * 60 * 1000;
 
 /// One message, ready to show.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct TimelineItem {
     /// Stable id: `m:<row id>`. It does not change when the server echo or the archive
     /// changes the key of the message. Commands that refer to a message (reply, edit,
@@ -54,6 +59,11 @@ pub struct TimelineItem {
 
 /// The reactions with one emoji.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct ReactionSummary {
     pub emoji: String,
     pub count: u32,
@@ -63,6 +73,11 @@ pub struct ReactionSummary {
 
 /// A short view of the message that a reply quotes.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct ReplyPreview {
     /// Timeline id of the quoted message, if it is in the store.
     pub id: Option<String>,
@@ -73,6 +88,11 @@ pub struct ReplyPreview {
 
 /// How far an outgoing message got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum DeliveryStatus {
     Sent,
     Received,
