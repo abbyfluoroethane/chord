@@ -3,7 +3,7 @@
 //! Private messages between occupants (section 7.5) are chat rows with the peer
 //! `room@service/nick`. Their timeline is `ViewKey::PrivateTimeline`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use futures_channel::oneshot;
 use jid::{BareJid, Jid};
@@ -21,13 +21,15 @@ use xmpp_parsers::stanza_id::OriginId;
 
 use super::chat::{MessageIds, delay_ms};
 use super::message_ext::{self, Incoming, Outgoing};
-use super::{Ctx, IqResponse, bookmarks, mam, new_id};
+use super::{Ctx, IqResponse, avatars, bookmarks, mam, new_id, presence as own_presence};
 use crate::actor::{ClientError, ClientEvent, ClientHandle};
 use crate::store::queries::{self, Direction, KeyKind, MessageExtras, MessageKind, NewMessage};
 use crate::views::{ChannelScope, ViewKey};
 
 const NS_MUC_OWNER: &str = "http://jabber.org/protocol/muc#owner";
 pub(crate) const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
+/// XEP-0421 occupant identifiers.
+const NS_OCCUPANT_ID: &str = "urn:xmpp:occupant-id:0";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
@@ -47,6 +49,11 @@ pub(crate) struct State {
     pub(super) joins: HashMap<BareJid, Join>,
     /// The rooms that we are in, with our nick.
     pub(super) nicks: HashMap<BareJid, String>,
+    /// Every nick that we used in a room during this session, the current one included.
+    /// A message from one of them is ours.
+    used_nicks: HashMap<BareJid, HashSet<String>>,
+    /// Our XEP-0421 occupant-id in a room, from our own presence. It survives nick changes.
+    occupant_ids: HashMap<BareJid, String>,
     /// The rooms that were joined before this session. `on_connected` joins them again.
     previous: Vec<BareJid>,
     /// Messages for rooms that we are joining. They go out when the join completes.
@@ -94,6 +101,11 @@ pub(crate) enum Command {
         body: String,
         reply: PrivateReply,
     },
+    ChangeNick {
+        room: BareJid,
+        nick: String,
+        reply: Reply,
+    },
 }
 
 impl ClientHandle {
@@ -111,6 +123,19 @@ impl ClientHandle {
             room,
             nick,
             password,
+            reply,
+        })
+        .await
+    }
+
+    /// Change our nick in a room that we are in (XEP-0045, section 7.6) and wait for the
+    /// answer of the room. Fails with `ClientError::Invalid` when we are not in the room,
+    /// and with `ClientError::Server` when the room refuses: nick in use (`conflict`) or
+    /// nick change not allowed (`not-acceptable`). The stored nick changes only on success.
+    pub async fn change_nick(&self, room: BareJid, new_nick: String) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::ChangeNick {
+            room,
+            nick: new_nick,
             reply,
         })
         .await
@@ -267,6 +292,13 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
         Command::Leave { room, reply } => {
             let _ = reply.send(leave(ctx, &room));
         }
+        Command::ChangeNick { room, nick, reply } => {
+            if ctx.state.muc.nicks.contains_key(&room) {
+                join_room(ctx, &room, Some(nick), None, Some(reply));
+            } else {
+                let _ = reply.send(Err(ClientError::Invalid(format!("not in the room {room}"))));
+            }
+        }
         Command::AddBookmark {
             room,
             name,
@@ -294,6 +326,7 @@ pub(crate) fn offline(command: Command) {
     }
     let (Command::Join { reply, .. }
     | Command::Leave { reply, .. }
+    | Command::ChangeNick { reply, .. }
     | Command::AddBookmark { reply, .. }
     | Command::RemoveBookmark { reply, .. }) = command
     else {
@@ -485,9 +518,14 @@ pub(crate) fn join_room(
         }
     };
     ensure_room(ctx, room, Some(&nick), password.as_deref());
-    let mut muc = Muc::new().with_history(History::new().with_maxstanzas(0));
-    muc.password = password;
-    ctx.send(Presence::available().with_to(target).with_payload(muc));
+    let mut presence = room_presence(ctx).with_to(target);
+    // A nick change is a plain presence to the new nick (XEP-0045, 7.6).
+    if current.is_none() {
+        let mut muc = Muc::new().with_history(History::new().with_maxstanzas(0));
+        muc.password = password;
+        presence.payloads.push(muc.into());
+    }
+    ctx.send(presence);
     ctx.state.muc.joins.insert(
         room.clone(),
         Join {
@@ -497,6 +535,55 @@ pub(crate) fn join_room(
         },
     );
     mark_room(ctx, room);
+}
+
+/// Available presence for a room: our caps, and the hash of our avatar when the store
+/// has it (XEP-0153), like the presence of the account.
+fn room_presence(ctx: &mut Ctx<'_>) -> Presence {
+    match avatars::load(ctx.store, ctx.account_id, ctx.account) {
+        Ok(Some(avatar)) => avatars::vcard_presence(Some(&avatar.hash)),
+        Ok(None) => own_presence::initial(),
+        Err(e) => {
+            ctx.store_error("read our avatar", e);
+            own_presence::initial()
+        }
+    }
+}
+
+/// The XEP-0421 occupant-id in a list of payloads.
+fn occupant_id(payloads: &[Element]) -> Option<String> {
+    payloads
+        .iter()
+        .find(|e| e.is("occupant-id", NS_OCCUPANT_ID))
+        .and_then(|e| e.attr("id"))
+        .map(str::to_owned)
+}
+
+fn remember_nick(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str) {
+    ctx.state
+        .muc
+        .used_nicks
+        .entry(room.clone())
+        .or_default()
+        .insert(nick.to_owned());
+}
+
+/// Whether a groupchat message from `nick` is ours. The occupant-id decides when the
+/// message has one and we know ours. Else our current nick or an earlier one decides.
+fn is_ours(ctx: &Ctx<'_>, room: &BareJid, nick: &str, message: &Message) -> bool {
+    if let (Some(ours), Some(theirs)) = (
+        ctx.state.muc.occupant_ids.get(room),
+        occupant_id(&message.payloads),
+    ) {
+        return *ours == theirs;
+    }
+    our_nick(ctx, room).as_deref() == Some(nick)
+        || ctx
+            .state
+            .muc
+            .used_nicks
+            .get(room)
+            .is_some_and(|nicks| nicks.contains(nick))
 }
 
 /// Leave a room.
@@ -940,7 +1027,7 @@ fn store(
         super::retraction::on_moderation(ctx, &incoming);
         return;
     };
-    let direction = if our_nick(ctx, room).as_deref() == Some(nick.as_str()) {
+    let direction = if is_ours(ctx, room, nick.as_str(), message) {
         Direction::Out
     } else {
         Direction::In
@@ -1059,7 +1146,12 @@ fn on_error(ctx: &mut Ctx<'_>, room: &BareJid, nick: Option<&str>, presence: &Pr
         && nick.is_none_or(|n| n == join.nick)
     {
         let join = ctx.state.muc.joins.remove(room).expect("join is there");
-        if !join.changing_nick {
+        if join.changing_nick {
+            // The nick change failed. Keep the nick that we have.
+            if let Some(old) = ctx.state.muc.nicks.get(room).cloned() {
+                ensure_room(ctx, room, Some(&old), None);
+            }
+        } else {
             set_joined(ctx, room, false);
         }
         for reply in join.replies {
@@ -1092,6 +1184,8 @@ fn on_unavailable(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Pres
     if let Some(new_nick) = new_nick {
         // A nick change. The presence with the new nick follows.
         if is_self && ctx.state.muc.nicks.contains_key(room) {
+            remember_nick(ctx, room, nick);
+            remember_nick(ctx, room, &new_nick);
             ctx.state.muc.nicks.insert(room.clone(), new_nick);
         }
     } else if is_self {
@@ -1174,6 +1268,12 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
             ],
         ),
     );
+    if is_self {
+        remember_nick(ctx, room, nick);
+        if let Some(id) = occupant_id(&presence.payloads) {
+            ctx.state.muc.occupant_ids.insert(room.clone(), id);
+        }
+    }
     if is_self && let Some(join) = ctx.state.muc.joins.remove(room) {
         ctx.state.muc.nicks.insert(room.clone(), nick.to_owned());
         set_joined(ctx, room, true);
@@ -2141,5 +2241,233 @@ mod tests {
             .query_row("SELECT retracted_at FROM messages", [], |r| r.get(0))
             .unwrap();
         assert!(retracted.is_some());
+    }
+
+    fn occupant_id_element(id: &str) -> Element {
+        format!("<occupant-id xmlns='{NS_OCCUPANT_ID}' id='{id}'/>")
+            .parse()
+            .unwrap()
+    }
+
+    fn with_occupant_id(mut message: Message, id: &str) -> Message {
+        message.payloads.push(occupant_id_element(id));
+        message
+    }
+
+    fn joined_with_occupant_id(h: &mut Harness, nick: &str, id: &str) {
+        let mut answer = join(h, nick);
+        let mut p = self_presence(nick);
+        p.payloads.push(occupant_id_element(id));
+        h.with_ctx(|ctx| on_presence(ctx, &p));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        h.take_sent();
+    }
+
+    fn incoming_directions(h: &mut Harness, messages: Vec<Message>) -> Vec<Direction> {
+        for m in messages {
+            h.with_ctx(|ctx| on_message(ctx, &m));
+        }
+        messages_with(h.store.conn(), h.account_id, ROOM)
+            .unwrap()
+            .iter()
+            .map(|m| m.direction)
+            .collect()
+    }
+
+    #[test]
+    fn join_presence_carries_caps_and_our_avatar_hash() {
+        use xmpp_parsers::vcard_update::VCardUpdate;
+        let payloads = |h: &mut Harness| {
+            let sent = h.take_sent();
+            let [Stanza::Presence(p)] = sent.as_slice() else {
+                panic!("{sent:?}")
+            };
+            p.payloads.clone()
+        };
+        let mut h = Harness::new();
+        let _answer = join(&mut h, "alice");
+        let none = payloads(&mut h);
+        assert!(
+            none.iter()
+                .any(|e| e.is("c", "http://jabber.org/protocol/caps"))
+        );
+        assert!(none.iter().any(|e| Muc::try_from(e.clone()).is_ok()));
+        assert!(
+            !none
+                .iter()
+                .any(|e| VCardUpdate::try_from(e.clone()).is_ok())
+        );
+
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO avatars (account_id, owner, hash, mime, data)
+                 VALUES (?1, ?2, ?3, 'image/png', x'00')",
+                params![h.account_id, ACCOUNT, hash],
+            )
+            .unwrap();
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Leave {
+                    room: room(),
+                    reply,
+                },
+            )
+        });
+        h.take_sent();
+        let _answer = join(&mut h, "alice");
+        let with = payloads(&mut h);
+        let photo = with
+            .iter()
+            .find_map(|e| VCardUpdate::try_from(e.clone()).ok())
+            .and_then(|u| u.photo)
+            .and_then(|p| p.data);
+        assert_eq!(photo.map(|d| d[0]), Some(0x01));
+        assert!(with.iter().any(|e| Muc::try_from(e.clone()).is_ok()));
+    }
+
+    fn change_nick(h: &mut Harness, nick: &str) -> Answer {
+        let (reply, answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::ChangeNick {
+                    room: room(),
+                    nick: nick.into(),
+                    reply,
+                },
+            )
+        });
+        answer
+    }
+
+    #[test]
+    fn change_nick_sends_a_plain_presence_and_completes_after_the_303() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let mut answer = change_nick(&mut h, "alicia");
+        let sent = h.take_sent();
+        let [Stanza::Presence(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(p.to, Some(jid(&format!("{ROOM}/alicia"))));
+        assert!(!p.payloads.iter().any(|e| Muc::try_from(e.clone()).is_ok()));
+        assert_eq!(answer.try_recv().unwrap(), None);
+
+        let rename = Presence::unavailable()
+            .with_from(jid(&format!("{ROOM}/alice")))
+            .with_payload(
+                MucUser::new()
+                    .with_statuses(vec![Status::NewNick, Status::SelfPresence])
+                    .with_items(vec![
+                        Item::new(Affiliation::Member, Role::Participant).with_nick("alicia"),
+                    ]),
+            );
+        h.with_ctx(|ctx| on_presence(ctx, &rename));
+        h.with_ctx(|ctx| on_presence(ctx, &self_presence("alicia")));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        h.with_ctx(|ctx| {
+            assert_eq!(
+                ctx.state.muc.nicks.get(&room()).map(String::as_str),
+                Some("alicia")
+            );
+            assert_eq!(our_nick(ctx, &room()).as_deref(), Some("alicia"));
+        });
+        assert_eq!(occupant_nicks(&h), ["alicia"]);
+    }
+
+    #[test]
+    fn change_nick_conflict_keeps_the_old_nick_and_outside_a_room_fails() {
+        let mut h = Harness::new();
+        let mut answer = change_nick(&mut h, "alicia");
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+
+        joined(&mut h, "alice");
+        let mut answer = change_nick(&mut h, "bob");
+        h.take_sent();
+        let error = Presence::error()
+            .with_from(jid(&format!("{ROOM}/bob")))
+            .with_payload(StanzaError::new(
+                ErrorType::Cancel,
+                DefinedCondition::Conflict,
+                "en",
+                "",
+            ));
+        h.with_ctx(|ctx| on_presence(ctx, &error));
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
+        let stored: String = h
+            .store
+            .conn()
+            .query_row("SELECT nick FROM rooms WHERE jid = ?1", [ROOM], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, "alice");
+        h.with_ctx(|ctx| {
+            assert_eq!(
+                ctx.state.muc.nicks.get(&room()).map(String::as_str),
+                Some("alice")
+            );
+        });
+    }
+
+    #[test]
+    fn a_message_from_an_earlier_nick_is_ours() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let mut answer = change_nick(&mut h, "alicia");
+        let rename = Presence::unavailable()
+            .with_from(jid(&format!("{ROOM}/alice")))
+            .with_payload(
+                MucUser::new()
+                    .with_statuses(vec![Status::NewNick, Status::SelfPresence])
+                    .with_items(vec![
+                        Item::new(Affiliation::Member, Role::Participant).with_nick("alicia"),
+                    ]),
+            );
+        h.with_ctx(|ctx| on_presence(ctx, &rename));
+        h.with_ctx(|ctx| on_presence(ctx, &self_presence("alicia")));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let directions = incoming_directions(
+            &mut h,
+            vec![
+                groupchat("alice", "old nick", Some("s1"), None),
+                groupchat("alicia", "new nick", Some("s2"), None),
+                groupchat("bob", "other", Some("s3"), None),
+            ],
+        );
+        assert_eq!(directions, [Direction::Out, Direction::Out, Direction::In]);
+    }
+
+    #[test]
+    fn our_occupant_id_marks_a_message_as_ours_whatever_the_nick() {
+        let mut h = Harness::new();
+        joined_with_occupant_id(&mut h, "alice", "occ-me");
+        h.with_ctx(|ctx| {
+            assert_eq!(
+                ctx.state.muc.occupant_ids.get(&room()).map(String::as_str),
+                Some("occ-me")
+            );
+        });
+        let directions = incoming_directions(
+            &mut h,
+            vec![
+                // A nick that we never used in this session, as the archive shows it.
+                with_occupant_id(groupchat("alice-old", "mine", Some("s1"), None), "occ-me"),
+                with_occupant_id(groupchat("bob", "theirs", Some("s2"), None), "occ-bob"),
+                // Somebody took a nick of ours: the occupant-id says it is not us.
+                with_occupant_id(groupchat("alice", "imposter", Some("s3"), None), "occ-x"),
+            ],
+        );
+        assert_eq!(directions, [Direction::Out, Direction::In, Direction::In]);
     }
 }
