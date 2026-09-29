@@ -7,7 +7,7 @@ license.workspace = true
 [features]
 default = ["native-session"]
 # The tokio-xmpp session. Turn it off for the wasm32 build.
-native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl"]
+native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl", "dep:reqwest"]
 # Plain TCP to a dev server (ServerAddr::InsecureTcp). Off by default.
 # chord-ffi and release builds must never enable it. CI checks this.
 dev-insecure = ["native-session", "tokio-xmpp/insecure-tcp"]
@@ -24,6 +24,9 @@ sasl = { workspace = true, optional = true }
 tokio-xmpp = { workspace = true, optional = true }
 # Only session/native.rs and runtime.rs use tokio.
 tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time", "io-util"] }
+
+# HTTP PUT for XEP-0363 upload. Only runtime-gated code in features/upload.rs uses it.
+reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls"] }
 
 # xmpp-parsers and xso use uuid. On wasm32-unknown-unknown it needs a JS randomness source.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
