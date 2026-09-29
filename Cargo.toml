@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["chord-core", "chord-ffi", "chord-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+chord-core = { path = "chord-core" }
+# Exact pin: tokio-xmpp changes its API often. See the Core spec.
+tokio-xmpp = { version = "=6.0.0" }
+xmpp-parsers = "0.23"
+jid = "0.12"
+# The Stream trait for Session::events. Also works on wasm32.
+futures-core = "0.3"
+rusqlite = { version = "0.40", features = ["bundled"] }
+tokio = "1"

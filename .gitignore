@@ -1,0 +1,3 @@
+/target
+dev/prosody/.env
+dev/prosody/certs/

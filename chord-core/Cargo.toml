@@ -1,0 +1,20 @@
+[package]
+name = "chord-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["native-session"]
+# The tokio-xmpp session. Turn it off for the wasm32 build.
+native-session = ["dep:tokio-xmpp", "dep:tokio"]
+
+[dependencies]
+xmpp-parsers.workspace = true
+jid.workspace = true
+futures-core.workspace = true
+rusqlite.workspace = true
+# insecure-tcp: plain TCP for the local test server (ServerAddr::InsecureTcp).
+tokio-xmpp = { workspace = true, optional = true, features = ["insecure-tcp"] }
+# Only session/native.rs and runtime.rs use tokio.
+tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time"] }
