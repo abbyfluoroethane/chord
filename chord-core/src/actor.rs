@@ -421,6 +421,9 @@ impl<S: Session> Actor<S> {
                 Effect::Upload(request) => {
                     features::upload::start(request, self.internal_tx.clone());
                 }
+                Effect::Download { request } => {
+                    features::spaces::start_download(request, self.internal_tx.clone());
+                }
             }
         }
         // A logout that waited for queued stanzas can go on now.

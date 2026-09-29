@@ -1361,15 +1361,13 @@ fn space_avatar_that_a_new_hash_replaced_is_dropped() {
 }
 
 #[test]
-fn space_avatar_at_a_url_or_too_big_or_with_a_bad_hash_is_not_fetched() {
+fn space_avatar_too_big_or_with_a_bad_hash_is_not_fetched() {
     let mut h = followed();
     h.sent_iqs();
     let hash = avatars::sha1_hex(IMAGE);
-    deliver_avatar(
-        &mut h,
-        &format!("<info id='{hash}' type='image/png' url='https://example.org/a.png'/>"),
-    );
-    assert_eq!(stored_avatar(&h).unwrap().hash, hash);
+    deliver_avatar(&mut h, &format!("<info id='{hash}' type='image/png'/>"));
+    h.answer(is_avatar_data, None);
+    h.sent_iqs();
     deliver_avatar(
         &mut h,
         &format!(
@@ -1406,4 +1404,88 @@ fn store_avatar_image_checks_the_hash_and_the_size() {
     assert_eq!(store(&other, b"other"), Ok(false));
     assert_eq!(store(&hash, IMAGE), Ok(true));
     assert_eq!(stored_avatar(&h).unwrap().data.as_deref(), Some(IMAGE));
+}
+
+// --- Space avatars at a URL ---
+
+const AVATAR_URL: &str = "https://example.org/a.png";
+
+fn take_downloads(h: &mut Harness) -> Vec<DownloadRequest> {
+    let mut found = Vec::new();
+    for effect in std::mem::take(&mut h.effects) {
+        match effect {
+            crate::features::Effect::Download { request } => found.push(request),
+            other => h.effects.push(other),
+        }
+    }
+    found
+}
+
+fn deliver_url_avatar(h: &mut Harness, hash: &str) {
+    deliver_avatar(
+        h,
+        &format!("<info id='{hash}' type='image/png' url='{AVATAR_URL}'/>"),
+    );
+}
+
+#[test]
+fn space_avatar_at_a_url_queues_a_download() {
+    let mut h = followed();
+    h.sent_iqs();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_url_avatar(&mut h, &hash);
+    assert_eq!(stored_avatar(&h).unwrap().hash, hash);
+    assert!(h.sent_iqs().is_empty());
+    let downloads = take_downloads(&mut h);
+    assert_eq!(downloads.len(), 1);
+    assert_eq!(downloads[0].url, AVATAR_URL);
+    assert_eq!(downloads[0].max_bytes, MAX_AVATAR_BYTES);
+    assert_eq!(downloads[0].hash, hash);
+    assert_eq!(downloads[0].node, "dev");
+
+    // The same event again: the download runs already.
+    deliver_url_avatar(&mut h, &hash);
+    assert!(take_downloads(&mut h).is_empty());
+}
+
+#[test]
+fn finished_download_stores_the_image_and_marks_the_view() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_url_avatar(&mut h, &hash);
+    let request = take_downloads(&mut h).remove(0);
+    h.take_dirty();
+    h.with_ctx(|ctx| {
+        on_download_done(
+            ctx,
+            DownloadDone {
+                request,
+                result: Ok(IMAGE.to_vec()),
+            },
+        );
+    });
+    assert_eq!(stored_avatar(&h).unwrap().data.as_deref(), Some(IMAGE));
+    assert!(h.take_dirty().contains(&ViewKey::SpaceList));
+    assert!(h.state.spaces.avatar_fetching.is_empty());
+}
+
+#[test]
+fn download_with_the_wrong_hash_or_an_error_keeps_the_hash_only() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    for result in [
+        Ok(b"forged".to_vec()),
+        Err("the server answered 404".into()),
+    ] {
+        deliver_url_avatar(&mut h, &hash);
+        let request = take_downloads(&mut h).remove(0);
+        h.take_dirty();
+        h.with_ctx(|ctx| on_download_done(ctx, DownloadDone { request, result }));
+        let avatar = stored_avatar(&h).unwrap();
+        assert_eq!(avatar.hash, hash);
+        assert_eq!(avatar.data, None);
+        assert!(!h.take_dirty().contains(&ViewKey::SpaceList));
+        // The fetch is over, so a new event can start it again.
+        assert!(h.state.spaces.avatar_fetching.is_empty());
+    }
 }

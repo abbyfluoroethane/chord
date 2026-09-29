@@ -54,12 +54,17 @@ pub(crate) enum Effect {
     Emit(ClientEvent),
     /// Run an HTTP PUT for XEP-0363 upload. The actor gives it to the runtime.
     Upload(upload::PutRequest),
+    /// Run an HTTP GET for a space avatar at a URL.
+    Download {
+        request: spaces::DownloadRequest,
+    },
 }
 
 /// A result from work outside the session, for example an HTTP upload.
 #[derive(Debug)]
 pub(crate) enum Internal {
     UploadDone(upload::PutDone),
+    DownloadDone(spaces::DownloadDone),
 }
 
 /// What to do with the answer to an IQ that a feature sent. One variant per feature, so
@@ -183,6 +188,10 @@ impl Ctx<'_> {
 
     pub(crate) fn upload(&mut self, request: upload::PutRequest) {
         self.effects.push(Effect::Upload(request));
+    }
+
+    pub(crate) fn download(&mut self, request: spaces::DownloadRequest) {
+        self.effects.push(Effect::Download { request });
     }
 
     /// Log a store error. A store error must not stop the actor.
@@ -418,6 +427,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
 pub(crate) fn on_internal(ctx: &mut Ctx<'_>, internal: Internal) {
     match internal {
         Internal::UploadDone(done) => upload::on_put_done(ctx, done),
+        Internal::DownloadDone(done) => spaces::on_download_done(ctx, done),
     }
 }
 

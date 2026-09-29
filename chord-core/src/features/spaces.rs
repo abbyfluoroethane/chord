@@ -23,8 +23,8 @@
 //!   these extensions, the browse starts again with a plain request.
 //! - Avatar: the avatar item holds XEP-0084 metadata. We store its hash and type in `avatars`
 //!   with the owner `service/node`. If the info has no URL, we fetch the image from the
-//!   `urn:xmpp:avatar:data` node of the service. An image at a URL needs an HTTP download,
-//!   which the features cannot do. `store_avatar_image` takes such an image from the caller.
+//!   `urn:xmpp:avatar:data` node of the service. An image at a URL goes through
+//!   `Effect::Download`. `store_avatar_image` also takes an image from a caller.
 //! - Private spaces use the `whitelist` access model. The owner makes a member with
 //!   `add_space_member`, then the member calls `join_space`. Join requests (`authorize`)
 //!   only work where a server offers them. Prosody 13 does not.
@@ -1580,8 +1580,21 @@ fn store_avatar_item(ctx: &mut Ctx<'_>, service: &str, node: &str, payload: Opti
         log::warn!("the avatar of {owner} has a bad hash or a big size. Not fetched.");
         return;
     }
-    if info.url.is_some() {
-        log::debug!("the avatar of {owner} is at a URL. Not fetched.");
+    if let Some(url) = info.url {
+        if ctx
+            .state
+            .spaces
+            .avatar_fetching
+            .insert((owner, hash.clone()))
+        {
+            ctx.download(DownloadRequest {
+                service: service.to_owned(),
+                node: node.to_owned(),
+                hash,
+                url,
+                max_bytes: MAX_AVATAR_BYTES,
+            });
+        }
         return;
     }
     let Ok(service) = BareJid::new(service) else {
@@ -1610,6 +1623,74 @@ fn store_avatar_item(ctx: &mut Ctx<'_>, service: &str, node: &str, payload: Opti
             ctx.request(iq, FeaturePending::Spaces(pending));
         }
         Err(e) => log::warn!("avatar request: {e}"),
+    }
+}
+
+/// An HTTP GET for the image of a space avatar. The runtime runs it.
+#[derive(Debug)]
+pub(crate) struct DownloadRequest {
+    pub service: String,
+    pub node: String,
+    /// The lower case SHA-1 hex of the image.
+    pub hash: String,
+    pub url: String,
+    pub max_bytes: usize,
+}
+
+/// The result of a `DownloadRequest`.
+#[derive(Debug)]
+pub(crate) struct DownloadDone {
+    pub request: DownloadRequest,
+    pub result: Result<Vec<u8>, String>,
+}
+
+/// Run a download. Send the result to `done` as `Internal::DownloadDone`.
+#[cfg(feature = "native-session")]
+pub(crate) fn start_download(
+    request: DownloadRequest,
+    done: futures_channel::mpsc::UnboundedSender<super::Internal>,
+) {
+    crate::runtime::spawn(async move {
+        let result = crate::runtime::http_get(&request.url, request.max_bytes).await;
+        // An error means that the actor stopped. Nobody waits for the result.
+        let _ = done.unbounded_send(super::Internal::DownloadDone(DownloadDone {
+            request,
+            result,
+        }));
+    });
+}
+
+/// Without the native session there is no HTTP client yet. Fail at once.
+#[cfg(not(feature = "native-session"))]
+pub(crate) fn start_download(
+    request: DownloadRequest,
+    done: futures_channel::mpsc::UnboundedSender<super::Internal>,
+) {
+    let _ = done.unbounded_send(super::Internal::DownloadDone(DownloadDone {
+        request,
+        result: Err("HTTP download is not available in this build".into()),
+    }));
+}
+
+/// A download finished. Store the image, or keep the hash only.
+pub(crate) fn on_download_done(ctx: &mut Ctx<'_>, done: DownloadDone) {
+    let DownloadDone { request, result } = done;
+    let (service, node, hash) = (&request.service, &request.node, &request.hash);
+    ctx.state
+        .spaces
+        .avatar_fetching
+        .remove(&(avatar_owner(service, node), hash.clone()));
+    let data = match result {
+        Ok(data) => data,
+        Err(e) => {
+            log::warn!("avatar download for {node} of {service}: {e}");
+            return;
+        }
+    };
+    match store_avatar_image(ctx.store, ctx.account_id, service, node, hash, &data) {
+        Ok(true) => changed(ctx, service, node),
+        Ok(false) => {}
+        Err(e) => log::warn!("avatar image for {node} of {service}: {e}"),
     }
 }
 
