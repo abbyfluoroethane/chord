@@ -228,6 +228,34 @@ function pic(w: number, h: number, a: string, b: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+/** A short sine tone as a WAV data URI: sample audio for the preview, no network. */
+function tone(seconds: number, hz: number): string {
+  const rate = 8000;
+  const n = Math.floor(seconds * rate);
+  const bytes = new Uint8Array(44 + n);
+  const view = new DataView(bytes.buffer);
+  const text = (at: number, s: string) => [...s].forEach((c, i) => (bytes[at + i] = c.charCodeAt(0)));
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + n, true);
+  text(8, 'WAVEfmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true); // 8-bit
+  text(36, 'data');
+  view.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) {
+    const fade = Math.min(1, i / 400, (n - i) / 400);
+    bytes[44 + i] = 128 + Math.round(60 * fade * Math.sin((2 * Math.PI * hz * i) / rate));
+  }
+  let bin = '';
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return `data:audio/wav;base64,${btoa(bin)}`;
+}
+
 const opsGeneral = build([
   { id: 'g1', who: 'rin', ts: at(1, 16, 40), body: 'Test stand is bolted down. Torque marks are on all eight bolts.' },
   {
@@ -268,6 +296,34 @@ const opsGeneral = build([
       size: 2_483_200,
       width: 640,
       height: 400
+    }
+  },
+  {
+    id: 'g7b',
+    who: 'sam',
+    ts: at(0, 10, 2),
+    body: '',
+    attachment: {
+      url: pic(400, 560, '#0a655c', '#111316'),
+      name: 'burn-05.jpg',
+      mime: 'image/jpeg',
+      size: 1_904_640,
+      width: 400,
+      height: 560
+    }
+  },
+  {
+    id: 'g7c',
+    who: 'rin',
+    ts: at(0, 10, 2),
+    body: 'Igniter test, with sound.',
+    attachment: {
+      url: tone(2, 440),
+      name: 'igniter-test.wav',
+      mime: 'audio/wav',
+      size: 16_044,
+      width: null,
+      height: null
     }
   },
   { id: 'g8', who: 'sam', ts: at(0, 10, 3), body: 'Full run sheet is here if you want it.', attachment: {

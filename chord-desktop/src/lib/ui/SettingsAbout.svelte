@@ -24,6 +24,8 @@
   <li>IBM Plex Sans and IBM Plex Mono, SIL Open Font License.</li>
   <li>Bricolage Grotesque, SIL Open Font License.</li>
   <li>Lucide icons, ISC License.</li>
+  <li>PhotoSwipe image viewer, MIT License.</li>
+  <li>Media Chrome player controls, MIT License.</li>
 </ul>
 
 <style>
