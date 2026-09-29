@@ -9,7 +9,9 @@
   <div class="banner" role="status">
     <Icon icon={WifiOff} size={16} />
     <span>Can't reach {session.host}. Your messages will send when it's back.</span>
-    <button class="retry" onclick={() => session.force('connected')}>Try now</button>
+    {#if session.canRetry}
+      <button class="retry" onclick={() => void session.retry()}>Try now</button>
+    {/if}
   </div>
 {/if}
 

@@ -1,8 +1,13 @@
-// Contacts, requests, and blocked addresses over sample data.
-// Each action names the bridge call it maps to. The calls stay as TODO stubs
-// until the bridge is wired in (see $lib/chord/api.ts).
+// Contacts, requests, and blocked addresses. Sample data in the browser preview.
+// Inside Tauri the lists come from the bridge (contacts, blockedContacts and the
+// subscriptionRequest event). Each action names the bridge call it maps to.
 import * as fx from '$lib/fixtures/data';
+import { plainError, splitRoster, toContactItem } from './adapt';
 import { app, HOME } from './app.svelte';
+import { api, live } from './bridge';
+import { settings } from './local';
+import { prefs } from './prefs.svelte';
+import { ui } from './ui.svelte';
 import type { Affiliation, ContactItem, ContactsTab, Person } from './types';
 import { spaceKey } from './types';
 
@@ -15,10 +20,10 @@ const ADDRESS = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 export type AddResult = { ok: true; message: string } | { ok: false; error: string };
 
 class ContactsStore {
-  contacts = $state<ContactItem[]>(clone(fx.contacts));
-  incoming = $state<ContactItem[]>(clone(fx.incomingRequests));
-  outgoing = $state<ContactItem[]>(clone(fx.outgoingRequests));
-  blocked = $state<ContactItem[]>(clone(fx.blockedContacts));
+  contacts = $state<ContactItem[]>(live ? [] : clone(fx.contacts));
+  incoming = $state<ContactItem[]>(live ? [] : clone(fx.incomingRequests));
+  outgoing = $state<ContactItem[]>(live ? [] : clone(fx.outgoingRequests));
+  blocked = $state<ContactItem[]>(live ? [] : clone(fx.blockedContacts));
   /** Addresses whose requests are accepted before they arrive. */
   preapproved = $state<string[]>([]);
 
@@ -68,12 +73,13 @@ class ContactsStore {
       .flat()
       .find((m) => m.id === address);
     const dm = app.channels.find((c) => c.kind === 'dm' && c.jid === address);
+    const seen = app.dmPresence[address];
     return {
       address,
       name: item?.name ?? member?.name ?? dm?.name ?? fallbackName ?? address.split('@')[0],
       avatar: item?.avatar ?? member?.avatar ?? dm?.avatar ?? null,
-      show: item?.show ?? member?.show ?? dm?.show ?? null,
-      online: item?.online ?? member?.online ?? dm?.online ?? false,
+      show: member?.show ?? seen?.show ?? item?.show ?? dm?.show ?? null,
+      online: member?.online ?? seen?.online ?? item?.online ?? dm?.online ?? false,
       status: item?.status ?? null,
       since: item?.since ?? null,
       isMe: false,
@@ -104,7 +110,8 @@ class ContactsStore {
   }
 
   sharedContacts(address: string): ContactItem[] {
-    const list = fx.sharedContacts[address] ?? [];
+    // The bridge does not tell which contacts two people share.
+    const list = live ? [] : (fx.sharedContacts[address] ?? []);
     return this.contacts.filter((c) => list.includes(c.address));
   }
 
@@ -114,6 +121,54 @@ class ContactsStore {
       const mine = app.members[spaceKey(s)]?.find((m) => m.id === app.me.address);
       return mine?.affiliation === 'owner' || mine?.affiliation === 'admin';
     });
+  }
+
+  // --- live data ---------------------------------------------------
+
+  /** Read the roster and the blocklist. Maps to api.contacts() and api.blockedContacts(). */
+  async refresh() {
+    if (!live) return;
+    try {
+      const b = await api();
+      const { contacts, outgoing } = splitRoster(await b.contacts());
+      this.contacts = contacts;
+      this.outgoing = outgoing;
+      // A request that was answered is no longer pending.
+      this.incoming = this.incoming.filter((i) => !contacts.some((c) => c.address === i.address));
+    } catch (e) {
+      ui.say(plainError(e));
+    }
+    await this.refreshBlocked();
+  }
+
+  /** A `subscriptionRequest` event. */
+  addIncoming(jid: string) {
+    const address = jid.split('/')[0].toLowerCase();
+    if (this.isBlocked(address) || this.isContact(address)) return;
+    if (this.incoming.some((c) => c.address === address)) return;
+    if (prefs.autoApprove || this.preapproved.includes(address)) {
+      this.act(async (b) => b.approveSubscription(address));
+      return;
+    }
+    this.incoming.push(toContactItem(address, null, Date.now()));
+  }
+
+  loadLocal() {
+    if (live) this.preapproved = settings.get<string[]>('preapproved') ?? [];
+  }
+
+  /** Run a bridge call for an action, tell about a failure, and read the lists again. */
+  private act(f: (b: Awaited<ReturnType<typeof api>>) => Promise<unknown>, unsupported?: string) {
+    if (!live) return;
+    void (async () => {
+      try {
+        await f(await api());
+      } catch (e) {
+        const code = (e as { code?: string } | null)?.code;
+        ui.say(code === 'unsupported' && unsupported ? unsupported : plainError(e));
+      }
+      await this.refresh();
+    })();
   }
 
   // --- actions -----------------------------------------------------
@@ -134,7 +189,7 @@ class ContactsStore {
       this.accept(address);
       return { ok: true, message: `${address} had asked already. You are now contacts.` };
     }
-    // TODO: await api.addContact(address)
+    this.act(async (b) => b.addContact(address));
     this.outgoing.push({
       address,
       name: address.split('@')[0],
@@ -149,7 +204,7 @@ class ContactsStore {
 
   /** Accept an incoming request. Maps to api.approveSubscription(jid). */
   accept(address: string) {
-    // TODO: await api.approveSubscription(address)
+    this.act(async (b) => b.approveSubscription(address));
     const item = this.incoming.find((c) => c.address === address);
     if (!item) return;
     this.incoming = this.incoming.filter((c) => c.address !== address);
@@ -158,19 +213,19 @@ class ContactsStore {
 
   /** Ignore an incoming request. Maps to api.denySubscription(jid). */
   ignore(address: string) {
-    // TODO: await api.denySubscription(address)
+    this.act(async (b) => b.denySubscription(address));
     this.incoming = this.incoming.filter((c) => c.address !== address);
   }
 
   /** Cancel a request you sent. Maps to api.removeContact(jid). */
   cancel(address: string) {
-    // TODO: await api.removeContact(address)
+    this.act(async (b) => b.removeContact(address));
     this.outgoing = this.outgoing.filter((c) => c.address !== address);
   }
 
   /** Maps to api.removeContact(jid). */
   remove(address: string) {
-    // TODO: await api.removeContact(address)
+    this.act(async (b) => b.removeContact(address));
     this.contacts = this.contacts.filter((c) => c.address !== address);
   }
 
@@ -181,14 +236,15 @@ class ContactsStore {
       return { ok: false, error: 'That does not look like an address. Try sam@chord.example.' };
     }
     if (this.preapproved.includes(address)) return { ok: false, error: 'That address is already approved.' };
-    // TODO: await api.preapproveSubscription(address)
+    this.act(async (b) => b.preapproveSubscription(address));
     this.preapproved.push(address);
+    if (live) settings.set('preapproved', $state.snapshot(this.preapproved));
     return { ok: true, message: `${address} is approved. Their request will be accepted.` };
   }
 
-  /** Maps to the coming api.blockContact(jid). Also removes the contact. */
+  /** Maps to api.blockContact(jid). Also removes the contact. */
   block(address: string) {
-    // TODO: await api.blockContact(address)
+    this.act(async (b) => b.blockContact(address), 'Your server cannot block people.');
     const p = this.person(address);
     this.contacts = this.contacts.filter((c) => c.address !== address);
     this.incoming = this.incoming.filter((c) => c.address !== address);
@@ -205,15 +261,24 @@ class ContactsStore {
     }
   }
 
-  /** Maps to the coming api.unblockContact(jid). */
+  /** Maps to api.unblockContact(jid). */
   unblock(address: string) {
-    // TODO: await api.unblockContact(address)
+    this.act(async (b) => b.unblockContact(address), 'Your server cannot block people.');
     this.blocked = this.blocked.filter((c) => c.address !== address);
   }
 
-  /** Reload the blocked list. Maps to the coming api.blockedContacts(). */
-  refreshBlocked() {
-    // TODO: this.blocked = (await api.blockedContacts()).map(toItem)
+  /** Reload the blocked list. Maps to api.blockedContacts(). */
+  async refreshBlocked() {
+    if (!live) return;
+    try {
+      const list = await (await api()).blockedContacts();
+      this.blocked = list.map((jid) => {
+        const known = this.contacts.find((c) => c.address === jid);
+        return known ?? toContactItem(jid, null);
+      });
+    } catch (e) {
+      ui.say(plainError(e));
+    }
   }
 
   /** Open the DM with an address. */

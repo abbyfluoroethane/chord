@@ -19,7 +19,7 @@
   {#if c}
     <span class="ico"><Icon icon={isDm ? AtSign : Hash} size={20} /></span>
     <h1 class="title">{c.name}</h1>
-    {#if isDm}
+    {#if isDm && c.unknownPresence !== true}
       <Presence kind={presenceKind(c.online, c.show)} size={10} />
     {/if}
     {#if c.topic}

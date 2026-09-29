@@ -1,5 +1,11 @@
-// UI state over sample data. The bridge replaces the data sources later.
+// UI state. In the browser preview it runs on sample data. Inside Tauri the live
+// controller (live.svelte.ts) fills the lists from the bridge, and the actions
+// below call the bridge. Each action names its bridge call.
 import * as fx from '$lib/fixtures/data';
+import type { NotificationSetting, SpaceAccess, TimelineSubscription } from '$lib/chord';
+import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle } from './adapt';
+import { api, live } from './bridge';
+import { settings } from './local';
 import type {
   ChannelItem,
   MemberItem,
@@ -10,6 +16,7 @@ import type {
   TimelineItem
 } from './types';
 import { spaceKey } from './types';
+import { ui } from './ui.svelte';
 
 export const HOME = 'home';
 const HIDDEN_KEY = 'chord.hiddenDms';
@@ -18,34 +25,73 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+/** What the UI waits for before it selects something: a new circle or channel. */
+interface Pending {
+  space?: string;
+  jid?: string;
+}
+
+const slug = (s: string) =>
+  s
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
 class AppState {
-  me = $state(clone(fx.me));
-  spaces = $state<SpaceItem[]>(clone(fx.spaces));
-  channels = $state<ChannelItem[]>(clone(fx.channels));
-  timelines = $state<Record<string, TimelineItem[]>>(clone(fx.timelines));
-  members = $state<Record<string, MemberItem[]>>(clone(fx.members));
-  typing = $state<Record<string, string[]>>(clone(fx.typing));
-  publicCircles: PublicCircle[] = fx.publicCircles;
+  me = $state(live ? { address: '', name: '', avatar: null, show: 'chat' as Show } : clone(fx.me));
+  spaces = $state<SpaceItem[]>(live ? [] : clone(fx.spaces));
+  channels = $state<ChannelItem[]>(live ? [] : clone(fx.channels));
+  timelines = $state<Record<string, TimelineItem[]>>(live ? {} : clone(fx.timelines));
+  members = $state<Record<string, MemberItem[]>>(live ? {} : clone(fx.members));
+  typing = $state<Record<string, string[]>>(live ? {} : clone(fx.typing));
+  publicCircles = $state<PublicCircle[]>(live ? [] : fx.publicCircles);
+  /** Circles that wait for the owner to approve us (live). */
+  pendingJoins = $state<{ service: string; node: string; name: string }[]>([]);
+
+  /** The space list arrived (always true for sample data). */
+  spacesReady = $state(!live);
 
   /** First unread message id per channel. Drives the "new" divider. */
-  newFrom = $state<Record<string, string | null>>({ ...fx.firstUnread });
+  newFrom = $state<Record<string, string | null>>(live ? {} : { ...fx.firstUnread });
   notifyLevel = $state<Record<string, NotificationLevel>>({});
   nickname = $state<Record<string, string>>({});
 
+  // Live data that the controller keeps.
+  /** Notification level of each peer, from the bridge. */
+  levels = $state<Record<string, NotificationSetting>>({});
+  /** Mentions since the channel was last read, from Notification events. */
+  mentions = $state<Record<string, number>>({});
+  /** Ids of the messages that mention us. */
+  mentionIds = $state<Record<string, true>>({});
+  /** Presence of the person in the open direct chat. */
+  dmPresence = $state<Record<string, { show: Show; online: boolean }>>({});
+  /** Chats that exist only here, until the first message. */
+  localChannels = $state<ChannelItem[]>([]);
+  /** The running timeline subscription of the open channel (live). */
+  timelineSub: TimelineSubscription | null = null;
+  private pending: Pending | null = null;
+
   selectedSpace = $state<string>(HOME);
   private lastChannel: Record<string, string> = {};
-  selectedJid = $state<string>('launch-ops-general@chat.foid.space');
+  selectedJid = $state<string>(live ? '' : 'launch-ops-general@chat.foid.space');
 
   replyingTo = $state<TimelineItem | null>(null);
   editingId = $state<string | null>(null);
 
   /** Home shows the contacts page instead of a DM. */
-  showContacts = $state(false);
+  showContacts = $state(live);
   /** DMs the user closed. They come back when the user opens them again. Local only. */
   hiddenDms = $state<string[]>([]);
 
+  /** How many unread messages the open channel had when the user opened it. */
+  private unreadOnOpen: Record<string, number> = {};
+  private typingTo: string | null = null;
+  private typingTimer: ReturnType<typeof setTimeout> | undefined;
+
   constructor() {
-    // Start in the first circle, on its first channel.
+    if (live) return;
+    // Sample data: start in the first circle, on its first channel.
     this.selectedSpace = spaceKey(this.spaces[0]);
     this.enterChannel();
   }
@@ -53,21 +99,43 @@ class AppState {
   // --- derived -----------------------------------------------------
 
   channel = $derived(this.channels.find((c) => c.jid === this.selectedJid) ?? null);
-  items = $derived(this.timelines[this.selectedJid] ?? []);
+  items = $derived.by(() => {
+    const list = this.timelines[this.selectedJid] ?? [];
+    if (!live) return list;
+    return list.map((m) => (this.mentionIds[m.id] ? { ...m, mention: true } : m));
+  });
   dividerId = $derived(this.newFrom[this.selectedJid] ?? null);
   membersHere = $derived(
     this.selectedSpace === HOME ? [] : (this.members[this.selectedSpace] ?? [])
   );
-  spaceChannels = $derived(
-    this.selectedSpace === HOME
-      ? this.channels.filter((c) => c.kind === 'dm' && !this.hiddenDms.includes(c.jid))
-      : this.channels.filter((c) => c.space === this.selectedSpace)
-  );
+  spaceChannels = $derived(this.channelsOf(this.selectedSpace));
   currentSpace = $derived(this.spaces.find((s) => spaceKey(s) === this.selectedSpace) ?? null);
   typingHere = $derived(this.typing[this.selectedJid] ?? []);
+  /** I can delete the messages of other people in this room. */
+  canModerate = $derived.by(() => {
+    const mine = this.membersHere.find((m) => m.id === this.me.address);
+    return !!mine && (mine.affiliation === 'owner' || mine.affiliation === 'admin' || mine.role === 'Moderator');
+  });
+  /** I can change the roles and the settings of this room. */
+  isRoomAdmin = $derived.by(() => {
+    const mine = this.membersHere.find((m) => m.id === this.me.address);
+    return !!mine && (mine.affiliation === 'owner' || mine.affiliation === 'admin');
+  });
+
+  /** Home: the chats and the rooms that are in no circle. */
+  private channelsOf(key: string): ChannelItem[] {
+    return key === HOME
+      ? this.channels.filter((c) => c.space === null && !this.hiddenDms.includes(c.jid))
+      : this.channels.filter((c) => c.space === key);
+  }
 
   spaceOf(key: string): SpaceItem | undefined {
     return this.spaces.find((s) => spaceKey(s) === key);
+  }
+
+  /** My nickname in a circle. */
+  myNick(space: string | null): string {
+    return (space && this.nickname[space]) || this.me.name || this.me.address.split('@')[0];
   }
 
   /** Totals for the rail. Muted channels do not count. */
@@ -75,7 +143,7 @@ class AppState {
     let unread = 0;
     let mentions = 0;
     for (const c of this.channels) {
-      const inSpace = key === HOME ? c.kind === 'dm' : c.space === key;
+      const inSpace = key === HOME ? c.space === null : c.space === key;
       if (!inSpace || c.muted) continue;
       unread += c.unread;
       mentions += c.mentions;
@@ -90,7 +158,7 @@ class AppState {
     this.leaveChannel();
     this.selectedSpace = key;
     this.showContacts = false;
-    const list = key === HOME ? this.channels.filter((c) => c.kind === 'dm' && !this.hiddenDms.includes(c.jid)) : this.channels.filter((c) => c.space === key);
+    const list = this.channelsOf(key);
     const remembered = this.lastChannel[key];
     const target = list.find((c) => c.jid === remembered) ?? list[0];
     this.selectedJid = target?.jid ?? '';
@@ -104,7 +172,7 @@ class AppState {
     this.hiddenDms = this.hiddenDms.filter((x) => x !== jid);
     if (jid === this.selectedJid) return;
     this.leaveChannel();
-    this.selectedSpace = c.kind === 'dm' ? HOME : (c.space ?? HOME);
+    this.selectedSpace = c.space ?? HOME;
     this.selectedJid = jid;
     this.lastChannel[this.selectedSpace] = jid;
     this.enterChannel();
@@ -119,10 +187,13 @@ class AppState {
   /** Hide a DM from the list. The messages stay. */
   closeDm(jid: string) {
     if (!this.hiddenDms.includes(jid)) this.hiddenDms.push(jid);
-    try {
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify(this.hiddenDms));
-    } catch {
-      /* ignore */
+    if (live) settings.set('hiddenDms', $state.snapshot(this.hiddenDms));
+    else {
+      try {
+        localStorage.setItem(HIDDEN_KEY, JSON.stringify(this.hiddenDms));
+      } catch {
+        /* ignore */
+      }
     }
     if (jid !== this.selectedJid) return;
     const next = this.spaceChannels[0];
@@ -131,6 +202,11 @@ class AppState {
   }
 
   loadLocal() {
+    if (live) {
+      this.hiddenDms = settings.get<string[]>('hiddenDms') ?? [];
+      this.nickname = settings.get<Record<string, string>>('nicks') ?? {};
+      return;
+    }
     try {
       const raw = localStorage.getItem(HIDDEN_KEY);
       if (raw) this.hiddenDms = JSON.parse(raw) as string[];
@@ -140,6 +216,7 @@ class AppState {
   }
 
   private leaveChannel() {
+    this.stopTyping();
     this.replyingTo = null;
     this.editingId = null;
     // Leaving a channel reads it.
@@ -149,10 +226,81 @@ class AppState {
   private enterChannel() {
     this.lastChannel[this.selectedSpace] = this.selectedJid;
     const c = this.channels.find((x) => x.jid === this.selectedJid);
+    if (live) {
+      if (!c) return;
+      this.unreadOnOpen[c.jid] = c.unread;
+      this.mentions[c.jid] = 0;
+      void this.openLive(c);
+      return;
+    }
     if (c) {
       c.unread = 0;
       c.mentions = 0;
     }
+  }
+
+  /** Join the room if needed and mark the channel read. */
+  private async openLive(c: ChannelItem) {
+    try {
+      const b = await api();
+      if (c.kind === 'channel' && !c.joined) {
+        await b.joinRoom(c.jid, this.myNick(c.space));
+      }
+      await this.readOnBridge(c);
+    } catch (e) {
+      ui.say(plainError(e));
+    }
+  }
+
+  private async readOnBridge(c: { jid: string; pm?: { room: string; nick: string } | null }) {
+    const b = await api();
+    if (c.pm) await b.markReadPrivate(c.pm.room, c.pm.nick);
+    else await b.markRead(c.jid);
+  }
+
+  /** The controller calls this when a list changed: pick something if nothing fits. */
+  ensureSelection() {
+    this.resolvePending();
+    if (this.selectedSpace === HOME && this.showContacts) return;
+    const list = this.spaceChannels;
+    if (list.some((c) => c.jid === this.selectedJid)) return;
+    const next = list.find((c) => c.jid === this.lastChannel[this.selectedSpace]) ?? list[0];
+    if (next) {
+      this.selectedJid = next.jid;
+      this.enterChannel();
+    } else if (this.selectedSpace === HOME) {
+      this.selectedJid = '';
+      this.showContacts = true;
+    } else if (this.selectedSpace !== HOME && !this.spaceOf(this.selectedSpace) && this.spacesReady) {
+      // The circle is gone (left, or deleted).
+      this.selectedSpace = HOME;
+      this.selectedJid = '';
+      this.showContacts = true;
+    }
+  }
+
+  private resolvePending() {
+    const p = this.pending;
+    if (!p) return;
+    if (p.space) {
+      if (!this.spaceOf(p.space)) return;
+      if (this.selectedSpace !== p.space) this.selectSpace(p.space);
+    }
+    if (p.jid) {
+      if (!this.channels.some((c) => c.jid === p.jid)) return;
+      this.selectChannel(p.jid);
+    }
+    this.pending = null;
+  }
+
+  /** The "new" line: the first of the unread incoming messages, from the first load. */
+  markDivider(jid: string, items: TimelineItem[]) {
+    const n = this.unreadOnOpen[jid] ?? 0;
+    delete this.unreadOnOpen[jid];
+    if (n <= 0) return;
+    const incoming = items.filter((m) => !m.outgoing);
+    const first = incoming[Math.max(0, incoming.length - n)];
+    if (first) this.newFrom[jid] = first.id;
   }
 
   /** Step through the channels of the current circle. */
@@ -177,6 +325,7 @@ class AppState {
     }
   }
 
+  /** Maps to api.markRead(peer) or api.markReadPrivate(room, nick). */
   markRead(jid: string = this.selectedJid) {
     const c = this.channels.find((x) => x.jid === jid);
     if (c) {
@@ -184,6 +333,48 @@ class AppState {
       c.mentions = 0;
     }
     this.newFrom[jid] = null;
+    if (live && jid) {
+      this.mentions[jid] = 0;
+      const pm = splitPrivate(jid);
+      void this.readOnBridge({ jid, pm }).catch((e) => ui.say(plainError(e)));
+    }
+  }
+
+  // --- typing ------------------------------------------------------
+
+  /** The composer calls this on input. Maps to api.setTyping(peer, typing). */
+  noteTyping(hasText: boolean) {
+    if (!live) return;
+    const jid = this.selectedJid;
+    if (!jid) return;
+    if (!hasText) {
+      this.stopTyping();
+      return;
+    }
+    if (this.typingTo !== jid) {
+      this.stopTyping();
+      this.typingTo = jid;
+      void this.sendTyping(jid, true);
+    }
+    clearTimeout(this.typingTimer);
+    // Five seconds without input: we stop typing.
+    this.typingTimer = setTimeout(() => this.stopTyping(), 5000);
+  }
+
+  stopTyping() {
+    clearTimeout(this.typingTimer);
+    if (!this.typingTo) return;
+    const jid = this.typingTo;
+    this.typingTo = null;
+    void this.sendTyping(jid, false);
+  }
+
+  private async sendTyping(jid: string, typing: boolean) {
+    try {
+      await (await api()).setTyping(jid, typing);
+    } catch {
+      /* A lost typing hint does no harm. */
+    }
   }
 
   // --- messages ----------------------------------------------------
@@ -193,9 +384,15 @@ class AppState {
     return this.timelines[jid];
   }
 
-  send(body: string) {
+  /**
+   * Send a message. Maps to api.sendChat(to, body), api.sendPrivate(room, nick, body)
+   * for a private chat, and api.reply(itemId, body) when replying.
+   * Live: the timeline shows the message when the diff arrives. Returns false on failure.
+   */
+  send(body: string): boolean | Promise<boolean> {
     const text = body.trim();
-    if (!text) return;
+    if (!text) return false;
+    if (live) return this.sendLive(text);
     const list = this.list(this.selectedJid);
     const prev = list[list.length - 1];
     const reply = this.replyingTo;
@@ -227,6 +424,26 @@ class AppState {
       const m = this.timelines[this.selectedJid]?.find((x) => x.id === id);
       if (m) m.status = 'sent';
     }, 500);
+    return true;
+  }
+
+  private async sendLive(text: string): Promise<boolean> {
+    const jid = this.selectedJid;
+    if (!jid) return false;
+    const reply = this.replyingTo;
+    this.replyingTo = null;
+    this.stopTyping();
+    try {
+      const b = await api();
+      const pm = splitPrivate(jid);
+      if (reply) await b.reply(reply.id, text);
+      else if (pm) await b.sendPrivate(pm.room, pm.nick, text);
+      else await b.sendChat(jid, text);
+      return true;
+    } catch (e) {
+      ui.say(plainError(e));
+      return false;
+    }
   }
 
   /** Attach a file. Sample data: the file stays local. */
@@ -261,19 +478,44 @@ class AppState {
     });
   }
 
+  /** Upload the file at `path` to the open chat. Maps to api.upload(to, path). */
+  async uploadPath(path: string) {
+    const jid = this.selectedJid;
+    if (!live || !jid) return;
+    try {
+      await (await api()).upload(jid, path);
+      ui.say('File sent.');
+    } catch (e) {
+      ui.say(plainError(e));
+    }
+  }
+
+  /** Maps to api.editMessage(itemId, body). */
   edit(id: string, body: string) {
     const m = this.items.find((x) => x.id === id);
     const text = body.trim();
     if (!m || !text) return;
     if (text !== m.body) {
-      m.body = text;
-      m.edited = true;
+      if (live) {
+        void this.call(async (b) => b.editMessage(id, text));
+      } else {
+        const own = this.timelines[this.selectedJid]?.find((x) => x.id === id);
+        if (own) {
+          own.body = text;
+          own.edited = true;
+        }
+      }
     }
     this.editingId = null;
   }
 
+  /** Maps to api.retractMessage(itemId). */
   retract(id: string) {
-    const m = this.items.find((x) => x.id === id);
+    if (live) {
+      void this.call(async (b) => b.retractMessage(id));
+      return;
+    }
+    const m = this.timelines[this.selectedJid]?.find((x) => x.id === id);
     if (m) {
       m.retracted = true;
       m.attachment = null;
@@ -281,8 +523,22 @@ class AppState {
     }
   }
 
+  /** Delete my message, or as a moderator the message of another. Maps to api.moderateMessage. */
+  deleteMessage(m: TimelineItem) {
+    if (m.outgoing || !live) {
+      this.retract(m.id);
+      return;
+    }
+    void this.call(async (b) => b.moderateMessage(m.id));
+  }
+
+  /** Maps to api.toggleReaction(itemId, emoji). */
   toggleReaction(id: string, emoji: string) {
-    const m = this.items.find((x) => x.id === id);
+    if (live) {
+      void this.call(async (b) => b.toggleReaction(id, emoji));
+      return;
+    }
+    const m = this.timelines[this.selectedJid]?.find((x) => x.id === id);
     if (!m || m.retracted) return;
     const r = m.reactions.find((x) => x.emoji === emoji);
     if (!r) {
@@ -294,6 +550,15 @@ class AppState {
     } else {
       r.count += 1;
       r.mine = true;
+    }
+  }
+
+  /** Show older messages. Maps to api.timelinePaginateBack(id, count) via the subscription. */
+  async paginateBack(count = 30): Promise<void> {
+    try {
+      await this.timelineSub?.paginateBack(count);
+    } catch (e) {
+      ui.say(plainError(e));
     }
   }
 
@@ -310,12 +575,57 @@ class AppState {
     this.replyingTo = m;
   }
 
+  /** Run a bridge call. A failure shows as a notice in plain words. */
+  async call<T>(
+    f: (b: Awaited<ReturnType<typeof api>>) => Promise<T>
+  ): Promise<{ ok: true; value: T } | { ok: false }> {
+    try {
+      return { ok: true, value: await f(await api()) };
+    } catch (e) {
+      ui.say(plainError(e));
+      return { ok: false };
+    }
+  }
+
+  // --- notification levels ------------------------------------------
+
+  /** Maps to api.setNotificationLevel(peer, level). */
+  async setLevel(jid: string, level: NotificationLevel) {
+    this.notifyLevel[jid] = level;
+    if (!live) {
+      const c = this.channels.find((x) => x.jid === jid);
+      if (c) c.muted = level === 'nothing';
+      return;
+    }
+    const bridgeLevel = levelToBridge(level);
+    const r = await this.call((b) => b.setNotificationLevel(jid, bridgeLevel));
+    if (r.ok) this.levels[jid] = { level: bridgeLevel, muteUntil: null };
+  }
+
+  /** The level of a channel or a chat, for the menus. */
+  levelOf(jid: string): NotificationLevel {
+    const known = this.levels[jid];
+    if (known) return known.level === 'none' ? 'nothing' : known.level;
+    return this.notifyLevel[jid] ?? 'all';
+  }
+
+  /** The level of a circle: the level that all its channels share, or "all". */
+  async setCircleLevel(space: string, level: NotificationLevel) {
+    this.notifyLevel[space] = level;
+    if (!live) return;
+    for (const c of this.channels.filter((x) => x.space === space && x.kind === 'channel')) {
+      await this.setLevel(c.jid, level);
+    }
+  }
+
   // --- circles -----------------------------------------------------
 
   setShow(show: Show) {
+    // The bridge has no command for our own presence yet. The choice stays local.
     this.me.show = show;
   }
 
+  /** Sample data only. */
   createCircle(name: string): string {
     const clean = name.trim();
     const node = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'circle';
@@ -323,11 +633,62 @@ class AppState {
     return this.addCircle(s, 'Say hello.');
   }
 
+  /** Sample data only. */
   joinCircle(p: PublicCircle): string {
     return this.addCircle(
       { service: p.service, node: p.node, name: p.name, avatar: null },
       p.description
     );
+  }
+
+  /**
+   * Create a circle. Maps to api.createSpace(name, access), then makes a "general"
+   * channel. Returns false when it fails.
+   */
+  async createCircleAsync(name: string, access: SpaceAccess): Promise<boolean> {
+    if (!live) {
+      this.createCircle(name);
+      return true;
+    }
+    const made = await this.call((b) => b.createSpace(name.trim(), access));
+    if (!made.ok) return false;
+    const key = spaceKey({ service: made.value[0], node: made.value[1] });
+    this.pending = { space: key };
+    await this.makeRoom(key, 'general');
+    this.ensureSelection();
+    return true;
+  }
+
+  /** Join a public circle. Maps to api.joinSpace(service, node). */
+  async joinCircleAsync(p: PublicCircle): Promise<boolean> {
+    if (!live) {
+      this.joinCircle(p);
+      return true;
+    }
+    const r = await this.call((b) => b.joinSpace(p.service, p.node));
+    if (!r.ok) return false;
+    if (r.value === 'pending') {
+      ui.say(`Request sent. The owner of ${p.name} has to approve it.`);
+      await this.loadPendingJoins();
+    } else {
+      this.pending = { space: spaceKey(p) };
+      this.ensureSelection();
+    }
+    return true;
+  }
+
+  /** Maps to api.browseSpaces(). */
+  async loadPublicCircles() {
+    if (!live) return;
+    const r = await this.call((b) => b.browseSpaces());
+    if (r.ok) this.publicCircles = r.value.map(toPublicCircle);
+  }
+
+  /** Maps to api.pendingSpaceJoins(). */
+  async loadPendingJoins() {
+    if (!live) return;
+    const r = await this.call((b) => b.pendingSpaceJoins());
+    if (r.ok) this.pendingJoins = r.value.map(([service, node, name]) => ({ service, node, name }));
   }
 
   private addCircle(s: SpaceItem, topic: string): string {
@@ -359,29 +720,104 @@ class AppState {
     };
   }
 
+  /**
+   * Make a room in a circle. Maps to api.joinRoom (which makes it), api.configureRoom
+   * (its name), and api.addRoomToSpace. The room lives on the service of the circle.
+   */
+  private async makeRoom(space: string, name: string): Promise<boolean> {
+    const clean = slug(name);
+    if (!clean) return false;
+    const { service, node } = splitSpaceKey(space);
+    const room = `${node}-${clean}@${service}`;
+    const r = await this.call(async (b) => {
+      await b.joinRoom(room, this.myNick(space));
+      try {
+        await b.configureRoom(room, { name: clean });
+      } catch {
+        /* Only an owner can do this. The room works without a name. */
+      }
+      await b.addRoomToSpace(service, node, room, clean);
+    });
+    if (r.ok) this.pending = { ...(this.pending ?? {}), jid: this.pending?.jid ?? room };
+    return r.ok;
+  }
+
   createChannel(space: string, name: string) {
-    const clean = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const clean = slug(name);
     if (!clean) return;
+    if (live) {
+      this.pending = { space };
+      void this.makeRoom(space, name).then(() => this.ensureSelection());
+      return;
+    }
     const c = this.newChannel(space, clean, null);
     if (!this.channels.some((x) => x.jid === c.jid)) this.channels.push(c);
     this.selectChannel(c.jid);
   }
 
+  /** Maps to api.leaveSpace(service, node) and api.leaveRoom(room) for each room. */
   leaveCircle(key: string) {
     this.leaveChannel();
-    this.spaces = this.spaces.filter((s) => spaceKey(s) !== key);
-    this.channels = this.channels.filter((c) => c.space !== key);
+    if (live) {
+      const { service, node } = splitSpaceKey(key);
+      const rooms = this.channels.filter((c) => c.space === key && c.kind === 'channel' && c.joined);
+      void this.call(async (b) => {
+        for (const r of rooms) await b.leaveRoom(r.jid).catch(() => undefined);
+        await b.leaveSpace(service, node);
+      });
+    } else {
+      this.spaces = this.spaces.filter((s) => spaceKey(s) !== key);
+      this.channels = this.channels.filter((c) => c.space !== key);
+    }
     this.selectedSpace = '';
     this.selectSpace(HOME);
+  }
+
+  /** Change my nickname in every room of the circle. Maps to api.changeNick(room, nick). */
+  async changeNick(space: string, nick: string): Promise<void> {
+    this.nickname[space] = nick;
+    if (!live) return;
+    settings.set('nicks', $state.snapshot(this.nickname));
+    const rooms = this.channels.filter((c) => c.space === space && c.kind === 'channel' && c.joined);
+    await this.call(async (b) => {
+      for (const r of rooms) await b.changeNick(r.jid, nick);
+    });
+  }
+
+  /**
+   * Invite a person to a circle. Maps to api.addSpaceMember(service, node, jid), then
+   * api.inviteToRoom(room, jid) for each room of the circle that we know.
+   */
+  async inviteToCircle(space: string, address: string): Promise<boolean> {
+    if (!live) return true;
+    const { service, node } = splitSpaceKey(space);
+    const rooms = this.channels.filter((c) => c.space === space && c.kind === 'channel');
+    const r = await this.call(async (b) => {
+      await b.addSpaceMember(service, node, address);
+      for (const room of rooms) await b.inviteToRoom(room.jid, address).catch(() => undefined);
+    });
+    return r.ok;
+  }
+
+  /** Change the role of a person in the open room. Maps to api.setRoomAffiliation(room, jid, affiliation). */
+  async setAffiliation(
+    address: string,
+    affiliation: 'owner' | 'admin' | 'member' | 'none' | 'outcast'
+  ): Promise<void> {
+    const room = this.selectedJid;
+    if (!live || !room) return;
+    const r = await this.call((b) => b.setRoomAffiliation(room, address, affiliation));
+    if (r.ok) ui.say('Saved.');
   }
 
   /** Open a DM with a member. Creates the row when it is missing. */
   openDm(id: string, name: string, info?: { avatar: string | null; show: Show; online: boolean }) {
     if (!this.channels.some((c) => c.jid === id)) {
       const m = info ?? Object.values(this.members).flat().find((x) => x.id === id);
-      this.channels.push({
+      const pm = splitPrivate(id);
+      const row: ChannelItem = {
         jid: id,
-        name,
+        name: pm ? `${pm.nick} in ${pm.room.split('@')[0]}` : name,
         kind: 'dm',
         unread: 0,
         joined: true,
@@ -391,8 +827,13 @@ class AppState {
         space: null,
         avatar: m?.avatar ?? null,
         show: m?.show ?? null,
-        online: m?.online ?? false
-      });
+        online: m?.online ?? false,
+        pm,
+        unknownPresence: live
+      };
+      // Live: the controller keeps the row when it rebuilds the list.
+      if (live) this.localChannels.push(row);
+      this.channels.push(row);
     }
     this.selectChannel(id);
   }

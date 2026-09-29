@@ -26,6 +26,10 @@ export interface ChannelItem {
   avatar: string | null; // UI: DMs
   show: Show; // UI: DMs
   online: boolean; // UI: DMs
+  /** The private messages with one room member. Set for a `room/nick` chat. */
+  pm?: { room: string; nick: string } | null;
+  /** The bridge has no presence for this chat yet. The row shows no presence. */
+  unknownPresence?: boolean;
 }
 
 export interface MemberItem {
@@ -36,6 +40,10 @@ export interface MemberItem {
   show: Show;
   online: boolean;
   avatar: string | null;
+  /** Live data: the real JID, if the room shows it. */
+  jid?: string | null;
+  /** Live data: the nick in the room. */
+  nick?: string;
 }
 
 export interface Reaction {
@@ -89,7 +97,8 @@ export interface PublicCircle {
   node: string;
   name: string;
   description: string;
-  members: number;
+  /** Null when the server does not tell. */
+  members: number | null;
 }
 
 export type NotificationLevel = 'all' | 'mentions' | 'nothing';

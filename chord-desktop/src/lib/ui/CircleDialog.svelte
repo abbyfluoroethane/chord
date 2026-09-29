@@ -9,9 +9,13 @@
 </script>
 
 <script lang="ts">
-  // Dialogs opened from the circle menu. UI only, on sample data.
+  // Dialogs opened from the circle menu. Bridge calls: setNotificationLevel (each channel
+  // of the circle), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
+  // createChannel, and leaveSpace.
+  import { splitSpaceKey } from './adapt';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
+  import { live } from './bridge';
   import type { NotificationLevel } from './types';
 
   let { kind, space, onclose }: { kind: DialogKind; space: string; onclose: () => void } = $props();
@@ -20,6 +24,33 @@
   let text = $state('');
   let level = $state<NotificationLevel>('all');
   let copied = $state(false);
+  let mute = $state(false);
+  /** Join requests of the circle. Only an owner gets them. */
+  let requests = $state<{ jid: string; subid: string | null }[]>([]);
+  let requestsNote = $state('');
+
+  // Maps to api.spaceJoinRequests(service, node).
+  $effect(() => {
+    if (!live || kind !== 'settings') return;
+    const { service, node } = splitSpaceKey(space);
+    void app
+      .call((b) => b.spaceJoinRequests(service, node))
+      .then((r) => {
+        if (r.ok) {
+          requests = r.value;
+          requestsNote = r.value.length ? '' : 'Nobody is waiting to join.';
+        } else requestsNote = 'Only the owner of a circle sees join requests.';
+      });
+  });
+
+  // Maps to api.approveSpaceJoin and api.denySpaceJoin.
+  async function answer(jid: string, approve: boolean) {
+    const { service, node } = splitSpaceKey(space);
+    const r = await app.call((b) =>
+      approve ? b.approveSpaceJoin(service, node, jid) : b.denySpaceJoin(service, node, jid)
+    );
+    if (r.ok) requests = requests.filter((x) => x.jid !== jid);
+  }
 
   $effect.pre(() => {
     // Seed the fields once when the dialog opens.
@@ -30,6 +61,7 @@
           ? (circle?.name ?? '')
           : '';
     level = app.notifyLevel[space] ?? 'all';
+    mute = level === 'nothing';
   });
 
   const link = $derived(circle ? `chord:join?circle=${circle.node}@${circle.service}` : '');
@@ -44,9 +76,10 @@
 
   function save() {
     if (kind === 'create-channel') app.createChannel(space, text);
-    else if (kind === 'nickname' && text.trim()) app.nickname[space] = text.trim();
-    else if (kind === 'notifications') app.notifyLevel[space] = level;
-    else if (kind === 'settings' && circle && text.trim()) circle.name = text.trim();
+    else if (kind === 'nickname' && text.trim()) void app.changeNick(space, text.trim());
+    else if (kind === 'notifications') void app.setCircleLevel(space, mute ? 'nothing' : level);
+    // The bridge cannot rename a circle yet, so the name is read-only inside the app.
+    else if (kind === 'settings' && circle && text.trim() && !live) circle.name = text.trim();
     else if (kind === 'leave') app.leaveCircle(space);
     onclose();
   }
@@ -88,7 +121,7 @@
           <label class="radio"><input type="radio" name="level" value={l.v} bind:group={level} /> {l.label}</label>
         {/each}
       </fieldset>
-      <label class="radio"><input type="checkbox" /> Mute this circle</label>
+      <label class="radio"><input type="checkbox" bind:checked={mute} /> Mute this circle</label>
     {:else if kind === 'leave'}
       <p class="hint">
         You will leave {circle?.name} and lose its channels. You can join again if it is public.
@@ -98,8 +131,30 @@
         <label for="dlg-text">
           {kind === 'create-channel' ? 'Channel name' : kind === 'nickname' ? 'Nickname' : 'Circle name'}
         </label>
-        <input id="dlg-text" class="input" bind:value={text} autocomplete="off" />
+        <input
+          id="dlg-text"
+          class="input"
+          bind:value={text}
+          autocomplete="off"
+          readonly={live && kind === 'settings'}
+        />
+        {#if live && kind === 'settings'}
+          <span class="hint">Renaming a circle comes later.</span>
+        {/if}
       </div>
+      {#if live && kind === 'settings'}
+        <div class="field">
+          <span class="field-label">Join requests</span>
+          {#each requests as r (r.jid)}
+            <div class="req">
+              <span class="mono">{r.jid}</span>
+              <button type="button" class="btn" onclick={() => void answer(r.jid, true)}>Approve</button>
+              <button type="button" class="btn btn-ghost" onclick={() => void answer(r.jid, false)}>Deny</button>
+            </div>
+          {/each}
+          {#if requestsNote}<span class="hint">{requestsNote}</span>{/if}
+        </div>
+      {/if}
     {/if}
   </form>
 
@@ -128,6 +183,17 @@
   .hint {
     margin: 0;
     color: var(--ink-muted);
+  }
+  .req {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .req .mono {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .copy {
     display: flex;

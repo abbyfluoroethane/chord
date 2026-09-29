@@ -17,8 +17,8 @@
   function save() {
     const v = value.trim();
     if (!v) return;
-    // TODO: await api.changeNick(room, v) for each room of the circle
-    app.nickname[app.selectedSpace] = v;
+    // Maps to api.changeNick(room, nick) for each room of the circle.
+    void app.changeNick(app.selectedSpace, v);
     onclose();
   }
 </script>

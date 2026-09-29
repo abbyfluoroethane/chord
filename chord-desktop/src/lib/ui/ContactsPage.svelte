@@ -4,7 +4,11 @@
   import AddContact from './AddContact.svelte';
   import ContactsHeader from './ContactsHeader.svelte';
   import ContactsList from './ContactsList.svelte';
+  import { onMount } from 'svelte';
   import { contactsStore } from './contacts.svelte';
+
+  // Read the roster when the page opens. Maps to api.contacts() and api.blockedContacts().
+  onMount(() => void contactsStore.refresh());
 </script>
 
 <section class="page" aria-label="Contacts">

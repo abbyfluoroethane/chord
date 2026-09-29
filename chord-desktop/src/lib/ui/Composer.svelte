@@ -5,6 +5,8 @@
   import X from 'lucide-svelte/icons/x';
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
+  import { live } from './bridge';
+  import { ui } from './ui.svelte';
   import { typingText } from './format';
   import { tooltip } from './tooltip';
 
@@ -39,11 +41,19 @@
     box.style.height = `${Math.min(box.scrollHeight, 144)}px`;
   }
 
-  function send() {
-    if (!value.trim()) return;
-    app.send(value);
+  async function send() {
+    const text = value;
+    if (!text.trim()) return;
     value = '';
     queueMicrotask(fit);
+    const ok = await app.send(text);
+    // A message that did not go stays in the box, unless the user typed something new.
+    if (!ok && !value) value = text;
+  }
+
+  function input() {
+    fit();
+    app.noteTyping(value.trim().length > 0);
   }
 
   function keydown(e: KeyboardEvent) {
@@ -60,6 +70,13 @@
         app.editingId = last.id;
       }
     }
+  }
+
+  // The bridge uploads from a file path, and a browser file input has none. Inside the app a
+  // file dropped on the window has one. A file dialog needs the Tauri dialog plugin.
+  function upload() {
+    if (live) ui.say('Drag the file into the window to send it.');
+    else files?.click();
   }
 
   function picked() {
@@ -87,7 +104,7 @@
       class="upload"
       aria-label="Upload a file"
       use:tooltip={{ text: 'Upload a file', side: 'top' }}
-      onclick={() => files?.click()}
+      onclick={upload}
     >
       <Icon icon={Paperclip} size={20} />
     </button>
@@ -98,7 +115,7 @@
       rows="1"
       aria-label={placeholder}
       {placeholder}
-      oninput={fit}
+      oninput={input}
       onkeydown={keydown}
     ></textarea>
   </div>

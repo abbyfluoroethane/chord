@@ -4,6 +4,7 @@
   import Message from './Message.svelte';
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
+  import { live } from './bridge';
   import { clock, dayLabel, sameDay } from './format';
   import type { TimelineItem } from './types';
 
@@ -53,10 +54,38 @@
     scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'instant' });
   }
 
+  // Older messages: at the top of the list, ask for more (api.timelinePaginateBack).
+  // The new rows arrive above the view. Then the scroll position moves down by their height.
+  let loadingOlder = false;
+  let keep: { height: number; first: string | undefined } | null = null;
+
   function onscroll() {
     if (!scroller) return;
     atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    const scrolls = scroller.scrollHeight > scroller.clientHeight;
+    if (live && scrolls && scroller.scrollTop < 60 && !loadingOlder && app.items.length > 0) {
+      loadingOlder = true;
+      keep = { height: scroller.scrollHeight, first: app.items[0]?.id };
+      void app.paginateBack(30).finally(() =>
+        setTimeout(() => {
+          loadingOlder = false;
+          keep = null;
+        }, 800)
+      );
+    }
   }
+
+  // Keep the reader on the same message when older ones arrive above it.
+  $effect(() => {
+    const first = app.items[0]?.id;
+    if (keep && first !== keep.first && scroller) {
+      const before = keep.height;
+      keep = null;
+      queueMicrotask(() => {
+        if (scroller) scroller.scrollTop += scroller.scrollHeight - before;
+      });
+    }
+  });
 
   // A new channel opens at the bottom.
   $effect(() => {

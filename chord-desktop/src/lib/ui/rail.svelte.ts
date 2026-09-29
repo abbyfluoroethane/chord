@@ -45,6 +45,8 @@ export const localStoragePersistence: RailPersistence = {
 export class RailStore {
   layout = $state<RailEntry[]>([]);
   private persistence: RailPersistence;
+  /** `init` finished. Before that `sync` must not write, or it would erase the saved layout. */
+  private ready = false;
 
   constructor(persistence: RailPersistence = localStoragePersistence) {
     this.persistence = persistence;
@@ -59,6 +61,7 @@ export class RailStore {
   async init(circleIds: string[]) {
     const saved = (await this.persistence.load()) ?? [];
     this.layout = this.reconcile(saved, circleIds);
+    this.ready = true;
   }
 
   /** Drop circles that are gone. Append new circles at the end. */
@@ -84,6 +87,7 @@ export class RailStore {
 
   /** Call when circles are added or removed. */
   sync(circleIds: string[]) {
+    if (!this.ready) return;
     const next = this.reconcile($state.snapshot(this.layout) as RailEntry[], circleIds);
     if (JSON.stringify(next) !== JSON.stringify($state.snapshot(this.layout))) {
       this.layout = next;

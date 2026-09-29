@@ -41,7 +41,8 @@
       ? [{ label: 'Edit message', icon: Pencil, onselect: () => (app.editingId = item.id) }]
       : []),
     { label: 'Copy text', icon: Copy, onselect: () => void navigator.clipboard?.writeText(item.body) },
-    ...(item.outgoing
+    // Your own messages, or any message when you moderate the room.
+    ...(item.outgoing || app.canModerate
       ? [
           {
             label: 'Delete message',
@@ -50,7 +51,7 @@
             separator: true,
             // Shift-click skips the question.
             onselect: (e: MouseEvent | KeyboardEvent) =>
-              e.shiftKey ? app.retract(item.id) : (deleting = true)
+              e.shiftKey ? app.deleteMessage(item) : (deleting = true)
           }
         ]
       : [])

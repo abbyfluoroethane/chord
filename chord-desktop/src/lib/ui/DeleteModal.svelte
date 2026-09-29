@@ -25,7 +25,7 @@
     <button
       class="btn btn-danger"
       onclick={() => {
-        app.retract(item.id);
+        app.deleteMessage(item);
         onclose();
       }}>Delete</button
     >

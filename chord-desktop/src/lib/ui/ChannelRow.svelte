@@ -3,10 +3,15 @@
   import X from 'lucide-svelte/icons/x';
   import BellOff from 'lucide-svelte/icons/bell-off';
   import Avatar from './Avatar.svelte';
+  import Bell from 'lucide-svelte/icons/bell';
+  import Settings from 'lucide-svelte/icons/settings';
+  import ChannelSettings from './ChannelSettings.svelte';
   import Icon from './Icon.svelte';
+  import Menu, { type MenuItem } from './Menu.svelte';
+  import { app } from './app.svelte';
   import { tooltip } from './tooltip';
-  import { presenceKind, type ChannelItem } from './types';
-  import { ui } from './ui.svelte';
+  import { presenceKind, type ChannelItem, type NotificationLevel } from './types';
+  import { pointAnchor, ui } from './ui.svelte';
 
   let {
     channel,
@@ -22,6 +27,38 @@
   } = $props();
 
   const isDm = $derived(channel.kind === 'dm');
+  // The bridge sends no presence for a chat that is not open. Then the row shows none.
+  const known = $derived(channel.unknownPresence !== true);
+
+  // The menu of a channel. Maps to api.setNotificationLevel(room, level).
+  let menu = $state<{ anchor: HTMLElement } | null>(null);
+  let settingsOpen = $state(false);
+  const levels: { v: NotificationLevel; label: string }[] = [
+    { v: 'all', label: 'All messages' },
+    { v: 'mentions', label: 'Only mentions' },
+    { v: 'nothing', label: 'Nothing' }
+  ];
+  const items = $derived<MenuItem[]>([
+    {
+      label: 'Notifications',
+      icon: Bell,
+      submenu: levels.map((l) => ({
+        label: l.label,
+        checked: app.levelOf(channel.jid) === l.v,
+        onselect: () => void app.setLevel(channel.jid, l.v)
+      })),
+      onselect: () => {}
+    },
+    ...(selected && app.isRoomAdmin && !isDm
+      ? [{ label: 'Channel settings', icon: Settings, onselect: () => (settingsOpen = true) }]
+      : [])
+  ]);
+
+  function context(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    menu = { anchor: pointAnchor(e.clientX, e.clientY) };
+  }
   const unread = $derived(channel.unread > 0 && !channel.muted);
   const count = $derived(isDm ? channel.unread : channel.mentions);
   const desc = $derived(
@@ -34,7 +71,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="wrap"
-  oncontextmenu={isDm ? (e) => ui.openPersonMenu(e, channel.jid, channel.name) : undefined}
+  oncontextmenu={isDm && !channel.pm ? (e) => ui.openPersonMenu(e, channel.jid, channel.name) : context}
 >
   {#if unread && !selected}<span class="pill"></span>{/if}
   <button
@@ -43,7 +80,7 @@
     class:unread
     class:muted={channel.muted}
     class:dm={isDm}
-    class:offline={isDm && !channel.online}
+    class:offline={isDm && known && !channel.online}
     aria-label={desc}
     aria-current={selected ? 'true' : undefined}
     {onclick}
@@ -53,7 +90,7 @@
         name={channel.name}
         src={channel.avatar}
         size={32}
-        presence={presenceKind(channel.online, channel.show)}
+        presence={known ? presenceKind(channel.online, channel.show) : null}
         cut={selected ? 'var(--surface-300)' : 'var(--surface-200)'}
       />
     {:else}
@@ -77,6 +114,13 @@
     </button>
   {/if}
 </div>
+
+{#if menu}
+  <Menu anchor={menu.anchor} {items} label="{channel.name} menu" onclose={() => (menu = null)} />
+{/if}
+{#if settingsOpen}
+  <ChannelSettings {channel} onclose={() => (settingsOpen = false)} />
+{/if}
 
 <style>
   .wrap {

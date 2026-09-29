@@ -3,6 +3,7 @@
   import { onMount } from 'svelte';
   import Avatar from './Avatar.svelte';
   import { app } from './app.svelte';
+  import { live } from './bridge';
   import { presenceKind } from './types';
   import { ui } from './ui.svelte';
 
@@ -26,13 +27,13 @@
       error = 'The image is too big. Use one under 1 MB.';
       return;
     }
-    // TODO: await api.setAvatar(bytes, mime) once the bridge has it
+    // The bridge has no set_avatar command yet. Inside the app the button is off.
     app.me.avatar = URL.createObjectURL(f);
     if (file) file.value = '';
   }
 
   function save() {
-    // TODO: await api.setDisplayName(name) once the bridge has it
+    // The core cannot change the display name yet. Inside the app the field is read-only.
     app.me.name = name.trim();
     ui.say('Saved.');
   }
@@ -60,8 +61,10 @@
           tabindex="-1"
           onchange={pick}
         />
-        <button class="btn" onclick={() => file?.click()}>Change avatar</button>
-        {#if app.me.avatar}
+        <button class="btn" disabled={live} onclick={() => file?.click()}>Change avatar</button>
+        {#if live}
+          <span class="meta">Changing your avatar comes later.</span>
+        {:else if app.me.avatar}
           <button class="btn btn-ghost" onclick={() => (app.me.avatar = null)}>Remove</button>
         {/if}
       </div>
@@ -72,9 +75,18 @@
   <div class="field">
     <label for="display-name">Display name</label>
     <div class="line">
-      <input id="display-name" class="input grow" maxlength="40" bind:value={name} />
-      <button class="btn btn-primary" disabled={!changed} onclick={save}>Save</button>
+      <input
+        id="display-name"
+        class="input grow"
+        maxlength="40"
+        bind:value={name}
+        readonly={live}
+      />
+      <button class="btn btn-primary" disabled={live || !changed} onclick={save}>Save</button>
     </div>
+    {#if live}
+      <span class="meta">You cannot change your display name yet. Others see your address.</span>
+    {/if}
   </div>
 
   <div class="field">

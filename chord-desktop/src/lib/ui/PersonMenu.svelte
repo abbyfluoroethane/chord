@@ -1,6 +1,8 @@
 <script lang="ts">
   // The context menu for a person. Same items from every place that opens it.
   import Ban from 'lucide-svelte/icons/ban';
+  import Bell from 'lucide-svelte/icons/bell';
+  import Shield from 'lucide-svelte/icons/shield';
   import Copy from 'lucide-svelte/icons/copy';
   import MessageSquare from 'lucide-svelte/icons/message-square';
   import Pencil from 'lucide-svelte/icons/pencil';
@@ -11,7 +13,9 @@
   import Users from 'lucide-svelte/icons/users';
   import Menu, { type MenuItem } from './Menu.svelte';
   import { app, HOME } from './app.svelte';
+  import { live } from './bridge';
   import { contactsStore } from './contacts.svelte';
+  import { spaceKey, type NotificationLevel, type SpaceItem } from './types';
   import { ui, type PersonMenuState } from './ui.svelte';
 
   let { state: s }: { state: PersonMenuState } = $props();
@@ -24,10 +28,27 @@
     ui.say('Address copied.');
   }
 
-  function invite(name: string) {
-    // TODO: await api.inviteToRoom(room, address)
-    ui.say(`Invited ${p.name} to ${name}.`);
+  // Maps to api.addSpaceMember(service, node, jid) and api.inviteToRoom(room, jid).
+  async function invite(c: SpaceItem) {
+    if (await app.inviteToCircle(spaceKey(c), p.address)) ui.say(`Invited ${p.name} to ${c.name}.`);
   }
+
+  // A DM has its own notification level. Maps to api.setNotificationLevel(peer, level).
+  const dm = $derived(app.channels.find((c) => c.kind === 'dm' && c.jid === p.address));
+  const levels: { v: NotificationLevel; label: string }[] = [
+    { v: 'all', label: 'All messages' },
+    { v: 'mentions', label: 'Only mentions' },
+    { v: 'nothing', label: 'Nothing' }
+  ];
+  // The role of a member in the open room. Maps to api.setRoomAffiliation(room, jid, affiliation).
+  const canSetRole = $derived(
+    live && app.isRoomAdmin && !p.isMe && p.affiliation !== null && /^[^/]+@[^/]+$/.test(p.address)
+  );
+  const roles = [
+    { v: 'admin', label: 'Admin' },
+    { v: 'member', label: 'Member' },
+    { v: 'none', label: 'Guest' }
+  ] as const;
 
   const items = $derived.by<MenuItem[]>(() => {
     const out: MenuItem[] = [
@@ -54,7 +75,7 @@
         icon: Users,
         submenu: circles.map((c) => ({
           label: c.name,
-          onselect: () => invite(c.name)
+          onselect: () => void invite(c)
         })),
         onselect: () => {}
       });
@@ -79,6 +100,39 @@
               }
             }
       );
+    }
+    if (dm) {
+      out.push({
+        label: 'Notifications',
+        icon: Bell,
+        submenu: levels.map((l) => ({
+          label: l.label,
+          checked: app.levelOf(dm.jid) === l.v,
+          onselect: () => void app.setLevel(dm.jid, l.v)
+        })),
+        onselect: () => {}
+      });
+    }
+    if (canSetRole) {
+      out.push({
+        label: 'Role in this channel',
+        icon: Shield,
+        separator: true,
+        submenu: [
+          ...roles.map((r) => ({
+            label: r.label,
+            checked: p.affiliation === r.v,
+            onselect: () => void app.setAffiliation(p.address, r.v)
+          })),
+          {
+            label: 'Ban from this channel',
+            danger: true,
+            separator: true,
+            onselect: () => void app.setAffiliation(p.address, 'outcast')
+          }
+        ],
+        onselect: () => {}
+      });
     }
     if (p.isMe && app.selectedSpace !== HOME) {
       out.push({

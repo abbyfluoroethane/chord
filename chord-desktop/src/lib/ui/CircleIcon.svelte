@@ -4,10 +4,11 @@
 
   let { name, src = null, fill = false }: { name: string; src?: string | null; fill?: boolean } =
     $props();
+  let failed = $state('');
 </script>
 
-{#if src}
-  <img {src} alt="" class:fill />
+{#if src && failed !== src}
+  <img {src} alt="" class:fill onerror={() => (failed = src ?? '')} />
 {:else}
   <span class="face" class:fill style:background={tint(name)}>{initials(name)}</span>
 {/if}

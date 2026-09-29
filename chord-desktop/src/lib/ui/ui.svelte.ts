@@ -1,4 +1,6 @@
 // Small shell state: which panels and dialogs are open, and local notes.
+import { live } from './bridge';
+import { settings } from './local';
 import type { Placement } from './Popover.svelte';
 import type { SettingsPage } from './types';
 
@@ -21,7 +23,7 @@ export interface PersonMenuState {
 }
 
 /** An anchor for a menu that opens at the pointer. Popover only needs two methods. */
-function pointAnchor(x: number, y: number): HTMLElement {
+export function pointAnchor(x: number, y: number): HTMLElement {
   return {
     getBoundingClientRect: () => new DOMRect(x, y - 4, 0, 0),
     contains: () => false
@@ -54,8 +56,12 @@ class UiState {
     try {
       const v = localStorage.getItem(MEMBERS_KEY);
       if (v !== null) this.membersOpen = v === '1';
-      const n = localStorage.getItem(NOTES_KEY);
-      if (n) this.notes = JSON.parse(n) as Record<string, string>;
+      // Notes about people live in the local settings inside the app.
+      if (live) this.notes = settings.get<Record<string, string>>('notes') ?? {};
+      else {
+        const n = localStorage.getItem(NOTES_KEY);
+        if (n) this.notes = JSON.parse(n) as Record<string, string>;
+      }
     } catch {
       /* ignore */
     }
@@ -124,6 +130,10 @@ class UiState {
   setNote(address: string, text: string) {
     if (text.trim()) this.notes[address] = text;
     else delete this.notes[address];
+    if (live) {
+      settings.set('notes', $state.snapshot(this.notes));
+      return;
+    }
     try {
       localStorage.setItem(NOTES_KEY, JSON.stringify(this.notes));
     } catch {

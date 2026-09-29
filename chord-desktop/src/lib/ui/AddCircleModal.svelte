@@ -1,10 +1,13 @@
 <script lang="ts">
-  // "Create a circle" and "Join a circle". UI only, on sample data.
+  // "Create a circle" and "Join a circle". Bridge calls: createSpace(name, access),
+  // browseSpaces, joinSpace, and pendingSpaceJoins.
+  import type { SpaceAccess } from '$lib/chord/types';
   import Search from 'lucide-svelte/icons/search';
   import CircleIcon from './CircleIcon.svelte';
   import Icon from './Icon.svelte';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
+  import { live } from './bridge';
   import { spaceKey } from './types';
 
   let { onclose }: { onclose: () => void } = $props();
@@ -12,17 +15,36 @@
   let tab = $state<'create' | 'join'>('create');
   let name = $state('');
   let query = $state('');
+  let access = $state<SpaceAccess>('open');
+  let busy = $state(false);
+
+  // The list of public circles comes from the server.
+  $effect(() => {
+    if (tab === 'join') {
+      void app.loadPublicCircles();
+      void app.loadPendingJoins();
+    }
+  });
 
   const joined = $derived(new Set(app.spaces.map(spaceKey)));
   const shown = $derived(
     app.publicCircles.filter((c) => c.name.toLowerCase().includes(query.trim().toLowerCase()))
   );
 
-  function create(e: SubmitEvent) {
+  async function create(e: SubmitEvent) {
     e.preventDefault();
-    if (!name.trim()) return;
-    app.createCircle(name);
-    onclose();
+    if (!name.trim() || busy) return;
+    busy = true;
+    const ok = await app.createCircleAsync(name, access);
+    busy = false;
+    if (ok) onclose();
+  }
+
+  async function join(c: (typeof shown)[number]) {
+    busy = true;
+    const ok = await app.joinCircleAsync(c);
+    busy = false;
+    if (ok) onclose();
   }
 </script>
 
@@ -43,7 +65,17 @@
         <label for="circle-name">Circle name</label>
         <input id="circle-name" class="input" bind:value={name} placeholder="Launch Ops" autocomplete="off" />
       </div>
-      <button class="btn btn-primary" type="submit" disabled={!name.trim()}>Create circle</button>
+      {#if live}
+        <div class="field">
+          <label for="circle-access">Who can join</label>
+          <select id="circle-access" class="input" bind:value={access}>
+            <option value="open">Anyone</option>
+            <option value="authorize">People I approve</option>
+            <option value="whitelist">Only people I invite</option>
+          </select>
+        </div>
+      {/if}
+      <button class="btn btn-primary" type="submit" disabled={!name.trim() || busy}>Create circle</button>
     </form>
   {:else}
     <div class="form">
@@ -63,7 +95,9 @@
             <span class="info">
               <span class="name">{c.name}</span>
               <span class="meta">{c.description}</span>
-              <span class="mono addr">{spaceKey(c)} · {c.members} members</span>
+              <span class="mono addr"
+                >{spaceKey(c)}{c.members === null ? '' : ` · ${c.members} members`}</span
+              >
             </span>
             {#if joined.has(spaceKey(c))}
               <span class="meta">Joined</span>
@@ -71,10 +105,8 @@
               <button
                 class="btn"
                 aria-label="Join {c.name}"
-                onclick={() => {
-                  app.joinCircle(c);
-                  onclose();
-                }}>Join</button
+                disabled={busy}
+                onclick={() => void join(c)}>Join</button
               >
             {/if}
           </li>
@@ -82,6 +114,14 @@
           <li class="empty">No circle matches. Try an address instead.</li>
         {/each}
       </ul>
+      {#if live && app.pendingJoins.length}
+        <div class="pending">
+          <span class="meta">Waiting for approval</span>
+          {#each app.pendingJoins as p (p.service + '/' + p.node)}
+            <span class="mono addr">{p.name} · {p.service}/{p.node}</span>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 </Modal>
@@ -177,6 +217,11 @@
     color: var(--ink-muted);
     font-size: 12px;
     line-height: 16px;
+  }
+  .pending {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
   }
   .empty {
     color: var(--ink-muted);

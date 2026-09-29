@@ -19,11 +19,13 @@
   } = $props();
 
   const dot = $derived(Math.max(10, Math.round(size * 0.36)));
+  // A stored avatar can be missing (the bridge answers 404). Then the initials show.
+  let failed = $state('');
 </script>
 
 <span class="avatar" style:width="{size}px" style:height="{size}px" style:--cut={cut}>
-  {#if src}
-    <img {src} alt="" />
+  {#if src && failed !== src}
+    <img {src} alt="" onerror={() => (failed = src ?? '')} />
   {:else}
     <span class="fallback" style:background={tint(name)} style:font-size="{Math.round(size * 0.4)}px">
       {initials(name)}

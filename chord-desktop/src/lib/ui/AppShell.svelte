@@ -1,6 +1,6 @@
 <script lang="ts">
   // The signed-in window: rail | sidebar | chat | members. Global shortcuts live here.
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import AddCircleModal from './AddCircleModal.svelte';
   import ChannelSidebar from './ChannelSidebar.svelte';
   import Chat from './Chat.svelte';
@@ -14,6 +14,7 @@
   import ShortcutsModal from './ShortcutsModal.svelte';
   import Toast from './Toast.svelte';
   import { app, HOME } from './app.svelte';
+  import { contactsStore } from './contacts.svelte';
   import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
   import { spaceKey } from './types';
@@ -23,13 +24,23 @@
     ui.load();
     prefs.load();
     app.loadLocal();
-    void rail.init(app.spaces.map(spaceKey));
+    contactsStore.loadLocal();
+  });
+
+  // Load the rail layout once the circles are known. Before that the list is empty and
+  // the saved folders would look like they lost their circles.
+  let railStarted = false;
+  $effect(() => {
+    if (!app.spacesReady || railStarted) return;
+    railStarted = true;
+    const ids = untrack(() => app.spaces.map(spaceKey));
+    void rail.init(ids);
   });
 
   // Keep the rail in step when circles come and go.
   $effect(() => {
     const ids = app.spaces.map(spaceKey);
-    rail.sync(ids);
+    if (app.spacesReady) rail.sync(ids);
   });
 
   function keydown(e: KeyboardEvent) {

@@ -20,7 +20,7 @@
     <span class="ico"><Icon icon={File} size={24} /></span>
     <span class="info">
       <a href={file.url} target="_blank" rel="noopener noreferrer">{file.name}</a>
-      <span class="mono size">{fileSize(file.size)}</span>
+      {#if file.size > 0}<span class="mono size">{fileSize(file.size)}</span>{/if}
     </span>
     <a class="dl" href={file.url} download={file.name} aria-label="Download {file.name}">
       <Icon icon={Download} size={18} />
