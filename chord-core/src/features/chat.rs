@@ -3,6 +3,7 @@
 use jid::{BareJid, Jid};
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Id, Message, MessageType};
+use xmpp_parsers::oob::Oob;
 use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
 use super::{Ctx, new_id};
@@ -93,12 +94,21 @@ fn store(ctx: &mut Ctx<'_>, message: &Message, ids: MessageIds, timestamp: Optio
 
 /// Send a chat message and store it. Returns its origin-id.
 pub(crate) fn send(ctx: &mut Ctx<'_>, to: Jid, body: String) -> String {
+    send_with_oob(ctx, to, body, None)
+}
+
+/// Send a chat message with an optional XEP-0066 out-of-band URL and store it. Returns
+/// its origin-id.
+pub(crate) fn send_with_oob(ctx: &mut Ctx<'_>, to: Jid, body: String, oob: Option<Oob>) -> String {
     let origin_id = new_id();
     let mut message = Message::chat(to.clone())
         .with_body("".into(), body.clone())
         .with_payload(OriginId {
             id: origin_id.clone(),
         });
+    if let Some(oob) = oob {
+        message = message.with_payload(oob);
+    }
     message.id = Some(Id(origin_id.clone()));
     ctx.send(message);
 
