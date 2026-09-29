@@ -95,10 +95,20 @@ struct Row {
     status: String,
 }
 
-/// The newest `window` messages of `room`, oldest first.
+/// The `peer` value of a timeline: the room or the chat peer, or `room/nick` for the
+/// private messages with one occupant.
+pub(crate) fn peer_of(room: &BareJid, nick: Option<&str>) -> String {
+    match nick {
+        Some(nick) => format!("{room}/{nick}"),
+        None => room.to_string(),
+    }
+}
+
+/// The newest `window` messages of `peer`, oldest first. A peer with a `/` is a room
+/// occupant, and its messages show the nick as the sender name.
 pub(crate) fn query(
     q: &QueryCtx<'_>,
-    room: &BareJid,
+    room: &str,
     window: usize,
 ) -> rusqlite::Result<Vec<TimelineItem>> {
     let conn = q.store.conn();
@@ -110,7 +120,7 @@ pub(crate) fn query(
          WHERE account_id = ?1 AND peer = ?2
          ORDER BY timestamp DESC, id DESC LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![q.account_id, room.as_str(), window as i64], |row| {
+    let rows = stmt.query_map(params![q.account_id, room, window as i64], |row| {
         Ok(Row {
             rowid: row.get(0)?,
             key_kind: row.get(1)?,
@@ -119,7 +129,7 @@ pub(crate) fn query(
             sender: row.get(4)?,
             body: row.get(5)?,
             timestamp: row.get(6)?,
-            groupchat: row.get::<_, String>(7)? == "groupchat",
+            groupchat: row.get::<_, String>(7)? == "groupchat" || room.contains('/'),
             edited: row.get(8)?,
             retracted: row.get(9)?,
             reply_to: row.get(10)?,
@@ -231,13 +241,12 @@ fn reactions(q: &QueryCtx<'_>, rowid: i64) -> rusqlite::Result<Vec<ReactionSumma
 
 fn reply_preview(
     q: &QueryCtx<'_>,
-    room: &BareJid,
+    room: &str,
     id: &str,
     sender: Option<&str>,
     groupchat: bool,
 ) -> rusqlite::Result<ReplyPreview> {
-    let found =
-        crate::store::queries::find_message(q.store.conn(), q.account_id, room.as_str(), id)?;
+    let found = crate::store::queries::find_message(q.store.conn(), q.account_id, room, id)?;
     match found {
         Some(m) => {
             let (sender_name, _) = display_name(q, &m.sender, groupchat)?;

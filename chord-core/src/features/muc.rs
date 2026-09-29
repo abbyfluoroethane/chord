@@ -1,7 +1,7 @@
 //! Multi-user chat (XEP-0045): join, leave, occupants, and groupchat messages.
 //!
-//! Not supported: private messages between occupants. A `chat` message from `room/nick`
-//! is dropped, because a timeline is keyed by a bare JID.
+//! Private messages between occupants (section 7.5) are chat rows with the peer
+//! `room@service/nick`. Their timeline is `ViewKey::PrivateTimeline`.
 
 use std::collections::HashMap;
 
@@ -26,8 +26,10 @@ use crate::store::queries::{self, Direction, KeyKind, MessageExtras, MessageKind
 use crate::views::{ChannelScope, ViewKey};
 
 const NS_MUC_OWNER: &str = "http://jabber.org/protocol/muc#owner";
+const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
+type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
 
 /// A join that waits for the self-presence or an error.
 #[derive(Debug)]
@@ -81,6 +83,12 @@ pub(crate) enum Command {
         room: BareJid,
         reply: Reply,
     },
+    SendPrivate {
+        room: BareJid,
+        nick: String,
+        body: String,
+        reply: PrivateReply,
+    },
 }
 
 impl ClientHandle {
@@ -132,6 +140,25 @@ impl ClientHandle {
     pub async fn remove_bookmark(&self, room: BareJid) -> Result<(), ClientError> {
         self.room_command(|reply| Command::RemoveBookmark { room, reply })
             .await
+    }
+
+    /// Send a private message to one occupant of a room (XEP-0045, section 7.5) and store
+    /// it. Returns its origin-id. Fails with `ClientError::Invalid` when we are not in the
+    /// room or the nick is not an occupant. Read the answers with `private_timeline`.
+    pub async fn send_private(
+        &self,
+        room: BareJid,
+        nick: String,
+        body: String,
+    ) -> Result<String, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(super::FeatureCommand::Muc(Command::SendPrivate {
+            room,
+            nick,
+            body,
+            reply,
+        }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
     async fn room_command(
@@ -221,15 +248,30 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             reply,
         } => bookmarks::add(ctx, room, name, autojoin, nick, reply),
         Command::RemoveBookmark { room, reply } => bookmarks::remove(ctx, room, reply),
+        Command::SendPrivate {
+            room,
+            nick,
+            body,
+            reply,
+        } => {
+            let _ = reply.send(send_private(ctx, &room, &nick, body));
+        }
     }
 }
 
 /// A command while no session is up. Answer each reply channel with an error.
 pub(crate) fn offline(command: Command) {
+    if let Command::SendPrivate { reply, .. } = command {
+        let _ = reply.send(Err(ClientError::NotConnected));
+        return;
+    }
     let (Command::Join { reply, .. }
     | Command::Leave { reply, .. }
     | Command::AddBookmark { reply, .. }
-    | Command::RemoveBookmark { reply, .. }) = command;
+    | Command::RemoveBookmark { reply, .. }) = command
+    else {
+        return;
+    };
     let _ = reply.send(Err(ClientError::NotConnected));
 }
 
@@ -466,12 +508,181 @@ pub(crate) fn send_chat(ctx: &mut Ctx<'_>, to: Jid, body: String) -> Result<Stri
     if !is_room(ctx, &room) {
         return Ok(super::chat::send(ctx, to, body));
     }
-    if to.is_full() {
-        return Err(ClientError::Unsupported(
-            "private messages to a room occupant".into(),
-        ));
+    if let Some(nick) = to.resource() {
+        return send_private(ctx, &room, nick.as_str(), body);
     }
     send(ctx, &room, body)
+}
+
+/// Whether `nick` is an occupant of `room` now.
+fn is_occupant(ctx: &Ctx<'_>, room: &BareJid, nick: &str) -> bool {
+    db(
+        ctx,
+        "read an occupant",
+        ctx.store
+            .conn()
+            .prepare_cached(
+                "SELECT 1 FROM occupants WHERE account_id = ?1 AND room = ?2 AND nick = ?3",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_row(params![ctx.account_id, room.as_str(), nick], |_| Ok(()))
+                    .optional()
+            }),
+    )
+    .flatten()
+    .is_some()
+}
+
+/// Send a private message to an occupant and store it. Returns its origin-id. The
+/// message is a `chat` with an empty muc#user element, so that carbons skip it.
+fn send_private(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    nick: &str,
+    body: String,
+) -> Result<String, ClientError> {
+    let Some(our_nick) = ctx.state.muc.nicks.get(room).cloned() else {
+        return Err(ClientError::Invalid(format!("not in the room {room}")));
+    };
+    if !is_occupant(ctx, room, nick) {
+        return Err(ClientError::Invalid(format!("{nick} is not in {room}")));
+    }
+    let to = Jid::new(&format!("{room}/{nick}"))
+        .map_err(|e| ClientError::Invalid(format!("bad nick {nick}: {e}")))?;
+    let origin_id = new_id();
+    let mut message = Message::chat(to.clone())
+        .with_body("".into(), body.clone())
+        .with_payload(OriginId {
+            id: origin_id.clone(),
+        });
+    message
+        .payloads
+        .push(Element::builder("x", NS_MUC_USER).build());
+    message.id = Some(Id(origin_id.clone()));
+    ctx.send(message);
+
+    let peer = to.to_string();
+    let sender = format!("{room}/{our_nick}");
+    let new = NewMessage {
+        kind: MessageKind::Chat,
+        key_kind: KeyKind::OriginId,
+        key: &origin_id,
+        direction: Direction::Out,
+        peer: &peer,
+        sender: &sender,
+        body: &body,
+        timestamp: None,
+        extras: MessageExtras {
+            message_id: Some(origin_id.clone()),
+            origin_id: Some(origin_id.clone()),
+            ..MessageExtras::default()
+        },
+    };
+    if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
+        ctx.store_error("store a sent message", e);
+    }
+    private_changed(ctx, room, nick);
+    Ok(origin_id)
+}
+
+fn private_changed(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str) {
+    ctx.changed(ViewKey::PrivateTimeline(room.clone(), nick.to_owned()));
+    ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
+}
+
+/// Store a private message: a `chat` or `normal` message between our account and a full
+/// JID of a room that we know (XEP-0045, section 7.5). It comes live, as a carbon of a
+/// message that another client sent, or from the archive. Returns false if `message` is
+/// no private message. With `live`, also report it as `MessageReceived`. Corrections,
+/// reactions, and markers are not supported in private messages.
+pub(crate) fn store_private(
+    ctx: &mut Ctx<'_>,
+    message: &Message,
+    ids: &MessageIds,
+    timestamp: Option<i64>,
+    live: bool,
+) -> bool {
+    if !matches!(message.type_, MessageType::Chat | MessageType::Normal) {
+        return false;
+    }
+    let Some(from) = &message.from else {
+        return false;
+    };
+    let (direction, occupant) = if from.to_bare() == *ctx.account {
+        match &message.to {
+            Some(to) => (Direction::Out, to),
+            None => return false,
+        }
+    } else {
+        (Direction::In, from)
+    };
+    let Some(nick) = occupant.resource().map(|n| n.as_str().to_owned()) else {
+        return false;
+    };
+    let room = occupant.to_bare();
+    if !is_room(ctx, &room) {
+        return false;
+    }
+    let Some((_, body)) = message.get_best_body(vec![]) else {
+        return true;
+    };
+    let peer = format!("{room}/{nick}");
+    let sender = match direction {
+        Direction::In => from.to_string(),
+        Direction::Out => format!(
+            "{room}/{}",
+            our_nick(ctx, &room).unwrap_or_else(|| ctx.account.to_string())
+        ),
+    };
+
+    if let (Some(stanza_id), Some(origin_id)) = (&ids.stanza_id, &ids.origin_id) {
+        match queries::upgrade_to_stanza_id(
+            ctx.store.conn(),
+            ctx.account_id,
+            origin_id,
+            direction,
+            &peer,
+            stanza_id,
+        ) {
+            Ok(true) => {
+                private_changed(ctx, &room, &nick);
+                return true;
+            }
+            Ok(false) => {}
+            Err(e) => ctx.store_error("update a message key", e),
+        }
+    }
+    let ids = MessageIds {
+        stanza_id: ids.stanza_id.clone(),
+        origin_id: ids.origin_id.clone(),
+    };
+    let extras = message_ext::extras(message, &ids);
+    let Some((key_kind, key)) = ids.key() else {
+        log::debug!("private message from {from} has no stanza-id or origin-id. Not stored.");
+        return true;
+    };
+    let new = NewMessage {
+        kind: MessageKind::Chat,
+        key_kind,
+        key: &key,
+        direction,
+        peer: &peer,
+        sender: &sender,
+        body,
+        timestamp,
+        extras,
+    };
+    match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
+        Ok(Some(stored)) => {
+            if live {
+                ctx.emit(ClientEvent::MessageReceived(stored));
+            }
+            private_changed(ctx, &room, &nick);
+        }
+        Ok(None) => log::debug!("message {key} is stored already"),
+        Err(e) => ctx.store_error("store a message", e),
+    }
+    true
 }
 
 /// Send a groupchat message and store it. Returns its origin-id.
@@ -581,7 +792,12 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         }
         MessageType::Error => log::warn!("error message from the room {from}"),
         // Private messages between occupants, and mediated invites.
-        _ => log::debug!("dropped a message from {from}: private messages are not supported"),
+        _ => {
+            let ids = MessageIds::of(message, ctx.account);
+            if !store_private(ctx, message, &ids, delay_ms(message), true) {
+                log::debug!("dropped a message from {from}: not a private message");
+            }
+        }
     }
     true
 }
@@ -999,6 +1215,7 @@ mod tests {
     use xmpp_parsers::stanza_id::StanzaId;
 
     const ROOM: &str = "dev@rooms.chord.localhost";
+    const ACCOUNT: &str = crate::features::testing::ACCOUNT;
 
     fn room() -> BareJid {
         BareJid::new(ROOM).unwrap()
@@ -1497,10 +1714,11 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, ClientError::Invalid(_)), "{err:?}");
+        // A full JID of the room is a private message. Bob is not an occupant.
         let err = h
             .with_ctx(|ctx| send_chat(ctx, jid(&format!("{ROOM}/bob")), "x".into()))
             .unwrap_err();
-        assert!(matches!(err, ClientError::Unsupported(_)), "{err:?}");
+        assert!(matches!(err, ClientError::Invalid(_)), "{err:?}");
         // A contact is a normal chat.
         h.with_ctx(|ctx| send_chat(ctx, jid("bob@chord.localhost"), "hi".into()))
             .unwrap();
@@ -1547,21 +1765,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_rooms_and_private_messages_are_not_stored() {
+    fn unknown_rooms_are_not_stored() {
         let mut h = Harness::new();
         let mut other = groupchat("bob", "hi", Some("s-1"), None);
         other.from = Some(jid("other@rooms.chord.localhost/bob"));
         h.with_ctx(|ctx| assert!(!on_message(ctx, &other)));
 
         joined(&mut h, "alice");
-        let mut private = groupchat("bob", "psst", Some("s-2"), None);
-        private.type_ = MessageType::Chat;
-        h.with_ctx(|ctx| assert!(on_message(ctx, &private), "handled, so chat ignores it"));
-        assert!(
-            messages_with(h.store.conn(), h.account_id, ROOM)
-                .unwrap()
-                .is_empty()
-        );
         // A status text from the room itself is not stored.
         let mut status = groupchat("bob", "The room is public", Some("s-3"), None);
         status.from = Some(jid(ROOM));
@@ -1571,6 +1781,126 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// A private message from an occupant. Our server stamps the stanza-id.
+    fn private(nick: &str, body: &str, stanza_id: Option<&str>) -> Message {
+        let mut m =
+            Message::chat(jid("alice@chord.localhost/chord")).with_body("".into(), body.into());
+        m.from = Some(jid(&format!("{ROOM}/{nick}")));
+        m.payloads.push(Element::builder("x", NS_MUC_USER).build());
+        if let Some(id) = stanza_id {
+            m = m.with_payload(StanzaId {
+                id: id.into(),
+                by: jid(ACCOUNT),
+            });
+        }
+        m
+    }
+
+    fn peer_rows(h: &Harness, peer: &str) -> Vec<queries::StoredMessage> {
+        messages_with(h.store.conn(), h.account_id, peer).unwrap()
+    }
+
+    #[test]
+    fn incoming_private_message_is_a_chat_row_of_the_occupant() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let m = private("bob", "psst", Some("pm-1"));
+        h.with_ctx(|ctx| assert!(on_message(ctx, &m)));
+        let peer = format!("{ROOM}/bob");
+        let rows = peer_rows(&h, &peer);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, MessageKind::Chat);
+        assert_eq!(rows[0].direction, Direction::In);
+        assert_eq!(rows[0].sender, peer);
+        assert!(peer_rows(&h, ROOM).is_empty(), "not in the room timeline");
+        let dirty = h.take_dirty();
+        assert!(dirty.contains(&ViewKey::PrivateTimeline(room(), "bob".into())));
+        assert!(!dirty.contains(&ViewKey::Timeline(room())));
+        assert!(h.effects.iter().any(|e| matches!(
+            e,
+            super::super::Effect::Emit(ClientEvent::MessageReceived(_))
+        )));
+        // Without the muc#user element, a chat from a full JID of the room is private too.
+        let mut plain = private("bob", "again", Some("pm-2"));
+        plain.payloads.retain(|p| !p.is("x", NS_MUC_USER));
+        h.with_ctx(|ctx| on_message(ctx, &plain));
+        assert_eq!(peer_rows(&h, &peer).len(), 2);
+    }
+
+    #[test]
+    fn private_message_carbons_and_archive_go_to_the_occupant_row() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        // A sent carbon: from our account, to the occupant.
+        let mut sent = Message::chat(jid(&format!("{ROOM}/bob")))
+            .with_body("".into(), "from my phone".into())
+            .with_payload(OriginId { id: "o-1".into() });
+        sent.payloads
+            .push(Element::builder("x", NS_MUC_USER).build());
+        sent.from = Some(jid("alice@chord.localhost/phone"));
+        h.with_ctx(|ctx| crate::features::chat::on_message(ctx, &sent));
+        let rows = peer_rows(&h, &format!("{ROOM}/bob"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].direction, Direction::Out);
+        assert_eq!(rows[0].sender, format!("{ROOM}/alice"));
+        assert!(peer_rows(&h, ROOM).is_empty());
+        // The archive returns a message from an occupant.
+        let archived = private("bob", "old", None);
+        h.with_ctx(|ctx| {
+            crate::features::chat::store_archived(ctx, &archived, "arch-1", Some(1000))
+        });
+        assert_eq!(peer_rows(&h, &format!("{ROOM}/bob")).len(), 2);
+        assert!(peer_rows(&h, ROOM).is_empty());
+    }
+
+    #[test]
+    fn send_private_sends_a_chat_with_muc_user_and_stores_it() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        // Bob is not an occupant yet.
+        let err = h
+            .with_ctx(|ctx| send_private(ctx, &room(), "bob", "hi".into()))
+            .unwrap_err();
+        assert!(matches!(err, ClientError::Invalid(_)), "{err:?}");
+        h.with_ctx(|ctx| {
+            on_presence(
+                ctx,
+                &occupant_presence(
+                    "bob",
+                    vec![],
+                    Item::new(Affiliation::Member, Role::Participant),
+                ),
+            )
+        });
+        h.take_dirty();
+        let id = h
+            .with_ctx(|ctx| send_private(ctx, &room(), "bob", "hi bob".into()))
+            .unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = &sent[..] else {
+            panic!("{sent:?}");
+        };
+        assert_eq!(m.type_, MessageType::Chat);
+        assert_eq!(m.to, Some(jid(&format!("{ROOM}/bob"))));
+        assert_eq!(m.id, Some(Id(id.clone())));
+        assert!(m.payloads.iter().any(|p| p.is("x", NS_MUC_USER)));
+        let rows = peer_rows(&h, &format!("{ROOM}/bob"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].direction, Direction::Out);
+        assert_eq!(rows[0].key, id);
+        assert!(peer_rows(&h, ROOM).is_empty());
+        assert!(
+            h.take_dirty()
+                .contains(&ViewKey::PrivateTimeline(room(), "bob".into()))
+        );
+        // A room that we left is an error.
+        let other = BareJid::new("other@rooms.chord.localhost").unwrap();
+        let err = h
+            .with_ctx(|ctx| send_private(ctx, &other, "bob", "x".into()))
+            .unwrap_err();
+        assert!(matches!(err, ClientError::Invalid(_)), "{err:?}");
     }
 
     #[test]

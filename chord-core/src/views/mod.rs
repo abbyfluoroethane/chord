@@ -35,6 +35,8 @@ pub enum ViewKey {
     ChannelList(ChannelScope),
     /// The messages of a room or of a 1:1 chat. The JID is the room or the peer.
     Timeline(BareJid),
+    /// The private messages with one room occupant: the room and the nick.
+    PrivateTimeline(BareJid, String),
     MemberList(BareJid),
     /// Every view. For a big change, for example after a new login.
     All,
@@ -81,6 +83,8 @@ enum Subscription {
     Timeline {
         id: u64,
         room: BareJid,
+        /// The nick of an occupant for a private timeline.
+        nick: Option<String>,
         window: usize,
         sub: Sub<TimelineItem>,
     },
@@ -92,7 +96,14 @@ impl Subscription {
         match self {
             Self::SpaceList(_) => ViewKey::SpaceList,
             Self::ChannelList(scope, _) => ViewKey::ChannelList(scope.clone()),
-            Self::Timeline { room, .. } => ViewKey::Timeline(room.clone()),
+            Self::Timeline {
+                room, nick: None, ..
+            } => ViewKey::Timeline(room.clone()),
+            Self::Timeline {
+                room,
+                nick: Some(nick),
+                ..
+            } => ViewKey::PrivateTimeline(room.clone(), nick.clone()),
             Self::MemberList(room, _) => ViewKey::MemberList(room.clone()),
         }
     }
@@ -103,8 +114,15 @@ impl Subscription {
             Self::SpaceList(sub) => sub.update(log_err(space_list::query(q))),
             Self::ChannelList(scope, sub) => sub.update(log_err(channel_list::query(q, scope))),
             Self::Timeline {
-                room, window, sub, ..
-            } => sub.update(log_err(timeline::query(q, room, *window))),
+                room,
+                nick,
+                window,
+                sub,
+                ..
+            } => {
+                let peer = timeline::peer_of(room, nick.as_deref());
+                sub.update(log_err(timeline::query(q, &peer, *window)))
+            }
             Self::MemberList(room, sub) => sub.update(log_err(member_list::query(q, room))),
         }
     }
@@ -156,14 +174,17 @@ impl Registry {
         &mut self,
         q: &QueryCtx<'_>,
         room: BareJid,
+        nick: Option<String>,
     ) -> (u64, ViewStream<TimelineItem>) {
         let window = DEFAULT_TIMELINE_WINDOW;
-        let (sub, stream) = start(log_err(timeline::query(q, &room, window)));
+        let peer = timeline::peer_of(&room, nick.as_deref());
+        let (sub, stream) = start(log_err(timeline::query(q, &peer, window)));
         self.next_id += 1;
         let id = self.next_id;
         self.subs.push(Subscription::Timeline {
             id,
             room,
+            nick,
             window,
             sub,
         });
@@ -182,16 +203,20 @@ impl Registry {
             .subs
             .iter_mut()
             .find(|s| matches!(s, Subscription::Timeline { id, .. } if *id == timeline_id))?;
-        let Subscription::Timeline { room, window, .. } = sub else {
+        let Subscription::Timeline {
+            room, nick, window, ..
+        } = sub
+        else {
             return None;
         };
         *window += count;
-        let (room, window) = (room.clone(), *window);
+        let (room, window, private) = (room.clone(), *window, nick.is_some());
         sub.refresh(q);
         let Subscription::Timeline { sub: inner, .. } = sub else {
             return None;
         };
-        (inner.last.len() < window).then_some(room)
+        // MAM has no archive for private messages.
+        (inner.last.len() < window && !private).then_some(room)
     }
 
     /// Run the queries of the changed views and send the diffs. Drops the subscriptions

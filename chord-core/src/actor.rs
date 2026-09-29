@@ -50,7 +50,11 @@ pub(crate) enum Command {
     },
     SpaceList(oneshot::Sender<ViewStream<SpaceItem>>),
     ChannelList(ChannelScope, oneshot::Sender<ViewStream<ChannelItem>>),
-    Timeline(BareJid, oneshot::Sender<(u64, ViewStream<TimelineItem>)>),
+    Timeline(
+        BareJid,
+        Option<String>,
+        oneshot::Sender<(u64, ViewStream<TimelineItem>)>,
+    ),
     MemberList(BareJid, oneshot::Sender<ViewStream<MemberItem>>),
     PaginateBack {
         timeline: u64,
@@ -173,7 +177,27 @@ impl ClientHandle {
 
     /// The messages of a room or a 1:1 chat. Works offline, from the store.
     pub async fn timeline(&self, room: BareJid) -> Result<Timeline, ClientError> {
-        let (id, stream) = self.ask(|reply| Command::Timeline(room, reply)).await?;
+        self.open_timeline(room, None).await
+    }
+
+    /// The private messages with one occupant of a room (XEP-0045, section 7.5). Works
+    /// offline, from the store.
+    pub async fn private_timeline(
+        &self,
+        room: BareJid,
+        nick: String,
+    ) -> Result<Timeline, ClientError> {
+        self.open_timeline(room, Some(nick)).await
+    }
+
+    async fn open_timeline(
+        &self,
+        room: BareJid,
+        nick: Option<String>,
+    ) -> Result<Timeline, ClientError> {
+        let (id, stream) = self
+            .ask(|reply| Command::Timeline(room, nick, reply))
+            .await?;
         Ok(Timeline {
             id,
             stream,
@@ -449,13 +473,13 @@ impl<S: Session> Actor<S> {
                 };
                 let _ = reply.send(self.views.subscribe_channel_list(&q, scope));
             }
-            Command::Timeline(room, reply) => {
+            Command::Timeline(room, nick, reply) => {
                 let q = QueryCtx {
                     store: &self.store,
                     account_id: self.account_id,
                     account: &self.account,
                 };
-                let _ = reply.send(self.views.subscribe_timeline(&q, room));
+                let _ = reply.send(self.views.subscribe_timeline(&q, room, nick));
             }
             Command::MemberList(room, reply) => {
                 let q = QueryCtx {

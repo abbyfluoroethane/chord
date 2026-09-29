@@ -53,6 +53,10 @@ fn store(
     let Some(from) = &message.from else {
         return;
     };
+    // A private message of a room occupant (a carbon or an archive result).
+    if super::muc::store_private(ctx, message, &ids, timestamp, live) {
+        return;
+    }
     let (direction, peer) = if from.to_bare() == *ctx.account {
         match &message.to {
             Some(to) => (Direction::Out, to.to_bare()),
