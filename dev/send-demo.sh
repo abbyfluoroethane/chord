@@ -8,7 +8,7 @@ set -a
 # shellcheck disable=SC1091
 source dev/prosody/.env
 set +a
-export CHORD_SERVER=tcp://localhost:5222
+export CHORD_SERVER=starttls://localhost:5222
 
 # rustup installs cargo here. Your shell PATH can omit it.
 export PATH="$HOME/.cargo/bin:$PATH"

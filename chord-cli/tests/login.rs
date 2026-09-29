@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 #[test]
 #[ignore = "needs the dev Prosody server: ./dev/prosody/setup.sh"]
 fn wrong_password_exits_with_2() {
-    let server =
-        std::env::var("CHORD_TEST_SERVER").unwrap_or_else(|_| "tcp://localhost:5222".to_owned());
+    let server = std::env::var("CHORD_TEST_SERVER")
+        .unwrap_or_else(|_| "starttls://localhost:5222".to_owned());
     let start = Instant::now();
     let out = Command::new(env!("CARGO_BIN_EXE_chord-cli"))
         .arg("login")

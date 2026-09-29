@@ -11,14 +11,20 @@ fi
 # shellcheck disable=SC1091
 source .env
 
-# Self-signed certificates for chord.localhost and its components.
+# Certificates from the local mkcert CA. See README.md.
+if ! command -v mkcert >/dev/null; then
+  echo "mkcert is not installed. See dev/prosody/README.md." >&2
+  exit 1
+fi
 mkdir -p certs
-for host in chord.localhost rooms.chord.localhost pubsub.chord.localhost upload.chord.localhost; do
-  if [[ ! -f "certs/$host.crt" ]]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-      -subj "/CN=$host" \
-      -keyout "certs/$host.key" -out "certs/$host.crt" 2>/dev/null
-  fi
+if [[ ! -f certs/chord.localhost.crt ]]; then
+  mkcert -cert-file certs/chord.localhost.crt -key-file certs/chord.localhost.key \
+    chord.localhost rooms.chord.localhost pubsub.chord.localhost upload.chord.localhost
+fi
+# Prosody looks for <host>.crt and <host>.key. One certificate covers all four hosts.
+for host in rooms pubsub upload; do
+  cp certs/chord.localhost.crt "certs/$host.chord.localhost.crt"
+  cp certs/chord.localhost.key "certs/$host.chord.localhost.key"
 done
 chmod 644 certs/*
 
@@ -30,10 +36,13 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
+# Create each account, or set its password again. Setting it again also re-hashes it
+# with the current password_hash (SHA-256).
 register() {
   local user=$1 pass=$2
   if docker compose exec -T prosody prosodyctl shell user list chord.localhost 2>/dev/null | grep -q "^$user@"; then
-    echo "$user@chord.localhost exists"
+    docker compose exec -T prosody prosodyctl shell user password "$user@chord.localhost" "$pass" >/dev/null
+    echo "$user@chord.localhost exists, password set again"
   else
     docker compose exec -T prosody prosodyctl register "$user" chord.localhost "$pass"
     echo "$user@chord.localhost created"

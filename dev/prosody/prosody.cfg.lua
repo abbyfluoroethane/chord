@@ -25,17 +25,20 @@ modules_enabled = {
 }
 
 authentication = "internal_hashed"
+-- Store SCRAM-SHA-256 hashes, so the server offers SCRAM-SHA-256(-PLUS). Existing
+-- accounts keep their old hash until the password is set again (setup.sh does that).
+password_hash = "SHA-256"
 storage = "internal"
 
 -- Log to the console, so that "docker compose logs" shows the log.
 log = { debug = "*console" }
 
--- TLS certificates. setup.sh generates a self-signed pair in ./certs.
+-- TLS certificates from the local mkcert CA. setup.sh creates them in ./certs.
 certificates = "certs"
 
--- Local development: allow clients that do not use TLS.
--- SCRAM stays available without TLS. PLAIN does not.
-c2s_require_encryption = false
+-- Clients must use TLS (the Prosody default). Chord has plain TCP only behind its
+-- dev-insecure feature, and that fails against this server.
+c2s_require_encryption = true
 
 archive_expires_after = "1w"
 

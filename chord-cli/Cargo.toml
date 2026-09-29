@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Allows CHORD_SERVER=tcp://host:port (no TLS). Off by default.
+# Build with: cargo build -p chord-cli --features dev-insecure
+dev-insecure = ["chord-core/dev-insecure"]
+
 [dependencies]
 chord-core.workspace = true
 log.workspace = true

@@ -8,7 +8,9 @@
 //! Environment:
 //!   CHORD_JID        account, for example alice@chord.localhost
 //!   CHORD_PASSWORD   password (never an argument, so it stays out of the shell history)
-//!   CHORD_SERVER     "srv" (default), "starttls://host:port", or "tcp://host:port" (no TLS)
+//!   CHORD_SERVER     "srv" (default) or "starttls://host:port". With the dev-insecure
+//!                    feature also "tcp://host:port" (no TLS).
+//!   SSL_CERT_FILE    optional PEM file of trusted CAs. It replaces the system trust store.
 //!   CHORD_LOG        log level on stderr: error, warn, info, debug, or trace (default: no log)
 //!
 //! Exit codes:
@@ -152,7 +154,12 @@ fn parse_server(s: &str) -> Result<ServerAddr, String> {
         .parse()
         .map_err(|_| format!("bad port in CHORD_SERVER: {s}"))?;
     match scheme {
+        #[cfg(feature = "dev-insecure")]
         "tcp" => Ok(ServerAddr::InsecureTcp { host, port }),
+        #[cfg(not(feature = "dev-insecure"))]
+        "tcp" => Err(format!(
+            "plain TCP needs a build with --features dev-insecure: {s}"
+        )),
         "starttls" => Ok(ServerAddr::StartTls { host, port }),
         _ => Err(format!("CHORD_SERVER scheme must be tcp or starttls: {s}")),
     }

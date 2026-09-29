@@ -23,7 +23,8 @@ pub enum ServerAddr {
     Srv,
     /// Connect to this host and port. Use STARTTLS.
     StartTls { host: String, port: u16 },
-    /// Connect to this host and port with no TLS. Only for the local test server.
+    /// Connect to this host and port with no TLS. Only for a dev server.
+    #[cfg(feature = "dev-insecure")]
     InsecureTcp { host: String, port: u16 },
 }
 

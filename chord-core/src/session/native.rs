@@ -24,9 +24,7 @@ use sasl::common::scram::{Sha1, Sha256};
 use sasl::common::{ChannelBinding, Credentials};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio_xmpp::connect::{
-    DnsConfig, ServerConnector, StartTlsServerConnector, TcpServerConnector,
-};
+use tokio_xmpp::connect::{DnsConfig, ServerConnector, StartTlsServerConnector};
 use tokio_xmpp::error::AuthError;
 use tokio_xmpp::rustls;
 use tokio_xmpp::stanzastream::{Connection, Event, StanzaStream, StreamEvent};
@@ -97,8 +95,10 @@ impl Session for NativeSession {
                 let server = StartTlsServerConnector::from(DnsConfig::no_srv(&host, port));
                 start(server, jid, password, login_timeout).await
             }
+            #[cfg(feature = "dev-insecure")]
             ServerAddr::InsecureTcp { host, port } => {
-                let server = TcpServerConnector::from(DnsConfig::no_srv(&host, port));
+                let server =
+                    tokio_xmpp::connect::TcpServerConnector::from(DnsConfig::no_srv(&host, port));
                 start(server, jid, password, login_timeout).await
             }
         }
