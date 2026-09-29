@@ -9,16 +9,15 @@
   import { tooltip } from './tooltip';
   import { ui } from './ui.svelte';
 
-  let who = $state<HTMLButtonElement>();
+  let panel = $state<HTMLDivElement>();
   let open = $state(false);
 
   const kind = $derived(presenceKind(true, app.me.show));
 
 </script>
 
-<div class="panel">
+<div class="panel" bind:this={panel}>
   <button
-    bind:this={who}
     class="who"
     aria-label="Your status: {presenceLabel[kind]}"
     aria-haspopup="menu"
@@ -45,8 +44,8 @@
   </button>
 </div>
 
-{#if open && who}
-  <StatusMenu anchor={who} onclose={() => (open = false)} />
+{#if open && panel}
+  <StatusMenu anchor={panel} onclose={() => (open = false)} />
 {/if}
 
 <style>

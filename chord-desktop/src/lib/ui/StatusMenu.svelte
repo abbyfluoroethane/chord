@@ -1,6 +1,6 @@
 <script lang="ts">
   // Our status: availability with its presence shape, and a status text. It opens above
-  // the user panel button and is as wide as that button.
+  // the user panel and is as wide as the channel list.
   import Check from 'lucide-svelte/icons/check';
   import X from 'lucide-svelte/icons/x';
   import Icon from './Icon.svelte';
@@ -11,7 +11,8 @@
 
   let { anchor, onclose }: { anchor: HTMLElement; onclose: () => void } = $props();
 
-  const width = $derived(anchor.getBoundingClientRect().width);
+  // The popover adds a 1px border on each side.
+  const width = $derived(anchor.getBoundingClientRect().width - 2);
   let text = $state(app.me.status ?? '');
 
   const choices: Show[] = ['chat', 'away', 'dnd'];
