@@ -138,6 +138,8 @@ fn finish_one(ctx: &mut Ctx<'_>) {
     state.outstanding = state.outstanding.saturating_sub(1);
     if state.outstanding == 0 {
         state.complete = true;
+        // Spaces need the pubsub service, so they start now.
+        super::spaces::on_disco_complete(ctx);
     }
 }
 
