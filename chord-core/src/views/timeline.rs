@@ -5,6 +5,12 @@ use rusqlite::{OptionalExtension, params};
 
 use super::{QueryCtx, ViewItem};
 
+/// The id of a timeline item: stable for the life of the stored row, also when the key of
+/// a sent message changes to its stanza-id. `find_by_timeline_id` reads it.
+pub fn item_id(rowid: i64) -> String {
+    format!("m:{rowid}")
+}
+
 /// Two messages from the same sender within this time form one group.
 pub const GROUP_GAP_MS: i64 = 5 * 60 * 1000;
 
@@ -164,7 +170,7 @@ pub(crate) fn query(
             None => None,
         };
         items.push(TimelineItem {
-            id: format!("m:{}", row.rowid),
+            id: item_id(row.rowid),
             stanza_id: row.stanza_id,
             origin_id: row.origin_id,
             sender: row.sender,
@@ -263,7 +269,7 @@ fn reply_preview(
                 m.body.chars().take(PREVIEW_CHARS).collect()
             };
             Ok(ReplyPreview {
-                id: Some(format!("m:{}", m.rowid)),
+                id: Some(item_id(m.rowid)),
                 sender_name,
                 body,
             })

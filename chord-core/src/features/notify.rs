@@ -255,11 +255,6 @@ pub(crate) fn mentions_nick(body: &str, nick: &str) -> bool {
     })
 }
 
-/// The id of the message in the timeline view.
-fn item_id(rowid: i64) -> String {
-    format!("m:{rowid}")
-}
-
 fn now_ms(store: &Store) -> rusqlite::Result<i64> {
     store.conn().query_row(
         "SELECT CAST(unixepoch('subsec') * 1000 AS INTEGER)",
@@ -350,7 +345,7 @@ pub(crate) fn after_store(
         sender_name: sender_name(ctx, incoming),
         body_preview: stored.body.chars().take(PREVIEW_CHARS).collect(),
         mention,
-        item_id: item_id(stored.rowid),
+        item_id: crate::views::timeline::item_id(stored.rowid),
     };
     ctx.emit(ClientEvent::Notification(notification));
 }
