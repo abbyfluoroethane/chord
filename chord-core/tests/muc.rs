@@ -183,7 +183,8 @@ async fn rooms_and_bookmarks() {
     bob.leave_room(room.clone()).await.unwrap();
     let _ = tokio::time::timeout(TIMEOUT, alice.logout()).await;
     let _ = tokio::time::timeout(TIMEOUT, bob.logout()).await;
-    drop((alice, bob));
+    // A Timeline holds a handle too: the actor runs until every handle is gone.
+    drop((alice, bob, timeline));
     let _ = tokio::time::timeout(TIMEOUT, alice_task).await;
     let _ = tokio::time::timeout(TIMEOUT, bob_task).await;
 }

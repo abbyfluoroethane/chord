@@ -207,7 +207,8 @@ impl ClientHandle {
     }
 }
 
-/// A timeline subscription: the diff stream, and `paginate_back`.
+/// A timeline subscription: the diff stream, and `paginate_back`. It holds a
+/// `ClientHandle`, so the actor keeps running while a timeline exists.
 pub struct Timeline {
     id: u64,
     pub stream: ViewStream<TimelineItem>,

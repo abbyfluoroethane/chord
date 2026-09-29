@@ -52,8 +52,9 @@ pub(crate) struct State {
 /// What to do with the answer to an IQ that this feature sent.
 #[derive(Debug)]
 pub(crate) enum Pending {
-    /// The answer to the instant room configuration of a new room.
-    InstantRoom(BareJid),
+    /// The answer to the configuration of a new room, with the join replies that wait
+    /// for it: others cannot enter the room until it is unlocked.
+    InstantRoom(BareJid, Vec<Reply>),
 }
 
 /// A command from the public API.
@@ -181,12 +182,20 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     match pending {
-        Pending::InstantRoom(room) => {
-            if let IqResponse::Error(e) = response {
-                ctx.emit(ClientEvent::Notice(format!(
-                    "Cannot unlock the new room {room}: {}",
-                    error_text(&e)
-                )));
+        Pending::InstantRoom(room, replies) => {
+            let result = match response {
+                IqResponse::Result(_) => Ok(()),
+                IqResponse::Error(e) => {
+                    let text = error_text(&e);
+                    ctx.emit(ClientEvent::Notice(format!(
+                        "Cannot unlock the new room {room}: {text}"
+                    )));
+                    Err(ClientError::Server(text))
+                }
+                IqResponse::Lost => Err(ClientError::NotConnected),
+            };
+            for reply in replies {
+                let _ = reply.send(result.clone());
             }
         }
     }
@@ -830,11 +839,13 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
     if is_self && let Some(join) = ctx.state.muc.joins.remove(room) {
         ctx.state.muc.nicks.insert(room.clone(), nick.to_owned());
         set_joined(ctx, room, true);
-        for reply in join.replies {
-            let _ = reply.send(Ok(()));
-        }
         if has(Status::RoomHasBeenCreated) {
-            unlock_room(ctx, room);
+            // The join completes when the room is configured and unlocked.
+            unlock_room(ctx, room, join.replies);
+        } else {
+            for reply in join.replies {
+                let _ = reply.send(Ok(()));
+            }
         }
         if !join.changing_nick {
             mam::catch_up_room(ctx, room);
@@ -864,7 +875,7 @@ fn drop_outbox(ctx: &mut Ctx<'_>, room: &BareJid) {
 /// Configure a new room (XEP-0045, 10.1.3). Until then the room is locked. A Chord room
 /// is a channel, so it is persistent (it stays when the last occupant leaves) and it keeps
 /// an archive for MAM. The server keeps its defaults for the other fields.
-fn unlock_room(ctx: &mut Ctx<'_>, room: &BareJid) {
+fn unlock_room(ctx: &mut Ctx<'_>, room: &BareJid, replies: Vec<Reply>) {
     let query: Element = format!(
         "<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='submit'>\
          <field var='FORM_TYPE'><value>http://jabber.org/protocol/muc#roomconfig</value></field>\
@@ -880,7 +891,10 @@ fn unlock_room(ctx: &mut Ctx<'_>, room: &BareJid) {
         id: String::new(),
         payload: query,
     };
-    ctx.request(iq, super::Pending::Muc(Pending::InstantRoom(room.clone())));
+    ctx.request(
+        iq,
+        super::Pending::Muc(Pending::InstantRoom(room.clone(), replies)),
+    );
 }
 
 fn affiliation_str(a: &Affiliation) -> &'static str {
@@ -1175,25 +1189,42 @@ mod tests {
 
     #[test]
     fn a_new_room_is_configured_persistent_with_an_archive() {
+        // Join, and the room is new: the join waits for the configuration answer.
+        let created_presence = || {
+            occupant_presence(
+                "alice",
+                vec![Status::SelfPresence, Status::RoomHasBeenCreated],
+                Item::new(Affiliation::Owner, Role::Moderator),
+            )
+        };
+        let configure = |h: &mut Harness| {
+            // The join also starts the MAM catch-up of the room. Find the configuration.
+            let iqs = h.sent_iqs();
+            let Some(Iq::Set { to, payload, .. }) = iqs.iter().find(
+                |iq| matches!(iq, Iq::Set { payload, .. } if payload.is("query", NS_MUC_OWNER)),
+            ) else {
+                panic!("{iqs:?}")
+            };
+            assert_eq!(to.as_ref(), Some(&jid(ROOM)));
+            let form = String::from(payload);
+            assert!(form.contains("muc#roomconfig_persistentroom"), "{form}");
+            assert!(form.contains("muc#roomconfig_enablearchiving"), "{form}");
+        };
+
+        // Success: the join completes after the configuration answer.
         let mut h = Harness::new();
         let mut answer = join(&mut h, "alice");
-        let created = occupant_presence(
-            "alice",
-            vec![Status::SelfPresence, Status::RoomHasBeenCreated],
-            Item::new(Affiliation::Owner, Role::Moderator),
-        );
-        h.with_ctx(|ctx| on_presence(ctx, &created));
+        h.with_ctx(|ctx| on_presence(ctx, &created_presence()));
+        assert_eq!(answer.try_recv().unwrap(), None, "the room is still locked");
+        configure(&mut h);
+        h.answer(|p| matches!(p, super::super::Pending::Muc(_)), None);
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
-        // The join also starts the MAM catch-up of the room. Find the configuration.
-        let iqs = h.sent_iqs();
-        let Some(Iq::Set { to, payload, .. }) = iqs
-            .iter()
-            .find(|iq| matches!(iq, Iq::Set { payload, .. } if payload.is("query", NS_MUC_OWNER)))
-        else {
-            panic!("{iqs:?}")
-        };
-        assert_eq!(to.as_ref(), Some(&jid(ROOM)));
-        assert!(payload.is("query", NS_MUC_OWNER));
+
+        // Error: the join fails, with a notice.
+        let mut h = Harness::new();
+        let mut answer = join(&mut h, "alice");
+        h.with_ctx(|ctx| on_presence(ctx, &created_presence()));
+        configure(&mut h);
         h.respond(
             |p| matches!(p, super::super::Pending::Muc(_)),
             IqResponse::Error(StanzaError::new(
@@ -1203,6 +1234,10 @@ mod tests {
                 "",
             )),
         );
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
         assert!(
             h.effects
                 .iter()
