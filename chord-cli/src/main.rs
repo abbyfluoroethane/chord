@@ -1,9 +1,17 @@
 //! Command-line client on `chord-core`.
 //!
-//! Usage:
-//!   chord-cli login
-//!   chord-cli send <jid> <text>
-//!   chord-cli listen [--once]
+//! Usage: chord-cli [--json] [--offline] <command>
+//!   login
+//!   send <jid> <text>
+//!   listen [--once]
+//!   spaces                          the space rail
+//!   channels [home | <service> <node>]
+//!   members <room>
+//!   timeline <jid> [--limit N] [--follow]
+//!   state                           spaces, Home channels, and the channels of each space
+//!
+//! --json prints JSON. --offline reads the local database and does not log in.
+//! `timeline --follow` prints each diff as it arrives, as a UI gets it.
 //!
 //! Environment:
 //!   CHORD_JID        account, for example alice@chord.localhost
@@ -21,6 +29,10 @@
 //!   3  server unreachable, or its TLS certificate is invalid
 //!   4  login timed out
 
+mod json;
+mod show;
+mod views;
+
 use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -37,10 +49,28 @@ use tokio::task::JoinHandle;
 
 /// `connect` returns after the login, so `Connected` must arrive at once. This is a safety limit.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const USAGE: &str = "usage: chord-cli login | send <jid> <text> | listen [--once]";
+const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <text> | \
+listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
+timeline <jid> [--limit N] [--follow] | state";
+
+/// Global options.
+pub struct Opts {
+    pub json: bool,
+    pub offline: bool,
+}
+
+/// A running actor, logged in or not.
+pub struct Client {
+    pub handle: ClientHandle,
+    pub events: ClientEvents,
+    task: JoinHandle<()>,
+    pub account: BareJid,
+    pub online: bool,
+    pub bound_jid: Option<Jid>,
+}
 
 /// An error, and the exit code that goes with it.
-enum CliError {
+pub enum CliError {
     Connect(ConnectError),
     Other(String),
 }
@@ -112,14 +142,26 @@ fn init_logger() {
 async fn main() -> ExitCode {
     init_logger();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result = match args.as_slice() {
-        ["login"] => login().await,
-        ["send", to, text] => send(to, text).await,
-        ["listen"] => listen(false).await,
-        ["listen", "--once"] => listen(true).await,
-        _ => Err(USAGE.to_owned().into()),
+    let mut opts = Opts {
+        json: false,
+        offline: false,
     };
+    let args: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| match *a {
+            "--json" => {
+                opts.json = true;
+                false
+            }
+            "--offline" => {
+                opts.offline = true;
+                false
+            }
+            _ => true,
+        })
+        .collect();
+    let result = run(&opts, &args).await;
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -127,6 +169,43 @@ async fn main() -> ExitCode {
             ExitCode::from(e.exit_code())
         }
     }
+}
+
+async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
+    let (command, rest) = args
+        .split_first()
+        .ok_or_else(|| CliError::from(USAGE.to_owned()))?;
+    let known = [
+        "login", "send", "listen", "spaces", "channels", "members", "timeline", "state",
+    ];
+    if !known.contains(command) {
+        return Err(USAGE.to_owned().into());
+    }
+    let needs_session = matches!(*command, "login" | "send" | "listen");
+    if needs_session && opts.offline {
+        return Err(format!("{command} needs a session, not --offline").into());
+    }
+    let mut client = start_client(!opts.offline).await?;
+    let result = match (*command, rest) {
+        ("login", []) => {
+            println!(
+                "logged in as {}",
+                client.bound_jid.as_ref().map_or("?".into(), Jid::to_string)
+            );
+            Ok(())
+        }
+        ("send", [to, text]) => send(&client, to, text).await,
+        ("listen", []) => listen(&mut client, false).await,
+        ("listen", ["--once"]) => listen(&mut client, true).await,
+        ("spaces", []) => views::spaces(opts, &client).await,
+        ("channels", args) => views::channels(opts, &client, args).await,
+        ("members", [room]) => views::members(opts, &client, room).await,
+        ("timeline", args) => views::timeline(opts, &client, args).await,
+        ("state", []) => views::state(opts, &client).await,
+        _ => Err(USAGE.to_owned().into()),
+    };
+    let stopped = stop_client(client).await;
+    result.and(stopped)
 }
 
 fn config() -> Result<SessionConfig, String> {
@@ -174,16 +253,27 @@ fn db_path(jid: &BareJid) -> Result<PathBuf, CliError> {
     Ok(dir.join(format!("{jid}.sqlite3")))
 }
 
-/// Start the actor, log in, and wait for `Connected`.
-async fn start_client() -> Result<(ClientHandle, ClientEvents, JoinHandle<()>, Jid), CliError> {
-    let config = config()?;
-    let path = db_path(&config.jid)?;
+/// Start the actor. With `login`, log in and wait for `Connected`.
+async fn start_client(login: bool) -> Result<Client, CliError> {
+    let jid = std::env::var("CHORD_JID").map_err(|_| "set CHORD_JID".to_owned())?;
+    let account = BareJid::new(&jid).map_err(|e| format!("CHORD_JID is not a bare JID: {e}"))?;
+    let path = db_path(&account)?;
     let store = Store::open(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-    let (handle, mut events, actor) = actor::new::<NativeSession>(store, config.jid.clone())
+    let (handle, mut events, actor) = actor::new::<NativeSession>(store, account.clone())
         .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     let task = tokio::spawn(actor.run());
+    if !login {
+        return Ok(Client {
+            handle,
+            events,
+            task,
+            account,
+            online: false,
+            bound_jid: None,
+        });
+    }
 
-    handle.login(config).await.map_err(|e| match e {
+    handle.login(config()?).await.map_err(|e| match e {
         LoginError::Connect(e) => CliError::Connect(e),
         LoginError::ActorGone => CliError::Other(e.to_string()),
     })?;
@@ -198,46 +288,61 @@ async fn start_client() -> Result<(ClientHandle, ClientEvents, JoinHandle<()>, J
         None
     };
     match tokio::time::timeout(CONNECT_TIMEOUT, wait).await {
-        Ok(Some(bound_jid)) => Ok((handle, events, task, bound_jid)),
+        Ok(Some(bound_jid)) => Ok(Client {
+            handle,
+            events,
+            task,
+            account,
+            online: true,
+            bound_jid: Some(bound_jid),
+        }),
         Ok(None) => Err("session closed before login".to_owned().into()),
         Err(_) => Err(ConnectError::Timeout.into()),
     }
 }
 
 /// Log out, stop the actor, and wait for it.
-async fn stop_client(handle: ClientHandle, task: JoinHandle<()>) -> Result<(), CliError> {
+async fn stop_client(client: Client) -> Result<(), CliError> {
+    let Client {
+        handle,
+        task,
+        online,
+        ..
+    } = client;
     // Logout waits until the server answers a ping, so the server has every stanza.
-    let logged_out = tokio::time::timeout(CONNECT_TIMEOUT, handle.logout()).await;
+    let logged_out = if online {
+        tokio::time::timeout(CONNECT_TIMEOUT, handle.logout())
+            .await
+            .is_ok()
+    } else {
+        true
+    };
     drop(handle);
     let _ = tokio::time::timeout(CONNECT_TIMEOUT, task).await;
-    logged_out.map_err(|_| "no answer from the server at logout".to_owned().into())
+    if logged_out {
+        Ok(())
+    } else {
+        Err("no answer from the server at logout".to_owned().into())
+    }
 }
 
-async fn login() -> Result<(), CliError> {
-    let (handle, _events, task, bound_jid) = start_client().await?;
-    println!("logged in as {bound_jid}");
-    stop_client(handle, task).await
-}
-
-async fn send(to: &str, text: &str) -> Result<(), CliError> {
+async fn send(client: &Client, to: &str, text: &str) -> Result<(), CliError> {
     let to = Jid::new(to).map_err(|e| format!("bad JID {to}: {e}"))?;
-    let (handle, _events, task, _) = start_client().await?;
-    let id = handle
+    let id = client
+        .handle
         .send_chat(to.clone(), text.to_owned())
         .await
         .map_err(|e| e.to_string())?;
-    stop_client(handle, task)
-        .await
-        .map_err(|_| format!("no confirmation from the server for the message to {to}"))?;
     println!("sent to {to}: {text} (origin-id {id})");
     Ok(())
 }
 
-async fn listen(once: bool) -> Result<(), CliError> {
-    let (handle, mut events, task, bound_jid) = start_client().await?;
-    println!("listening as {bound_jid}");
-    let mut result = Ok(());
-    while let Some(event) = next(&mut events).await {
+async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
+    println!(
+        "listening as {}",
+        client.bound_jid.as_ref().map_or("?".into(), Jid::to_string)
+    );
+    while let Some(event) = next(&mut client.events).await {
         match event {
             ClientEvent::MessageReceived(message) => {
                 println!("{}: {}", message.sender, message.body);
@@ -246,8 +351,7 @@ async fn listen(once: bool) -> Result<(), CliError> {
                 }
             }
             ClientEvent::ConnectionState(ConnectionState::AuthFailed(failure)) => {
-                result = Err(ConnectError::AuthFailed(failure).into());
-                break;
+                return Err(ConnectError::AuthFailed(failure).into());
             }
             ClientEvent::ConnectionState(ConnectionState::Connected { resumed, .. }) => {
                 println!("reconnected (resumed: {resumed})");
@@ -255,12 +359,12 @@ async fn listen(once: bool) -> Result<(), CliError> {
             ClientEvent::ConnectionState(ConnectionState::Disconnected) => break,
             ClientEvent::ConnectionState(state) => println!("connection: {state:?}"),
             ClientEvent::Notice(notice) => println!("notice: {notice}"),
+            other => log::debug!("event: {other:?}"),
         }
     }
-    let stopped = stop_client(handle, task).await;
-    result.and(stopped)
+    Ok(())
 }
 
-async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
+pub async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
     std::future::poll_fn(|cx| std::pin::Pin::new(&mut *stream).poll_next(cx)).await
 }

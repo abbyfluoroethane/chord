@@ -79,8 +79,9 @@ pub enum ConnectionState {
     Disconnected,
 }
 
-/// An event from the actor.
+/// An event from the actor. New variants can come in later versions.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ClientEvent {
     ConnectionState(ConnectionState),
     /// A new chat message arrived and is in the database.
