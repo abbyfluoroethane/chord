@@ -165,4 +165,14 @@ own=$(a --json timeline "$room" --limit 20 | item "$ntext" "it['outgoing']")
 a nick "$room" chordtest >/dev/null
 [[ "$own" == True ]] || fail "A's message after the nick change is not its own: $own"
 
+echo "13. A blocks B, B sends, A does not get it, and A unblocks B"
+a block "$B" >/dev/null
+a --offline blocked | grep -qF "$B" || fail "B is not in A's block list"
+btext="e2e $n while blocked"
+b send "$A" "$btext" >/dev/null
+sleep 3
+a --json timeline "$B" --limit 20 | grep -qF "$btext" && fail "A got a message from a blocked address"
+a unblock "$B" >/dev/null
+a --offline blocked | grep -qF "$B" && fail "B is still in A's block list"
+
 echo "PASS: foid end-to-end run"
