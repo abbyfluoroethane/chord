@@ -45,6 +45,7 @@ pub fn run() {
             commands::toggle_reaction,
             commands::mark_read,
             commands::mark_read_private,
+            commands::mark_unread,
             commands::set_typing,
             commands::upload,
             commands::load_older,
@@ -87,6 +88,7 @@ pub fn run() {
             commands::notification_level,
             commands::push_registrations,
             link_preview::link_preview,
+            link_preview::save_image,
             settings::get_settings,
             settings::set_settings,
         ])

@@ -4,7 +4,11 @@
   import AddCircleModal from './AddCircleModal.svelte';
   import ChannelSidebar from './ChannelSidebar.svelte';
   import Chat from './Chat.svelte';
+  import CircleDialog from './CircleDialog.svelte';
   import CircleRail from './CircleRail.svelte';
+  import ConfirmModal from './ConfirmModal.svelte';
+  import ContextMenuHost from './ContextMenuHost.svelte';
+  import ForwardModal from './ForwardModal.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import ContactsPage from './ContactsPage.svelte';
   import MemberList from './MemberList.svelte';
@@ -85,9 +89,21 @@
 </div>
 
 <PersonLayer />
+<ContextMenuHost />
 {#if ui.settingsOpen}<SettingsOverlay />{:else}<Toast />{/if}
 {#if ui.switcherOpen}<QuickSwitcher />{/if}
 {#if ui.shortcutsOpen}<ShortcutsModal onclose={() => (ui.shortcutsOpen = false)} />{/if}
+{#if ui.forwarding}
+  <ForwardModal item={ui.forwarding} onclose={() => (ui.forwarding = null)} />
+{/if}
+{#if ui.confirm}<ConfirmModal state={ui.confirm} onclose={() => (ui.confirm = null)} />{/if}
+{#if ui.circleDialog}
+  <CircleDialog
+    kind={ui.circleDialog.kind}
+    space={ui.circleDialog.space}
+    onclose={() => (ui.circleDialog = null)}
+  />
+{/if}
 {#if ui.addCircleOpen}<AddCircleModal onclose={() => (ui.addCircleOpen = false)} />{/if}
 
 <style>

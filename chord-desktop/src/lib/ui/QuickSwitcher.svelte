@@ -7,37 +7,21 @@
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
   import { score } from './fuzzy';
-  import { spaceKey } from './types';
+  import { switcherTargets, type Target } from './targets';
   import { ui } from './ui.svelte';
 
-  interface Hit {
-    id: string;
-    label: string;
-    hint: string;
-    kind: 'circle' | 'channel' | 'dm';
-    go: () => void;
-  }
+  type Hit = Target & { go: () => void };
 
   let dlg = $state<HTMLDialogElement>();
   let query = $state('');
   let index = $state(0);
 
-  const all = $derived<Hit[]>([
-    ...app.spaces.map((s) => ({
-      id: `s:${spaceKey(s)}`,
-      label: s.name,
-      hint: 'Circle',
-      kind: 'circle' as const,
-      go: () => app.selectSpace(spaceKey(s))
-    })),
-    ...app.channels.map((c) => ({
-      id: `c:${c.jid}`,
-      label: c.name,
-      hint: c.kind === 'dm' ? 'Direct message' : (app.spaceOf(c.space ?? '')?.name ?? ''),
-      kind: c.kind === 'dm' ? ('dm' as const) : ('channel' as const),
-      go: () => app.selectChannel(c.jid)
+  const all = $derived<Hit[]>(
+    switcherTargets().map((t) => ({
+      ...t,
+      go: () => (t.jid ? app.selectChannel(t.jid) : app.selectSpace(t.space ?? ''))
     }))
-  ]);
+  );
 
   const hits = $derived.by(() => {
     let q = query.trim();

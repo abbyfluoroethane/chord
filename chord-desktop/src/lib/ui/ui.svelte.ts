@@ -1,8 +1,9 @@
 // Small shell state: which panels and dialogs are open, and local notes.
 import { live } from './bridge';
 import { settings } from './local';
+import type { DialogKind } from './CircleDialog.svelte';
 import type { Placement } from './Popover.svelte';
-import type { SettingsPage } from './types';
+import type { SettingsPage, TimelineItem } from './types';
 
 const MEMBERS_KEY = 'chord.membersOpen';
 const NOTES_KEY = 'chord.notes';
@@ -22,6 +23,14 @@ export interface PersonMenuState {
   placement: Placement;
 }
 
+/** A question before a step that cannot be undone. */
+export interface ConfirmState {
+  title: string;
+  text: string;
+  confirm: string;
+  onconfirm: () => void;
+}
+
 /** An anchor for a menu that opens at the pointer. Popover only needs two methods. */
 export function pointAnchor(x: number, y: number): HTMLElement {
   return {
@@ -39,6 +48,11 @@ class UiState {
   settingsPage = $state<SettingsPage>('account');
   logoutOpen = $state(false);
   nicknameOpen = $state(false);
+  /** A circle dialog (invite, settings, leave) opened from a menu. */
+  circleDialog = $state<{ kind: DialogKind; space: string } | null>(null);
+  confirm = $state<ConfirmState | null>(null);
+  /** The message in the forward dialog. */
+  forwarding = $state<TimelineItem | null>(null);
   /** Popovers and dialogs that are open now. Esc marks read only at 0. */
   overlays = $state(0);
 

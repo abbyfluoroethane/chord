@@ -343,6 +343,13 @@ pub async fn mark_read(state: State<'_, AppState>, peer: String) -> Res<()> {
     Ok(state.handle()?.mark_read(bare(&peer)?).await?)
 }
 
+/// Mark a message and the ones after it as unread. `item_id` is a timeline id (`m:<row>`).
+/// The read position moves back. The command sends nothing to the server.
+#[tauri::command]
+pub async fn mark_unread(state: State<'_, AppState>, item_id: String) -> Res<()> {
+    Ok(state.handle()?.mark_unread(item_id).await?)
+}
+
 #[tauri::command]
 pub async fn mark_read_private(state: State<'_, AppState>, room: String, nick: String) -> Res<()> {
     Ok(state

@@ -5,6 +5,8 @@ import '$lib/theme/fonts.css';
 import '$lib/theme/tokens.css';
 import '$lib/theme/base.css';
 import '$lib/theme/tooltip.css';
+import { installContextGuard } from '$lib/ui/contextmenu.svelte';
 import Preview from './Preview.svelte';
 
+installContextGuard();
 mount(Preview, { target: document.getElementById('app')! });

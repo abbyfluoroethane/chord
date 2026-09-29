@@ -7,6 +7,7 @@ import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle 
 import { api, live } from './bridge';
 import { linkPreviews } from './linkpreviews.svelte';
 import { settings } from './local';
+import { bumpReaction, topReactions, type ReactionUse } from './reactions';
 import type {
   ChannelItem,
   MemberItem,
@@ -21,6 +22,7 @@ import { ui } from './ui.svelte';
 
 export const HOME = 'home';
 const HIDDEN_KEY = 'chord.hiddenDms';
+const REACTIONS_KEY = 'chord.reactionUse';
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
@@ -84,6 +86,11 @@ class AppState {
   showContacts = $state(live);
   /** DMs the user closed. They come back when the user opens them again. Local only. */
   hiddenDms = $state<string[]>([]);
+
+  /** How often this user sent each emoji as a reaction. Local to this device. */
+  reactionUse = $state<ReactionUse>({});
+  /** The four emoji of the quick row in the message menu. */
+  quickReactions = $derived(topReactions(this.reactionUse));
 
   /** How many unread messages the open channel had when the user opened it. */
   private unreadOnOpen: Record<string, number> = {};
@@ -207,11 +214,14 @@ class AppState {
     if (live) {
       this.hiddenDms = settings.get<string[]>('hiddenDms') ?? [];
       this.nickname = settings.get<Record<string, string>>('nicks') ?? {};
+      this.reactionUse = settings.get<ReactionUse>('reactionUse') ?? {};
       return;
     }
     try {
       const raw = localStorage.getItem(HIDDEN_KEY);
       if (raw) this.hiddenDms = JSON.parse(raw) as string[];
+      const use = localStorage.getItem(REACTIONS_KEY);
+      if (use) this.reactionUse = JSON.parse(use) as ReactionUse;
     } catch {
       /* ignore */
     }
@@ -342,6 +352,34 @@ class AppState {
     }
   }
 
+  /**
+   * Mark a message and the ones after it as unread, and show the "new" line there.
+   * Maps to api.markUnread(itemId). The line starts at the first incoming message from
+   * there on, because our own messages are never unread.
+   */
+  markUnread(m: TimelineItem) {
+    const jid = this.selectedJid;
+    const list = this.timelines[jid] ?? [];
+    const at = list.findIndex((x) => x.id === m.id);
+    if (at < 0) return;
+    const unread = list.slice(at).filter((x) => !x.outgoing && !x.retracted);
+    if (!unread.length) {
+      ui.say('Nothing from other people after this message.');
+      return;
+    }
+    this.newFrom[jid] = unread[0].id;
+    const c = this.channels.find((x) => x.jid === jid);
+    if (c) c.unread = unread.length;
+    if (live) void this.call((b) => b.markUnread(m.id));
+  }
+
+  /** Mark every channel of a circle as read. */
+  markSpaceRead(key: string) {
+    for (const c of this.channels.filter((x) => (key === HOME ? x.space === null : x.space === key))) {
+      if (c.unread > 0 || c.mentions > 0) this.markRead(c.jid);
+    }
+  }
+
   // --- typing ------------------------------------------------------
 
   /** The composer calls this on input. Maps to api.setTyping(peer, typing). */
@@ -395,9 +433,15 @@ class AppState {
     const text = body.trim();
     if (!text) return false;
     if (live) return this.sendLive(text);
-    const list = this.list(this.selectedJid);
+    this.pushLocal(this.selectedJid, text, this.replyingTo);
+    this.replyingTo = null;
+    return true;
+  }
+
+  /** Sample data: add an outgoing message to a chat. The server confirms a moment later. */
+  private pushLocal(jid: string, text: string, reply: TimelineItem | null = null) {
+    const list = this.list(jid);
     const prev = list[list.length - 1];
-    const reply = this.replyingTo;
     const now = Date.now();
     const id = `local-${now}-${list.length}`;
     list.push({
@@ -420,13 +464,28 @@ class AppState {
       status: 'sending',
       mention: false
     });
-    this.replyingTo = null;
-    // Sample data: the server confirms a moment later.
     setTimeout(() => {
-      const m = this.timelines[this.selectedJid]?.find((x) => x.id === id);
+      const m = this.timelines[jid]?.find((x) => x.id === id);
       if (m) m.status = 'sent';
     }, 500);
-    return true;
+  }
+
+  /**
+   * Send a copy of a message to another chat: its text, and the address of its file if
+   * it has one. Maps to api.sendChat(to, body) or api.sendPrivate(room, nick, body).
+   */
+  async forward(m: TimelineItem, jid: string): Promise<boolean> {
+    const text = [m.body.trim(), m.attachment?.url].filter(Boolean).join('\n');
+    if (!text) return false;
+    if (!live) {
+      this.pushLocal(jid, text);
+      return true;
+    }
+    const pm = splitPrivate(jid);
+    const r = await this.call((b) =>
+      pm ? b.sendPrivate(pm.room, pm.nick, text) : b.sendChat(jid, text)
+    );
+    return r.ok;
   }
 
   private async sendLive(text: string): Promise<boolean> {
@@ -536,6 +595,9 @@ class AppState {
 
   /** Maps to api.toggleReaction(itemId, emoji). */
   toggleReaction(id: string, emoji: string) {
+    // Count the reactions that we add. A removed one does not count.
+    const shown = (this.timelines[this.selectedJid] ?? []).find((x) => x.id === id);
+    if (!shown?.reactions.some((r) => r.emoji === emoji && r.mine)) this.countReaction(emoji);
     if (live) {
       void this.call(async (b) => b.toggleReaction(id, emoji));
       return;
@@ -552,6 +614,19 @@ class AppState {
     } else {
       r.count += 1;
       r.mine = true;
+    }
+  }
+
+  private countReaction(emoji: string) {
+    this.reactionUse = bumpReaction(this.reactionUse, emoji);
+    if (live) {
+      settings.set('reactionUse', $state.snapshot(this.reactionUse));
+      return;
+    }
+    try {
+      localStorage.setItem(REACTIONS_KEY, JSON.stringify(this.reactionUse));
+    } catch {
+      /* ignore */
     }
   }
 
@@ -602,6 +677,49 @@ class AppState {
     const bridgeLevel = levelToBridge(level);
     const r = await this.call((b) => b.setNotificationLevel(jid, bridgeLevel));
     if (r.ok) this.levels[jid] = { level: bridgeLevel, muteUntil: null };
+  }
+
+  /**
+   * Mute a chat for a time, in ms, or until the user turns it back on (`null`). Maps to
+   * api.setNotificationLevel(peer, level, muteUntil). A mute for a time keeps the level.
+   */
+  async muteFor(jid: string, ms: number | null) {
+    if (ms === null) {
+      await this.setLevel(jid, 'nothing');
+      return;
+    }
+    const until = Date.now() + ms;
+    if (!live) {
+      const c = this.channels.find((x) => x.jid === jid);
+      if (c) c.muted = true;
+      this.notifyLevel[jid] = 'all';
+      setTimeout(() => {
+        const row = this.channels.find((x) => x.jid === jid);
+        if (row && this.levelOf(jid) !== 'nothing') row.muted = false;
+      }, ms);
+      return;
+    }
+    const level = levelToBridge(this.levelOf(jid) === 'nothing' ? 'all' : this.levelOf(jid));
+    const r = await this.call((b) => b.setNotificationLevel(jid, level, until));
+    if (r.ok) this.levels[jid] = { level, muteUntil: until };
+  }
+
+  /** The chat has a mute that ends. */
+  isTimedMute(jid: string): boolean {
+    const s = this.levels[jid];
+    return !!s && s.muteUntil !== null && s.muteUntil > Date.now();
+  }
+
+  /** Turn a mute off. */
+  async unmute(jid: string) {
+    if (!live) {
+      const c = this.channels.find((x) => x.jid === jid);
+      if (c) c.muted = false;
+      this.notifyLevel[jid] = 'all';
+      return;
+    }
+    const r = await this.call((b) => b.setNotificationLevel(jid, 'all'));
+    if (r.ok) this.levels[jid] = { level: 'all', muteUntil: null };
   }
 
   /** The level of a channel or a chat, for the menus. */
@@ -777,6 +895,22 @@ class AppState {
     }
     this.selectedSpace = '';
     this.selectSpace(HOME);
+  }
+
+  /** Leave one channel. Maps to api.leaveRoom(room). The row stays in its circle. */
+  leaveRoom(jid: string) {
+    if (jid === this.selectedJid) {
+      this.leaveChannel();
+      const next = this.spaceChannels.find((c) => c.jid !== jid);
+      this.selectedJid = next?.jid ?? '';
+      if (next) this.enterChannel();
+    }
+    if (live) {
+      void this.call((b) => b.leaveRoom(jid));
+      return;
+    }
+    const c = this.channels.find((x) => x.jid === jid);
+    if (c) c.joined = false;
   }
 
   /** Change my nickname in every room of the circle. Maps to api.changeNick(room, nick). */

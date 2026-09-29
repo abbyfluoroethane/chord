@@ -5,10 +5,15 @@
   import '$lib/theme/tooltip.css';
   import { onMount } from 'svelte';
   import { theme } from '$lib/theme/theme.svelte';
+  import { installContextGuard } from '$lib/ui/contextmenu.svelte';
 
   let { children } = $props();
 
-  onMount(() => theme.load());
+  onMount(() => {
+    theme.load();
+    // No webview menu, except in text fields. The app draws its own menus.
+    return installContextGuard();
+  });
 </script>
 
 {@render children()}

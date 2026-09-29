@@ -69,6 +69,9 @@ export interface Attachment {
 
 export interface TimelineItem {
   id: string;
+  /** Live data: the id that the server or the room gave. */
+  stanzaId?: string | null;
+  originId?: string | null;
   sender: string;
   senderName: string;
   avatar: string | null;

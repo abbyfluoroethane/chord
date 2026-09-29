@@ -1,13 +1,19 @@
 <script lang="ts">
   // Small grid of common emoji. No dependency.
-  import Popover from './Popover.svelte';
+  import Popover, { type Placement } from './Popover.svelte';
   import { EMOJI } from './emoji';
 
   let {
     anchor,
     onpick,
-    onclose
-  }: { anchor: HTMLElement; onpick: (emoji: string) => void; onclose: () => void } = $props();
+    onclose,
+    placement = 'bottom-end'
+  }: {
+    anchor: HTMLElement;
+    onpick: (emoji: string) => void;
+    onclose: () => void;
+    placement?: Placement;
+  } = $props();
 
   let grid = $state<HTMLDivElement>();
 
@@ -22,7 +28,7 @@
   }
 </script>
 
-<Popover {anchor} {onclose} placement="bottom-end" label="Pick a reaction">
+<Popover {anchor} {onclose} {placement} label="Pick a reaction">
   <div class="grid" bind:this={grid} onkeydown={keydown} role="presentation">
     {#each EMOJI as e (e)}
       <button

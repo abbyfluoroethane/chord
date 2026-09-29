@@ -24,6 +24,8 @@ use crate::error::{ChordError, Res};
 /// The most bytes of a page that we read: 512 KB.
 const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 3;
+/// The largest image that `save_image` writes.
+const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const CACHE_ENTRIES: usize = 256;
@@ -325,9 +327,23 @@ fn cached(key: &str) -> Option<Option<LinkPreview>> {
 
 // ---------------------------------------------------------------- the fetch
 
+/// The client for the page fetch: 10 seconds in all.
 fn client() -> Res<&'static reqwest::Client> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    if let Some(c) = CLIENT.get() {
+    shared_client(&CLIENT, Duration::from_secs(10))
+}
+
+/// The client for the image download: the same filters, and more time for a big file.
+fn download_client() -> Res<&'static reqwest::Client> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    shared_client(&CLIENT, Duration::from_secs(120))
+}
+
+fn shared_client(
+    cell: &'static OnceLock<reqwest::Client>,
+    timeout: Duration,
+) -> Res<&'static reqwest::Client> {
+    if let Some(c) = cell.get() {
         return Ok(c);
     }
     let policy = Policy::custom(|attempt| {
@@ -341,7 +357,7 @@ fn client() -> Res<&'static reqwest::Client> {
     });
     let built = reqwest::Client::builder()
         .user_agent(USER_AGENT)
-        .timeout(Duration::from_secs(10))
+        .timeout(timeout)
         .connect_timeout(Duration::from_secs(5))
         .redirect(policy)
         // A proxy would do its own DNS lookup and skip the filter.
@@ -349,7 +365,7 @@ fn client() -> Res<&'static reqwest::Client> {
         .dns_resolver(Arc::new(PublicOnly))
         .build()
         .map_err(|e| ChordError::new("linkPreview", format!("cannot start the client: {e}")))?;
-    Ok(CLIENT.get_or_init(|| built))
+    Ok(cell.get_or_init(|| built))
 }
 
 fn fetch_error(error: reqwest::Error) -> ChordError {
@@ -421,6 +437,60 @@ pub async fn link_preview(url: String) -> Res<Option<LinkPreview>> {
         inflight.remove(&key);
     }
     result
+}
+
+/// True if `total` bytes so far plus a chunk of `chunk` bytes stay within `max`.
+fn within_cap(total: u64, chunk: usize, max: u64) -> bool {
+    total.checked_add(chunk as u64).is_some_and(|n| n <= max)
+}
+
+/// Download the image at `url` and write it to `path`, which the user chose in the save
+/// dialog. The download uses the same filters as the previews: only public addresses,
+/// checked redirects. It fails for a file that is not an image, and for one over 50 MB.
+#[tauri::command]
+pub async fn save_image(url: String, path: String) -> Res<()> {
+    let parsed = Url::parse(url.trim())
+        .map_err(|e| ChordError::invalid(format!("not a URL ({url:?}): {e}")))?;
+    validate_url(&parsed)?;
+    let target = std::path::PathBuf::from(&path);
+    if path.is_empty() || !target.is_absolute() || target.is_dir() {
+        return Err(ChordError::invalid("the save path must be a file path"));
+    }
+    let mut response = download_client()?
+        .get(parsed)
+        .header(ACCEPT, "image/*")
+        .send()
+        .await
+        .map_err(fetch_error)?;
+    if !response.status().is_success() {
+        return Err(ChordError::new(
+            "linkPreview",
+            format!("the server answered {}", response.status()),
+        ));
+    }
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    if kind_of(content_type.as_deref()) != Kind::Image {
+        return Err(ChordError::invalid("the link is not an image"));
+    }
+    let too_big = || ChordError::invalid("the image is larger than 50 MB");
+    if response.content_length().is_some_and(|n| n > MAX_IMAGE_BYTES) {
+        return Err(too_big());
+    }
+    let mut body: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(fetch_error)? {
+        if !within_cap(body.len() as u64, chunk.len(), MAX_IMAGE_BYTES) {
+            return Err(too_big());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    tauri::async_runtime::spawn_blocking(move || std::fs::write(&target, body))
+        .await
+        .map_err(|e| ChordError::io("save the image", e))?
+        .map_err(|e| ChordError::io("save the image", e))
 }
 
 fn poisoned() -> ChordError {
@@ -552,6 +622,23 @@ mod tests {
         assert_eq!(kind_of(Some("application/json")), Kind::Other);
         assert_eq!(kind_of(Some("text/plain")), Kind::Other);
         assert_eq!(kind_of(None), Kind::Other);
+    }
+
+    #[test]
+    fn a_download_stops_at_the_image_cap() {
+        assert!(within_cap(0, 10, 10));
+        assert!(!within_cap(1, 10, 10));
+        assert!(within_cap(MAX_IMAGE_BYTES - 5, 5, MAX_IMAGE_BYTES));
+        assert!(!within_cap(MAX_IMAGE_BYTES, 1, MAX_IMAGE_BYTES));
+        assert!(!within_cap(u64::MAX, 1, MAX_IMAGE_BYTES));
+    }
+
+    #[test]
+    fn save_image_refuses_bad_urls_and_paths() {
+        let run = |u: &str, p: &str| tauri::async_runtime::block_on(save_image(u.into(), p.into()));
+        assert!(run("http://127.0.0.1/a.png", "/tmp/a.png").is_err());
+        assert!(run("https://example.org/a.png", "relative.png").is_err());
+        assert!(run("file:///etc/passwd", "/tmp/a.png").is_err());
     }
 
     #[test]

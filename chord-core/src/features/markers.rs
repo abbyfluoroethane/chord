@@ -42,6 +42,7 @@ fn nc(name: &str) -> NcName {
 /// A command from the public API.
 pub(crate) enum Command {
     MarkRead { peer: String, reply: Reply },
+    MarkUnread { item_id: String, reply: Reply },
 }
 
 impl ClientHandle {
@@ -59,6 +60,20 @@ impl ClientHandle {
         self.mark_read_peer(format!("{room}/{nick}")).await
     }
 
+    /// Mark the message with the timeline id `item_id` and all later messages of its chat
+    /// or room as unread. The read position moves to the row before that message. This
+    /// works offline, changes the channel list, and sends nothing to the server.
+    ///
+    /// Fails with `Invalid` if the message is unknown.
+    pub async fn mark_unread(&self, item_id: String) -> Result<(), ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Markers(Command::MarkUnread {
+            item_id,
+            reply,
+        }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
     async fn mark_read_peer(&self, peer: String) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Markers(Command::MarkRead { peer, reply }))?;
@@ -70,6 +85,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
         Command::MarkRead { peer, reply } => {
             let _ = reply.send(mark_read(ctx, &peer));
+        }
+        Command::MarkUnread { item_id, reply } => {
+            let _ = reply.send(mark_unread(ctx, &item_id));
         }
     }
 }
@@ -88,7 +106,52 @@ pub(crate) fn offline_with_store(store: &Store, account_id: i64, command: Comman
                 .map_err(|e| ClientError::Invalid(format!("store: {e}")));
             let _ = reply.send(result);
         }
+        Command::MarkUnread { item_id, reply } => {
+            let result = unread_from(store, account_id, &item_id).map(|_| ());
+            let _ = reply.send(result);
+        }
     }
+}
+
+/// Move the read position of the chat of `item_id` to the row before that message. Returns
+/// the peer and the kind of the message. The caller marks the channel list as changed.
+fn unread_from(
+    store: &Store,
+    account_id: i64,
+    item_id: &str,
+) -> Result<(String, MessageKind), ClientError> {
+    let store_error = |e: rusqlite::Error| ClientError::Invalid(format!("store: {e}"));
+    let row = crate::store::queries::find_by_timeline_id(store.conn(), account_id, item_id)
+        .map_err(store_error)?
+        .ok_or_else(|| ClientError::Invalid("unknown message".to_owned()))?;
+    let before: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM messages
+             WHERE account_id = ?1 AND peer = ?2 AND id < ?3",
+            params![account_id, row.peer, row.rowid],
+            |r| r.get(0),
+        )
+        .map_err(store_error)?;
+    // A marker is not out for this position: we send none for a move back. Setting
+    // `marker_sent` keeps `on_connected` quiet and lets a later `mark_read` send its own.
+    store
+        .conn()
+        .execute(
+            "INSERT INTO read_state (account_id, peer, last_read, marker_sent)
+             VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT (account_id, peer) DO UPDATE SET
+                last_read = excluded.last_read, marker_sent = excluded.marker_sent",
+            params![account_id, row.peer, before],
+        )
+        .map_err(store_error)?;
+    Ok((row.peer, row.kind))
+}
+
+fn mark_unread(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
+    let (peer, kind) = unread_from(ctx.store, ctx.account_id, item_id)?;
+    changed_channel_list(ctx, &peer, kind);
+    Ok(())
 }
 
 /// What a marker or receipt says.
@@ -630,6 +693,83 @@ mod tests {
         );
         assert!(matches!(answer.try_recv(), Ok(Some(Ok(())))));
         assert_eq!(last_read(&h, PEER), Some(b));
+    }
+
+    fn item(rowid: i64) -> String {
+        crate::views::timeline::item_id(rowid)
+    }
+
+    #[test]
+    fn mark_unread_moves_the_position_to_the_row_before() {
+        let mut h = Harness::new();
+        let a = put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        let b = put(&h, "b", Direction::In, MessageKind::Chat, PEER);
+        let c = put(&h, "c", Direction::In, MessageKind::Chat, PEER);
+        put(&h, "other", Direction::In, MessageKind::Chat, "eve@chord.localhost");
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        assert_eq!(last_read(&h, PEER), Some(c));
+        h.take_sent();
+        h.take_dirty();
+        h.with_ctx(|ctx| mark_unread(ctx, &item(b))).unwrap();
+        assert_eq!(last_read(&h, PEER), Some(a));
+        assert!(
+            h.take_dirty()
+                .contains(&ViewKey::ChannelList(ChannelScope::Home))
+        );
+        // Nothing goes to the server, not now and not at the next session.
+        assert!(h.take_sent().is_empty());
+        h.with_ctx(on_connected);
+        assert!(h.take_sent().is_empty());
+        // Reading the chat again moves the position and sends a marker.
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        assert_eq!(last_read(&h, PEER), Some(c));
+        assert_eq!(h.take_sent().len(), 1);
+    }
+
+    #[test]
+    fn mark_unread_on_the_first_message_resets_to_zero() {
+        let mut h = Harness::new();
+        let a = put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        h.with_ctx(|ctx| mark_unread(ctx, &item(a))).unwrap();
+        assert_eq!(last_read(&h, PEER), Some(0));
+    }
+
+    #[test]
+    fn mark_unread_in_a_room_marks_the_room_view() {
+        let mut h = Harness::new();
+        let room = BareJid::new(ROOM).unwrap();
+        let a = put(&h, "s1", Direction::In, MessageKind::Groupchat, ROOM);
+        h.take_dirty();
+        h.with_ctx(|ctx| mark_unread(ctx, &item(a))).unwrap();
+        assert_eq!(last_read(&h, ROOM), Some(0));
+        assert!(h.take_dirty().contains(&ViewKey::Timeline(room)));
+    }
+
+    #[test]
+    fn mark_unread_of_an_unknown_message_fails() {
+        let mut h = Harness::new();
+        assert!(h.with_ctx(|ctx| mark_unread(ctx, "m:999")).is_err());
+        assert!(h.with_ctx(|ctx| mark_unread(ctx, "junk")).is_err());
+    }
+
+    #[test]
+    fn mark_unread_works_offline() {
+        let h = Harness::new();
+        put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        let b = put(&h, "b", Direction::In, MessageKind::Chat, PEER);
+        offline_mark(&h, PEER);
+        let (reply, mut answer) = oneshot::channel();
+        offline_with_store(
+            &h.store,
+            h.account_id,
+            Command::MarkUnread {
+                item_id: item(b),
+                reply,
+            },
+        );
+        assert!(matches!(answer.try_recv(), Ok(Some(Ok(())))));
+        assert_eq!(last_read(&h, PEER), Some(b - 1));
     }
 
     #[test]

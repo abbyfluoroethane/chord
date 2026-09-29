@@ -7,23 +7,24 @@
   import Plus from 'lucide-svelte/icons/plus';
   import Settings from 'lucide-svelte/icons/settings';
   import UserPlus from 'lucide-svelte/icons/user-plus';
-  import CircleDialog, { type DialogKind } from './CircleDialog.svelte';
+  import type { DialogKind } from './CircleDialog.svelte';
   import Icon from './Icon.svelte';
   import Menu, { type MenuItem } from './Menu.svelte';
+  import { ui } from './ui.svelte';
 
   let { name, space }: { name: string; space: string } = $props();
 
   let btn = $state<HTMLButtonElement>();
   let menuOpen = $state(false);
-  let dialog = $state<DialogKind | null>(null);
+  const dialog = (kind: DialogKind) => (ui.circleDialog = { kind, space });
 
   const items: MenuItem[] = [
-    { label: 'Invite people', icon: UserPlus, onselect: () => (dialog = 'invite') },
-    { label: 'Circle settings', icon: Settings, onselect: () => (dialog = 'settings') },
-    { label: 'Create channel', icon: Plus, onselect: () => (dialog = 'create-channel') },
-    { label: 'Notification settings', icon: Bell, separator: true, onselect: () => (dialog = 'notifications') },
-    { label: 'Change nickname', icon: Pencil, onselect: () => (dialog = 'nickname') },
-    { label: 'Leave circle', icon: LogOut, danger: true, separator: true, onselect: () => (dialog = 'leave') }
+    { label: 'Invite people', icon: UserPlus, onselect: () => dialog('invite') },
+    { label: 'Circle settings', icon: Settings, onselect: () => dialog('settings') },
+    { label: 'Create channel', icon: Plus, onselect: () => dialog('create-channel') },
+    { label: 'Notification settings', icon: Bell, separator: true, onselect: () => dialog('notifications') },
+    { label: 'Change nickname', icon: Pencil, onselect: () => dialog('nickname') },
+    { label: 'Leave circle', icon: LogOut, danger: true, separator: true, onselect: () => dialog('leave') }
   ];
 </script>
 
@@ -40,9 +41,6 @@
 
 {#if menuOpen && btn}
   <Menu anchor={btn} {items} label="{name} menu" onclose={() => (menuOpen = false)} />
-{/if}
-{#if dialog}
-  <CircleDialog kind={dialog} {space} onclose={() => (dialog = null)} />
 {/if}
 
 <style>

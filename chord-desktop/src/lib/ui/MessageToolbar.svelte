@@ -18,7 +18,7 @@
     onreact: (anchor: HTMLElement) => void;
     onreply: () => void;
     onedit: () => void;
-    onmore: (anchor: HTMLElement) => void;
+    onmore: (e: MouseEvent) => void;
   } = $props();
 </script>
 
@@ -34,7 +34,7 @@
       <Icon icon={Pencil} size={16} />
     </button>
   {/if}
-  <button aria-label="More" aria-haspopup="menu" use:tooltip={{ text: 'More', side: 'top' }} onclick={(e) => onmore(e.currentTarget)}>
+  <button aria-label="More" aria-haspopup="menu" use:tooltip={{ text: 'More', side: 'top' }} onclick={onmore}>
     <Icon icon={Ellipsis} size={16} />
   </button>
 </div>

@@ -201,6 +201,8 @@ export function toTimelineItem(t: BTimeline, ctx: TimelineContext): TimelineItem
   } else sender = t.sender.split('/')[0];
   return {
     id: t.id,
+    stanzaId: t.stanzaId,
+    originId: t.originId,
     sender,
     senderName: t.senderName,
     avatar: avatar(t.avatar),

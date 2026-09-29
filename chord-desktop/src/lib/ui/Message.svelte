@@ -1,21 +1,18 @@
 <script lang="ts">
   // One message, cozy layout. Grouped follow-ups drop the avatar and name.
-  import Copy from 'lucide-svelte/icons/copy';
-  import Trash from 'lucide-svelte/icons/trash-2';
   import Avatar from './Avatar.svelte';
   import AttachmentView from './AttachmentView.svelte';
   import DeleteModal from './DeleteModal.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
-  import Menu, { type MenuItem } from './Menu.svelte';
   import LinkPreviewCard from './LinkPreviewCard.svelte';
   import MessageBody from './MessageBody.svelte';
   import MessageEdit from './MessageEdit.svelte';
   import MessageToolbar from './MessageToolbar.svelte';
   import ReactionPills from './ReactionPills.svelte';
   import ReplyPreview from './ReplyPreview.svelte';
-  import Pencil from 'lucide-svelte/icons/pencil';
-  import Reply from 'lucide-svelte/icons/reply';
   import { app } from './app.svelte';
+  import { allowsNativeMenu, contextMenu, isMenuKey } from './contextmenu.svelte';
+  import { messageMenu, type MessageTarget } from './menus';
   import { clock, domainOf, stamp } from './format';
   import { linkPreviews } from './linkpreviews.svelte';
   import { prefs } from './prefs.svelte';
@@ -30,7 +27,6 @@
   }: { item: TimelineItem; grouped: boolean; onjump: (id: string) => void } = $props();
 
   let picker = $state<HTMLElement | null>(null);
-  let more = $state<HTMLElement | null>(null);
   let deleting = $state(false);
 
   const compact = $derived(prefs.display === 'compact');
@@ -67,29 +63,36 @@
     if (seen) for (const url of wanted) linkPreviews.request(url);
   });
 
-  const items = $derived<MenuItem[]>([
-    { label: 'Reply', icon: Reply, onselect: () => app.startReply(item) },
-    ...(item.outgoing
-      ? [{ label: 'Edit message', icon: Pencil, onselect: () => (app.editingId = item.id) }]
-      : []),
-    { label: 'Copy text', icon: Copy, onselect: () => void navigator.clipboard?.writeText(item.body) },
-    // Your own messages, or any message when you moderate the room.
-    ...(item.outgoing || app.canModerate
-      ? [
-          {
-            label: 'Delete message',
-            icon: Trash,
-            danger: true,
-            separator: true,
-            // Shift-click skips the question.
-            onselect: (e: MouseEvent | KeyboardEvent) =>
-              e.shiftKey ? app.deleteMessage(item) : (deleting = true)
-          }
-        ]
-      : [])
-  ]);
+  // The menu of the message: right-click, the "more" button, or the menu key on a focused
+  // message. A right-click on an image or a link adds a first section for it.
+  function targetOf(e: Event): MessageTarget {
+    if (e.type !== 'contextmenu' || item.retracted) return {};
+    const el = e.target as Element | null;
+    const a = el?.closest?.('a[href]') as HTMLAnchorElement | null | undefined;
+    const image = el?.closest?.('[data-ctx="image"]') ? item.attachment : null;
+    const sel = window.getSelection();
+    const root = e.currentTarget as Node;
+    const text =
+      sel && !sel.isCollapsed && sel.anchorNode && root.contains(sel.anchorNode)
+        ? sel.toString().trim()
+        : '';
+    return { link: a?.href ?? null, image, selection: text };
+  }
+
+  function openMenu(e: Event) {
+    const { items, quick } = messageMenu(item, targetOf(e), (ev) =>
+      ev.shiftKey ? app.deleteMessage(item) : (deleting = true)
+    );
+    contextMenu.open(e, items, { label: 'Message menu', quick });
+  }
+
+  function keydown(e: KeyboardEvent) {
+    if (editing || !isMenuKey(e) || allowsNativeMenu(e.target)) return;
+    openMenu(e);
+  }
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="msg"
   class:grouped
@@ -99,7 +102,10 @@
   class:sending={item.status === 'sending'}
   id="msg-{item.id}"
   role="article"
+  tabindex="-1"
   aria-label="{item.senderName}, {stamp(item.timestamp)}"
+  oncontextmenu={openMenu}
+  onkeydown={keydown}
 >
   {#if !item.retracted && !editing}
     <div class="toolbar">
@@ -108,7 +114,7 @@
         onreact={(a) => (picker = a)}
         onreply={() => app.startReply(item)}
         onedit={() => (app.editingId = item.id)}
-        onmore={(a) => (more = more ? null : a)}
+        onmore={openMenu}
       />
     </div>
   {/if}
@@ -191,9 +197,6 @@
     onclose={() => (picker = null)}
   />
 {/if}
-{#if more}
-  <Menu anchor={more} {items} placement="bottom-end" label="Message menu" onclose={() => (more = null)} />
-{/if}
 {#if deleting}
   <DeleteModal {item} onclose={() => (deleting = false)} />
 {/if}
@@ -211,6 +214,9 @@
     padding: 2px var(--space-4) 2px var(--space-4);
     margin-top: var(--space-4);
     transition: background var(--dur-fast);
+  }
+  .msg:focus {
+    outline: none;
   }
   .msg.grouped {
     margin-top: 0;

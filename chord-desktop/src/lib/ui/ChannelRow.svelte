@@ -3,15 +3,16 @@
   import X from 'lucide-svelte/icons/x';
   import BellOff from 'lucide-svelte/icons/bell-off';
   import Avatar from './Avatar.svelte';
-  import Bell from 'lucide-svelte/icons/bell';
   import Settings from 'lucide-svelte/icons/settings';
   import ChannelSettings from './ChannelSettings.svelte';
   import Icon from './Icon.svelte';
-  import Menu, { type MenuItem } from './Menu.svelte';
+  import { contextMenu } from './contextmenu.svelte';
+  import type { MenuItem } from './Menu.svelte';
+  import { channelMenu } from './menus';
   import { app } from './app.svelte';
   import { tooltip } from './tooltip';
-  import { presenceKind, type ChannelItem, type NotificationLevel } from './types';
-  import { pointAnchor, ui } from './ui.svelte';
+  import { presenceKind, type ChannelItem } from './types';
+  import { ui } from './ui.svelte';
 
   let {
     channel,
@@ -30,34 +31,20 @@
   // The bridge sends no presence for a chat that is not open. Then the row shows none.
   const known = $derived(channel.unknownPresence !== true);
 
-  // The menu of a channel. Maps to api.setNotificationLevel(room, level).
-  let menu = $state<{ anchor: HTMLElement } | null>(null);
+  // The menu of a channel. Maps to api.setNotificationLevel(room, level, muteUntil),
+  // api.markRead(room), and api.leaveRoom(room).
   let settingsOpen = $state(false);
-  const levels: { v: NotificationLevel; label: string }[] = [
-    { v: 'all', label: 'All messages' },
-    { v: 'mentions', label: 'Only mentions' },
-    { v: 'nothing', label: 'Nothing' }
-  ];
-  const items = $derived<MenuItem[]>([
-    {
-      label: 'Notifications',
-      icon: Bell,
-      submenu: levels.map((l) => ({
-        label: l.label,
-        checked: app.levelOf(channel.jid) === l.v,
-        onselect: () => void app.setLevel(channel.jid, l.v)
-      })),
-      onselect: () => {}
-    },
-    ...(selected && app.isRoomAdmin && !isDm
-      ? [{ label: 'Channel settings', icon: Settings, onselect: () => (settingsOpen = true) }]
-      : [])
-  ]);
+  const items = $derived<MenuItem[]>(
+    channelMenu(
+      channel,
+      selected && app.isRoomAdmin && !isDm
+        ? [{ label: 'Channel settings', icon: Settings, onselect: () => (settingsOpen = true) }]
+        : []
+    )
+  );
 
   function context(e: MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    menu = { anchor: pointAnchor(e.clientX, e.clientY) };
+    contextMenu.open(e, items, { label: `${channel.name} menu` });
   }
   const unread = $derived(channel.unread > 0 && !channel.muted);
   const count = $derived(isDm ? channel.unread : channel.mentions);
@@ -115,9 +102,6 @@
   {/if}
 </div>
 
-{#if menu}
-  <Menu anchor={menu.anchor} {items} label="{channel.name} menu" onclose={() => (menu = null)} />
-{/if}
 {#if settingsOpen}
   <ChannelSettings {channel} onclose={() => (settingsOpen = false)} />
 {/if}

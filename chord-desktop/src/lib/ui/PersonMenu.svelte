@@ -1,6 +1,7 @@
 <script lang="ts">
   // The context menu for a person. Same items from every place that opens it.
   import Ban from 'lucide-svelte/icons/ban';
+  import CheckCheck from 'lucide-svelte/icons/check-check';
   import Bell from 'lucide-svelte/icons/bell';
   import Shield from 'lucide-svelte/icons/shield';
   import Copy from 'lucide-svelte/icons/copy';
@@ -54,6 +55,9 @@
     const out: MenuItem[] = [
       { label: 'Profile', icon: User, onselect: () => ui.openProfile(p.address) }
     ];
+    if (dm && (dm.unread > 0 || dm.mentions > 0)) {
+      out.push({ label: 'Mark as read', icon: CheckCheck, onselect: () => app.markRead(dm.jid) });
+    }
     if (!p.isMe) {
       out.push({
         label: 'Message',

@@ -3,6 +3,8 @@
   // Drag a circle onto another to make a folder. Drop near an edge to reorder.
   import Plus from 'lucide-svelte/icons/plus';
   import ChordMark from './ChordMark.svelte';
+  import { contextMenu } from './contextmenu.svelte';
+  import { circleMenu, homeMenu } from './menus';
   import CircleIcon from './CircleIcon.svelte';
   import Icon from './Icon.svelte';
   import RailFolder from './RailFolder.svelte';
@@ -96,6 +98,7 @@
     unread={home.unread}
     mentions={home.mentions}
     onclick={() => app.selectSpace(HOME)}
+    oncontextmenu={(e) => contextMenu.open(e, homeMenu(HOME), { label: 'Home menu' })}
   >
     <ChordMark size={32} />
   </RailItem>
@@ -113,6 +116,7 @@
         mentions={b.mentions}
         onclick={() => app.selectSpace(entry.id)}
         class={cls(entry.id)}
+        oncontextmenu={(e) => contextMenu.open(e, circleMenu(entry.id), { label: `${s.name} menu` })}
         {...dnd(entry.id, true)}
       >
         <CircleIcon name={s.name} src={s.avatar} />
@@ -139,6 +143,7 @@
             mentions={b.mentions}
             onclick={() => app.selectSpace(s.id)}
             class={cls(s.id)}
+            oncontextmenu={(e) => contextMenu.open(e, circleMenu(s.id), { label: `${s.name} menu` })}
             {...dnd(s.id, false)}
           >
             <CircleIcon name={s.name} src={s.avatar} />

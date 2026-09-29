@@ -5,9 +5,9 @@
   import Download from 'lucide-svelte/icons/download';
   import File from 'lucide-svelte/icons/file';
   import Icon from './Icon.svelte';
-  import { app } from './app.svelte';
   import { fileSize } from './format';
-  import { openLightbox, preloadLightbox } from './lightbox';
+  import { viewImage } from './attachments';
+  import { preloadLightbox } from './lightbox';
   import type { Attachment } from './types';
 
   let { file }: { file: Attachment } = $props();
@@ -23,23 +23,14 @@
     return 'file';
   });
   const ratio = $derived(file.width && file.height ? `${file.width} / ${file.height}` : '16 / 10');
-
-  // The lightbox pages through every image of the open channel.
-  function view() {
-    const images = app.items
-      .map((m) => m.attachment)
-      .filter((a): a is Attachment => !!a && a.mime.startsWith('image/'))
-      .map((a) => ({ src: a.url, alt: a.name }));
-    const index = images.findIndex((i) => i.src === file.url);
-    void openLightbox(images, index);
-  }
 </script>
 
 {#if kind === 'image'}
   <button
     class="image"
+    data-ctx="image"
     style:aspect-ratio={ratio}
-    onclick={view}
+    onclick={() => viewImage(file)}
     onpointerenter={preloadLightbox}
     onfocus={preloadLightbox}
     aria-label="View {file.name}"

@@ -173,6 +173,8 @@ export const react = (itemId: string, emojis: string[]) => invoke<void>('react',
 export const toggleReaction = (itemId: string, emoji: string) =>
   invoke<void>('toggle_reaction', { itemId, emoji });
 export const markRead = (peer: string) => invoke<void>('mark_read', { peer });
+/** Mark the message `itemId` and the later ones as unread. Sends nothing to the server. */
+export const markUnread = (itemId: string) => invoke<void>('mark_unread', { itemId });
 export const markReadPrivate = (room: string, nick: string) =>
   invoke<void>('mark_read_private', { room, nick });
 /** Tell the peer that we type. See `ClientEvent` `typing` for what `peer` is. */
@@ -288,4 +290,6 @@ export const setSettings = (value: Settings) => invoke<void>('set_settings', { v
  * site sees our IP address. Resolves to null when the page has no preview. Rust caches
  * the answer for one hour and refuses private addresses.
  */
+/** Download the image at `url` to `path`. Public addresses only, 50 MB at most. */
+export const saveImage = (url: string, path: string) => invoke<void>('save_image', { url, path });
 export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_preview', { url });
