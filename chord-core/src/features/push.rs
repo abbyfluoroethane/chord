@@ -66,8 +66,9 @@ impl ClientHandle {
     /// Enable push notifications through `service` and `node` (XEP-0357).
     ///
     /// `form` holds the publish options for the app server, for example its secret. The
-    /// core sends them to the server and does not store them. Fails with `Unsupported`
-    /// when the server does not advertise `urn:xmpp:push:0`.
+    /// core sends them to the server and does not store them. The command waits for
+    /// service discovery. It fails with `Unsupported` when neither the server nor the
+    /// account advertises `urn:xmpp:push:0`.
     pub async fn enable_push(
         &self,
         service: Jid,
@@ -223,16 +224,10 @@ fn start_enable(
     if node.is_empty() {
         return Err((ClientError::Invalid("the push node is empty".into()), reply));
     }
-    match ctx.state.disco.server.as_ref() {
-        Some(info) if info.features.contains(NS_PUSH) => {}
-        Some(_) => {
-            let e = ClientError::Unsupported("the server has no push support".into());
-            return Err((e, reply));
-        }
-        None => {
-            let e = ClientError::Unsupported("server features not discovered yet".into());
-            return Err((e, reply));
-        }
+    // Prosody advertises push on the account JID (mod_cloud_notify, account-disco-info).
+    if !ctx.state.disco.server_has(NS_PUSH) {
+        let e = ClientError::Unsupported("the server has no push support".into());
+        return Err((e, reply));
     }
     let service = service.to_bare();
     let form = form.map(|fields| {
@@ -317,6 +312,7 @@ mod tests {
             info.features.insert(NS_PUSH.into());
         }
         h.state.disco.server = Some(info);
+        h.state.disco.complete = true;
         h
     }
 

@@ -54,11 +54,19 @@ pub fn caps() -> Caps {
 pub(crate) struct State {
     /// disco#info of the account domain.
     pub server: Option<DiscoInfoResult>,
+    /// disco#info of the account bare JID. A server advertises some account features
+    /// here, for example XEP-0357 push.
+    pub account: Option<DiscoInfoResult>,
     /// The items of the account domain, each with its disco#info.
     pub services: Vec<(Jid, DiscoInfoResult)>,
-    /// True when all service queries have an answer.
+    /// True when all queries have an answer.
     pub complete: bool,
+    /// Service queries that wait for an answer.
     outstanding: usize,
+    /// disco#info queries of the domain and the account that wait for an answer.
+    info_left: usize,
+    /// True when the item list of the domain has an answer.
+    items_done: bool,
 }
 
 impl State {
@@ -67,6 +75,14 @@ impl State {
         self.services
             .iter()
             .find(|(_, info)| info.features.contains(feature))
+    }
+
+    /// Whether the server or the account advertises `feature`.
+    pub fn server_has(&self, feature: &str) -> bool {
+        [&self.server, &self.account]
+            .into_iter()
+            .flatten()
+            .any(|info| info.features.contains(feature))
     }
 
     /// The first service with this identity, for example ("pubsub", "service").
@@ -82,6 +98,7 @@ impl State {
 #[derive(Debug)]
 pub(crate) enum Pending {
     ServerInfo,
+    AccountInfo,
     ServerItems,
     ServiceInfo(Jid),
 }
@@ -90,6 +107,10 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
     let domain = domain_of(ctx.account);
     let info = Iq::from_get("", DiscoInfoQuery { node: None }).with_to(domain.clone());
     ctx.request(info, FeaturePending::Disco(Pending::ServerInfo));
+    let account =
+        Iq::from_get("", DiscoInfoQuery { node: None }).with_to(Jid::from(ctx.account.clone()));
+    ctx.request(account, FeaturePending::Disco(Pending::AccountInfo));
+    ctx.state.disco.info_left = 2;
     let items = Iq::from_get(
         "",
         DiscoItemsQuery {
@@ -105,22 +126,33 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
     let IqResponse::Result(Some(payload)) = response else {
         match pending {
             Pending::ServiceInfo(_) => finish_one(ctx),
-            // With no item list, discovery ends here, with no services.
-            Pending::ServerItems => mark_complete(ctx),
-            Pending::ServerInfo => {}
+            // With no item list, discovery has no services.
+            Pending::ServerItems => {
+                ctx.state.disco.items_done = true;
+                try_complete(ctx);
+            }
+            Pending::ServerInfo | Pending::AccountInfo => finish_info(ctx),
         }
         return;
     };
     match pending {
-        Pending::ServerInfo => ctx.state.disco.server = DiscoInfoResult::try_from(payload).ok(),
+        Pending::ServerInfo => {
+            ctx.state.disco.server = DiscoInfoResult::try_from(payload).ok();
+            finish_info(ctx);
+        }
+        Pending::AccountInfo => {
+            ctx.state.disco.account = DiscoInfoResult::try_from(payload).ok();
+            finish_info(ctx);
+        }
         Pending::ServerItems => {
+            ctx.state.disco.items_done = true;
             let Ok(items) = DiscoItemsResult::try_from(payload) else {
-                mark_complete(ctx);
+                try_complete(ctx);
                 return;
             };
             ctx.state.disco.outstanding = items.items.len();
             if items.items.is_empty() {
-                mark_complete(ctx);
+                try_complete(ctx);
             }
             for item in items.items {
                 let query =
@@ -140,12 +172,25 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
 fn finish_one(ctx: &mut Ctx<'_>) {
     let state = &mut ctx.state.disco;
     state.outstanding = state.outstanding.saturating_sub(1);
-    if state.outstanding == 0 {
+    try_complete(ctx);
+}
+
+fn finish_info(ctx: &mut Ctx<'_>) {
+    let state = &mut ctx.state.disco;
+    state.info_left = state.info_left.saturating_sub(1);
+    try_complete(ctx);
+}
+
+/// Mark discovery complete when the domain info, the account info, the item list, and
+/// every service query have an answer.
+fn try_complete(ctx: &mut Ctx<'_>) {
+    let state = &ctx.state.disco;
+    if state.items_done && state.info_left == 0 && state.outstanding == 0 {
         mark_complete(ctx);
     }
 }
 
-/// Discovery is done: every service query has an answer, or the item list failed.
+/// Discovery is done: every query has an answer, or the item list failed.
 fn mark_complete(ctx: &mut Ctx<'_>) {
     if ctx.state.disco.complete {
         return;
@@ -233,9 +278,22 @@ mod tests {
         );
         assert_eq!(h.state.deferred.len(), 1);
 
-        // The item list fails: discovery ends with no services, and the command runs.
+        // The item list fails: discovery ends with no services, and the command runs
+        // when the domain info and the account info have an answer too.
         h.respond(
             |p| matches!(p, FeaturePending::Disco(Pending::ServerItems)),
+            IqResponse::Lost,
+        );
+        h.respond(
+            |p| matches!(p, FeaturePending::Disco(Pending::ServerInfo)),
+            IqResponse::Lost,
+        );
+        assert!(
+            !h.state.disco.complete,
+            "the account info has no answer yet"
+        );
+        h.respond(
+            |p| matches!(p, FeaturePending::Disco(Pending::AccountInfo)),
             IqResponse::Lost,
         );
         assert!(h.state.disco.complete);
@@ -294,7 +352,22 @@ mod tests {
             |p| matches!(p, FeaturePending::Disco(Pending::ServiceInfo(_))),
             Some(info.into()),
         );
+        assert!(
+            !h.state.disco.complete,
+            "the info queries have no answer yet"
+        );
+        h.answer(
+            |p| matches!(p, FeaturePending::Disco(Pending::ServerInfo)),
+            Some(super::info(None).into()),
+        );
+        let mut account = super::info(None);
+        account.features.insert("urn:xmpp:push:0".into());
+        h.answer(
+            |p| matches!(p, FeaturePending::Disco(Pending::AccountInfo)),
+            Some(account.into()),
+        );
         assert!(h.state.disco.complete);
+        assert!(h.state.disco.server_has("urn:xmpp:push:0"));
         let (jid, _) = h
             .state
             .disco

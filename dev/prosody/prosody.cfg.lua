@@ -13,6 +13,7 @@ modules_enabled = {
 	"carbons";      -- XEP-0280
 	"mam";          -- XEP-0313
 	"smacks";       -- XEP-0198
+	"cloud_notify"; -- XEP-0357 push
 	"pep";
 	"private";
 	"vcard4";

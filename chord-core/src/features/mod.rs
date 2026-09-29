@@ -339,7 +339,9 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
     let needs_services = matches!(
         command,
-        FeatureCommand::Spaces(_) | FeatureCommand::Upload(_)
+        FeatureCommand::Spaces(_)
+            | FeatureCommand::Upload(_)
+            | FeatureCommand::Push(push::Command::Enable { .. })
     );
     if needs_services && !ctx.state.disco.complete {
         ctx.state.deferred.push(command);
