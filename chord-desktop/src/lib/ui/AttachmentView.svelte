@@ -7,7 +7,7 @@
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
   import { fileSize } from './format';
-  import { openLightbox } from './lightbox';
+  import { openLightbox, preloadLightbox } from './lightbox';
   import type { Attachment } from './types';
 
   let { file }: { file: Attachment } = $props();
@@ -36,7 +36,14 @@
 </script>
 
 {#if kind === 'image'}
-  <button class="image" style:aspect-ratio={ratio} onclick={view} aria-label="View {file.name}">
+  <button
+    class="image"
+    style:aspect-ratio={ratio}
+    onclick={view}
+    onpointerenter={preloadLightbox}
+    onfocus={preloadLightbox}
+    aria-label="View {file.name}"
+  >
     <img src={file.url} alt={file.name} loading="lazy" onerror={() => (broken = true)} />
   </button>
 {:else if kind === 'video'}

@@ -2,7 +2,7 @@
   // One link preview: site name, title link, description, and an image. A direct image
   // link shows only the image, and a click opens the lightbox.
   import type { LinkPreview } from '$lib/chord/types';
-  import { openLightbox } from './lightbox';
+  import { openLightbox, preloadLightbox } from './lightbox';
 
   let { preview }: { preview: LinkPreview } = $props();
 
@@ -24,7 +24,13 @@
 
 {#if imageOnly}
   {#if image}
-    <button class="only" onclick={view} aria-label="View image">
+    <button
+      class="only"
+      onclick={view}
+      onpointerenter={preloadLightbox}
+      onfocus={preloadLightbox}
+      aria-label="View image"
+    >
       <img src={image} alt="" loading="lazy" onerror={() => (broken = true)} />
     </button>
   {/if}

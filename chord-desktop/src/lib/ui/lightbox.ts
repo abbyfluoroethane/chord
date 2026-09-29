@@ -1,7 +1,7 @@
 // Full-screen image viewer: PhotoSwipe 5 (MIT). It loads on the first open only.
 // It pages through the images of the open channel, in timeline order.
-// Motion follows the style guide: arrivals 240ms, departures 120ms, ease-out
-// cubic-bezier(.2,0,0,1), and none with reduced motion.
+// Motion: open 150ms, close 90ms, the style guide ease-out cubic-bezier(.2,0,0,1),
+// and none with reduced motion.
 
 import 'photoswipe/style.css';
 import './lightbox.css';
@@ -12,8 +12,8 @@ export interface LightboxImage {
 }
 
 const EASE_OUT = 'cubic-bezier(.2, 0, 0, 1)';
-const OPEN_MS = 240;
-const CLOSE_MS = 120;
+const OPEN_MS = 150;
+const CLOSE_MS = 90;
 /** A size for an image that is not measured yet. PhotoSwipe fits it to the screen. */
 const FALLBACK = { w: 1600, h: 1200 };
 
@@ -35,6 +35,11 @@ async function measure(src: string): Promise<{ w: number; h: number }> {
   }
   sizes.set(src, size);
   return size;
+}
+
+/** Load PhotoSwipe before the first open, for example when the pointer is over a photo. */
+export function preloadLightbox(): void {
+  void import('photoswipe');
 }
 
 /** Open the viewer on `images[index]`. */

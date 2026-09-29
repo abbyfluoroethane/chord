@@ -6,16 +6,16 @@
   --pswp-icon-color: var(--ink);
   --pswp-icon-color-secondary: var(--surface-100);
   --pswp-icon-stroke-color: var(--surface-100);
-  --pswp-transition-duration: 240ms;
+  --pswp-transition-duration: 150ms;
 }
 
-/* The app behind an open viewer: blurred. Arrive in 240ms, leave in 120ms. */
+/* The app behind an open viewer: blurred. Arrive in 150ms, leave in 90ms. */
 .app {
-  transition: filter 120ms cubic-bezier(0.2, 0, 0, 1);
+  transition: filter 90ms cubic-bezier(0.2, 0, 0, 1);
 }
 .lightbox-open .app {
   filter: blur(16px);
-  transition-duration: 240ms;
+  transition-duration: 150ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
