@@ -25,7 +25,7 @@ use xmpp_parsers::ping::Ping;
 use xmpp_parsers::stanza::Stanza;
 
 use crate::features::{
-    self, Ctx, Effect, FeatureCommand, FeatureState, Internal, IqResponse, PendingIq, chat,
+    self, Ctx, Effect, FeatureCommand, FeatureState, Internal, IqResponse, PendingIq, muc,
 };
 use crate::session::{
     AuthFailure, ConnectError, DisconnectReason, Session, SessionConfig, SessionError, SessionEvent,
@@ -419,7 +419,7 @@ impl<S: Session> Actor<S> {
             Command::Logout { reply } => self.logout(reply).await,
             Command::SendChat { to, body, reply } => {
                 let result = if self.online.is_some() {
-                    Ok(self.with_ctx(|ctx| chat::send(ctx, to, body)))
+                    self.with_ctx(|ctx| muc::send_chat(ctx, to, body))
                 } else {
                     Err(ClientError::NotConnected)
                 };
