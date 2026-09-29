@@ -10,9 +10,16 @@
 //!   access model `open`. XEP-0084 leaves the access model to PEP, where the default is
 //!   `presence`. Chord uses `open`, so that members of a room who are not contacts
 //!   can also see the avatar.
-//! - XEP-0153 (vcard-update hash in presence) is not supported. `on_presence` ignores it.
+//! - XEP-0153: a presence of a contact can carry the SHA-1 of its vCard photo. If the
+//!   contact has no XEP-0084 avatar and we lack that image, we fetch the vCard (XEP-0054)
+//!   from the bare JID of the contact, check the SHA-1, and store the photo. A XEP-0084
+//!   avatar always wins. Only a contact that we see (subscription `to` or `both`) can
+//!   make us fetch, and a hash that failed once is not tried again in the session. An
+//!   empty `<photo/>` removes only a photo that we took from a vCard in this session.
+//!   `on_presence` returns false, so the roster also sees the presence.
 //!
-//! The avatars of rooms and spaces are not handled here yet.
+//! The functions that store and check images also serve the space avatars (`spaces.rs`).
+//! The owner of a space avatar is `service/node`.
 
 use std::collections::HashSet;
 
@@ -25,10 +32,13 @@ use xmpp_parsers::data_forms::{DataForm, DataFormType, Field};
 use xmpp_parsers::hashes::Sha1HexAttribute;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::minidom::Element;
+use xmpp_parsers::presence::{Presence, Type as PresenceType};
 use xmpp_parsers::pubsub::event::Payload;
 use xmpp_parsers::pubsub::pubsub::{Item, Items, PubSub, Publish, PublishOptions};
 use xmpp_parsers::pubsub::{ItemId, NodeName};
 use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
+use xmpp_parsers::vcard::{VCard, VCardQuery};
+use xmpp_parsers::vcard_update::VCardUpdate;
 
 use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending};
 use crate::actor::{ClientError, ClientHandle};
@@ -57,6 +67,12 @@ pub struct Avatar {
 pub(crate) struct State {
     /// The images that we are fetching now, as (owner, hash).
     fetching: HashSet<(BareJid, String)>,
+    /// Owners whose avatar came from XEP-0084 in this session. XEP-0153 does not replace it.
+    pep: HashSet<BareJid>,
+    /// Owners whose avatar we took from a vCard in this session.
+    vcard: HashSet<BareJid>,
+    /// Vcard photos that failed, as (owner, hash). We do not ask for them again.
+    vcard_failed: HashSet<(BareJid, String)>,
 }
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
@@ -77,6 +93,8 @@ pub(crate) enum Pending {
     },
     /// We published our data item. The metadata comes next.
     PublishData { image: Image, reply: Reply },
+    /// The vCard of `owner`, for the photo with this hash (XEP-0153).
+    VCard { owner: BareJid, hash: String },
     /// We published our metadata.
     PublishMetadata { image: Image, reply: Reply },
     /// We published an empty metadata element.
@@ -169,11 +187,16 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
 
 /// The stored avatar of `owner`.
 pub fn load(store: &Store, account_id: i64, owner: &BareJid) -> rusqlite::Result<Option<Avatar>> {
+    load_key(store, account_id, owner.as_str())
+}
+
+/// The stored avatar of an owner key: a bare JID, or `service/node` for a space.
+pub fn load_key(store: &Store, account_id: i64, owner: &str) -> rusqlite::Result<Option<Avatar>> {
     store
         .conn()
         .query_row(
             "SELECT hash, mime, data FROM avatars WHERE account_id = ?1 AND owner = ?2",
-            params![account_id, owner.as_str()],
+            params![account_id, owner],
             |row| {
                 Ok(Avatar {
                     hash: row.get(0)?,
@@ -186,27 +209,27 @@ pub fn load(store: &Store, account_id: i64, owner: &BareJid) -> rusqlite::Result
 }
 
 /// What `store_metadata` found.
-struct Stored {
-    changed: bool,
-    needs_data: bool,
+pub(crate) struct Stored {
+    pub changed: bool,
+    pub needs_data: bool,
 }
 
 /// Store the hash and the type. The data stays if the hash is the same. Otherwise it goes.
-fn store_metadata(
+pub(crate) fn store_metadata(
     store: &Store,
     account_id: i64,
-    owner: &BareJid,
+    owner: &str,
     hash: &str,
-    mime: &str,
+    mime: Option<&str>,
 ) -> rusqlite::Result<Stored> {
     let conn = store.conn();
-    match load(store, account_id, owner)? {
+    match load_key(store, account_id, owner)? {
         Some(old) if old.hash == hash => {
-            let changed = old.mime.as_deref() != Some(mime);
+            let changed = old.mime.as_deref() != mime;
             if changed {
                 conn.execute(
                     "UPDATE avatars SET mime = ?3 WHERE account_id = ?1 AND owner = ?2",
-                    params![account_id, owner.as_str(), mime],
+                    params![account_id, owner, mime],
                 )?;
             }
             Ok(Stored {
@@ -218,7 +241,7 @@ fn store_metadata(
             conn.execute(
                 "INSERT OR REPLACE INTO avatars (account_id, owner, hash, mime, data)
                  VALUES (?1, ?2, ?3, ?4, NULL)",
-                params![account_id, owner.as_str(), hash, mime],
+                params![account_id, owner, hash, mime],
             )?;
             Ok(Stored {
                 changed: true,
@@ -229,36 +252,66 @@ fn store_metadata(
 }
 
 /// Store the image, if the stored hash is still `hash`.
-fn store_data(
+pub(crate) fn store_data(
     store: &Store,
     account_id: i64,
-    owner: &BareJid,
+    owner: &str,
     hash: &str,
     data: &[u8],
 ) -> rusqlite::Result<bool> {
     let n = store.conn().execute(
         "UPDATE avatars SET data = ?4 WHERE account_id = ?1 AND owner = ?2 AND hash = ?3",
-        params![account_id, owner.as_str(), hash, data],
+        params![account_id, owner, hash, data],
     )?;
     Ok(n > 0)
 }
 
-fn remove(store: &Store, account_id: i64, owner: &BareJid) -> rusqlite::Result<bool> {
+pub(crate) fn remove(store: &Store, account_id: i64, owner: &str) -> rusqlite::Result<bool> {
     let n = store.conn().execute(
         "DELETE FROM avatars WHERE account_id = ?1 AND owner = ?2",
-        params![account_id, owner.as_str()],
+        params![account_id, owner],
     )?;
     Ok(n > 0)
 }
 
 /// SHA-1 of `data`, in lower case hex.
 pub fn sha1_hex(data: &[u8]) -> String {
-    let digest = Sha1::digest(data);
-    let mut hex = String::with_capacity(40);
-    for byte in digest.iter() {
-        hex.push_str(&format!("{byte:02x}"));
+    hex(&Sha1::digest(data))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
     }
-    hex
+    out
+}
+
+/// Check the size of an image and its SHA-1 against `hash` (lower case hex).
+pub(crate) fn verify_image(hash: &str, data: &[u8]) -> Result<(), ClientError> {
+    if data.len() > MAX_AVATAR_BYTES {
+        return Err(ClientError::Invalid("avatar is too big".into()));
+    }
+    if sha1_hex(data) != hash {
+        return Err(ClientError::Invalid("avatar hash mismatch".into()));
+    }
+    Ok(())
+}
+
+/// The image type, from the first bytes of the image. XEP-0153 says to trust the data
+/// and not the `TYPE` hint.
+fn sniff_mime(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 fn mark_changed(ctx: &mut Ctx<'_>, owner: &BareJid) {
@@ -304,7 +357,9 @@ pub(crate) fn on_metadata_event(ctx: &mut Ctx<'_>, owner: &BareJid, payload: Pay
 }
 
 fn remove_avatar(ctx: &mut Ctx<'_>, owner: &BareJid) {
-    match remove(ctx.store, ctx.account_id, owner) {
+    ctx.state.avatars.pep.remove(owner);
+    ctx.state.avatars.vcard.remove(owner);
+    match remove(ctx.store, ctx.account_id, owner.as_str()) {
         Ok(true) => mark_changed(ctx, owner),
         Ok(false) => {}
         Err(e) => ctx.store_error("remove an avatar", e),
@@ -336,7 +391,16 @@ fn apply_metadata(ctx: &mut Ctx<'_>, owner: &BareJid, element: Element, reply: O
         return;
     };
     let hash = info.id.to_hex();
-    let stored = match store_metadata(ctx.store, ctx.account_id, owner, &hash, &info.type_) {
+    // XEP-0084 wins over a vCard photo from now on.
+    ctx.state.avatars.pep.insert(owner.clone());
+    ctx.state.avatars.vcard.remove(owner);
+    let stored = match store_metadata(
+        ctx.store,
+        ctx.account_id,
+        owner.as_str(),
+        &hash,
+        Some(&info.type_),
+    ) {
         Ok(stored) => stored,
         Err(e) => {
             ctx.store_error("store avatar metadata", e);
@@ -454,6 +518,26 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 IqResponse::Lost => done(reply, Err(ClientError::NotConnected)),
             }
         }
+        Pending::VCard { owner, hash } => {
+            ctx.state
+                .avatars
+                .fetching
+                .remove(&(owner.clone(), hash.clone()));
+            let failed = match response {
+                IqResponse::Result(payload) => accept_vcard(ctx, &owner, &hash, payload)
+                    .map_err(|e| log::debug!("vCard photo of {owner}: {e}"))
+                    .is_err(),
+                IqResponse::Error(e) => {
+                    log::debug!("vCard of {owner}: {}", describe(&e));
+                    true
+                }
+                // The next presence can start the fetch again.
+                IqResponse::Lost => false,
+            };
+            if failed {
+                ctx.state.avatars.vcard_failed.insert((owner, hash));
+            }
+        }
         Pending::PublishData { image, reply } => match response {
             IqResponse::Result(_) => publish_metadata(ctx, image, reply),
             IqResponse::Error(e) => {
@@ -480,8 +564,9 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             IqResponse::Result(_) => {
                 let account = ctx.account.clone();
                 let (store, id) = (ctx.store, ctx.account_id);
-                let stored = store_metadata(store, id, &account, &image.hash, &image.mime)
-                    .and_then(|_| store_data(store, id, &account, &image.hash, &image.data));
+                let key = account.as_str();
+                let stored = store_metadata(store, id, key, &image.hash, Some(&image.mime))
+                    .and_then(|_| store_data(store, id, key, &image.hash, &image.data));
                 if let Err(e) = stored {
                     ctx.store_error("store our avatar", e);
                 }
@@ -512,15 +597,11 @@ fn accept_data(
     let Some(data) = data else {
         return Err(ClientError::Invalid("no avatar data in the answer".into()));
     };
-    if data.len() > MAX_AVATAR_BYTES {
-        log::warn!("avatar data of {owner} is too big. Dropped.");
-        return Err(ClientError::Invalid("avatar is too big".into()));
+    if let Err(e) = verify_image(hash, &data) {
+        log::warn!("avatar data of {owner} is not valid ({e}). Dropped.");
+        return Err(e);
     }
-    if sha1_hex(&data) != hash {
-        log::warn!("avatar data of {owner} does not match its hash {hash}. Dropped.");
-        return Err(ClientError::Invalid("avatar hash mismatch".into()));
-    }
-    match store_data(ctx.store, ctx.account_id, owner, hash, &data) {
+    match store_data(ctx.store, ctx.account_id, owner.as_str(), hash, &data) {
         Ok(true) => mark_changed(ctx, owner),
         // The owner changed the avatar while we fetched.
         Ok(false) => {}
@@ -632,13 +713,127 @@ pub(crate) fn offline(command: Command) {
     }
 }
 
-/// A presence that can carry an avatar hint (XEP-0153). We do not use it, so no other
-/// module misses anything.
-pub(crate) fn on_presence(
-    _ctx: &mut Ctx<'_>,
-    _presence: &xmpp_parsers::presence::Presence,
-) -> bool {
+/// A presence of a contact can carry the hash of its vCard photo (XEP-0153). Returns
+/// false always: the roster must see the presence too.
+pub(crate) fn on_presence(ctx: &mut Ctx<'_>, presence: &Presence) -> bool {
+    on_vcard_hint(ctx, presence);
     false
+}
+
+fn on_vcard_hint(ctx: &mut Ctx<'_>, presence: &Presence) {
+    if presence.type_ != PresenceType::None {
+        return;
+    }
+    let Some(from) = &presence.from else {
+        return;
+    };
+    let owner = from.to_bare();
+    if owner == *ctx.account {
+        return;
+    }
+    let Some(x) = presence
+        .payloads
+        .iter()
+        .find(|p| p.is("x", xmpp_parsers::ns::VCARD_UPDATE))
+    else {
+        return;
+    };
+    let update = match VCardUpdate::try_from(x.clone()) {
+        Ok(update) => update,
+        Err(e) => {
+            log::debug!("bad vcard update from {from}: {e}");
+            return;
+        }
+    };
+    // An empty update element means only that the client supports XEP-0153.
+    let Some(photo) = update.photo else {
+        return;
+    };
+    // The hash is a hint from a peer. Only a contact that we see can make us fetch.
+    if !sees_contact(ctx, &owner) {
+        return;
+    }
+    let Some(hash) = photo.data.as_ref().map(|d| hex(d)) else {
+        // The contact has no photo. Drop the one that we took from a vCard.
+        if ctx.state.avatars.vcard.contains(&owner) {
+            remove_avatar(ctx, &owner);
+            mark_changed(ctx, &owner);
+        }
+        return;
+    };
+    let state = &ctx.state.avatars;
+    if state.pep.contains(&owner)
+        || state.fetching.contains(&(owner.clone(), hash.clone()))
+        || state.vcard_failed.contains(&(owner.clone(), hash.clone()))
+    {
+        return;
+    }
+    match load(ctx.store, ctx.account_id, &owner) {
+        Ok(Some(old)) if old.hash == hash && old.data.is_some() => return,
+        Ok(_) => {}
+        Err(e) => return ctx.store_error("read an avatar", e),
+    }
+    ctx.state
+        .avatars
+        .fetching
+        .insert((owner.clone(), hash.clone()));
+    // XEP-0153: the request goes to the bare JID.
+    let iq = Iq::from_get("", VCardQuery).with_to(Jid::from(owner.clone()));
+    ctx.request(iq, FeaturePending::Avatars(Pending::VCard { owner, hash }));
+}
+
+/// True if we see the presence of `owner`: a roster item with subscription `to` or `both`.
+fn sees_contact(ctx: &Ctx<'_>, owner: &BareJid) -> bool {
+    let subscription: Option<String> = ctx
+        .store
+        .conn()
+        .query_row(
+            "SELECT subscription FROM contacts WHERE account_id = ?1 AND jid = ?2",
+            params![ctx.account_id, owner.as_str()],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap_or(None);
+    matches!(subscription.as_deref(), Some("to" | "both"))
+}
+
+/// Check the photo of a vCard result against `hash`, and store it.
+fn accept_vcard(
+    ctx: &mut Ctx<'_>,
+    owner: &BareJid,
+    hash: &str,
+    payload: Option<Element>,
+) -> Result<(), ClientError> {
+    let vcard = payload
+        .and_then(|p| VCard::try_from(p).ok())
+        .ok_or_else(|| ClientError::Invalid("no vCard in the answer".into()))?;
+    let photo = vcard
+        .photo
+        .ok_or_else(|| ClientError::Invalid("the vCard has no photo".into()))?;
+    // XEP-0084 arrived while we fetched: it wins.
+    if ctx.state.avatars.pep.contains(owner) {
+        return Ok(());
+    }
+    let data = photo.binval.data;
+    verify_image(hash, &data)?;
+    let mime = sniff_mime(&data)
+        .map(str::to_owned)
+        .or_else(|| Some(photo.type_.data).filter(|t| t.starts_with("image/")))
+        .ok_or_else(|| ClientError::Invalid("the photo is not an image".into()))?;
+    let key = owner.as_str();
+    let stored = store_metadata(ctx.store, ctx.account_id, key, hash, Some(&mime))
+        .and_then(|_| store_data(ctx.store, ctx.account_id, key, hash, &data));
+    match stored {
+        Ok(_) => {
+            ctx.state.avatars.vcard.insert(owner.clone());
+            mark_changed(ctx, owner);
+            Ok(())
+        }
+        Err(e) => {
+            ctx.store_error("store a vCard photo", e);
+            Err(ClientError::Invalid("store error".into()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1049,6 +1244,332 @@ mod tests {
         });
         let got = answer.try_recv().unwrap().unwrap().unwrap().unwrap();
         assert_eq!(got.hash, sha1_hex(b"one"));
+    }
+
+    // XEP-0153.
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nvcard image";
+
+    fn base64(data: &[u8]) -> String {
+        const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in data.chunks(3) {
+            let bits = chunk.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b));
+            let n = bits << (8 * (3 - chunk.len()));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(T[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    fn vcard_result(data: &[u8]) -> Element {
+        format!(
+            "<vCard xmlns='vcard-temp'><FN>Bob</FN><PHOTO><TYPE>image/jpeg</TYPE>\
+             <BINVAL>{}</BINVAL></PHOTO></vCard>",
+            base64(data)
+        )
+        .parse()
+        .unwrap()
+    }
+
+    fn is_vcard(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Avatars(Pending::VCard { .. }))
+    }
+
+    fn contact(h: &Harness, jid: &str, subscription: &str) {
+        h.store
+            .conn()
+            .execute(
+                "INSERT OR REPLACE INTO contacts (account_id, jid, subscription)
+                 VALUES (?1, ?2, ?3)",
+                params![h.account_id, jid, subscription],
+            )
+            .unwrap();
+    }
+
+    fn presence_with(from: &str, x: &str) -> Presence {
+        let mut p = Presence::new(PresenceType::None).with_from(Jid::new(from).unwrap());
+        p.payloads.push(x.parse().unwrap());
+        p
+    }
+
+    fn update(hash: &str) -> String {
+        format!("<x xmlns='vcard-temp:x:update'><photo>{hash}</photo></x>")
+    }
+
+    fn hear(h: &mut Harness, presence: &Presence) -> bool {
+        h.with_ctx(|ctx| on_presence(ctx, presence))
+    }
+
+    fn bob_phone() -> &'static str {
+        "bob@chord.localhost/phone"
+    }
+
+    #[test]
+    fn vcard_hash_of_a_contact_fetches_the_vcard_and_stores_the_photo() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        let hash = sha1_hex(PNG);
+        // The presence still goes on to the roster.
+        assert!(!hear(&mut h, &presence_with(bob_phone(), &update(&hash))));
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        // XEP-0153: the request goes to the bare JID.
+        assert_eq!(sent[0].to().unwrap().as_str(), BOB);
+        let Iq::Get { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert!(payload.is("vCard", "vcard-temp"));
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        let avatar = stored(&h).unwrap();
+        assert_eq!(avatar.hash, hash);
+        // The image type comes from the data, not from the TYPE hint.
+        assert_eq!(avatar.mime.as_deref(), Some("image/png"));
+        assert_eq!(avatar.data.as_deref(), Some(PNG));
+        assert!(h.take_dirty().contains(&ViewKey::MemberList(bob())));
+        // The same hash again: nothing to fetch.
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn vcard_hash_in_upper_case_works() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "to");
+        let hash = sha1_hex(PNG).to_uppercase();
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        assert_eq!(stored(&h).unwrap().hash, sha1_hex(PNG));
+    }
+
+    #[test]
+    fn vcard_hint_is_ignored_when_it_does_not_come_from_a_contact_that_we_see() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        // No roster item.
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        // Only the contact sees us.
+        contact(&h, BOB, "from");
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        contact(&h, BOB, "none");
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        // Our own account.
+        hear(
+            &mut h,
+            &presence_with("alice@chord.localhost/other", &update(&hash)),
+        );
+        // Not an available presence.
+        contact(&h, BOB, "both");
+        let mut p = presence_with(bob_phone(), &update(&hash));
+        p.type_ = PresenceType::Unavailable;
+        hear(&mut h, &p);
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn vcard_hint_without_a_hash_fetches_nothing() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        for x in [
+            "<x xmlns='vcard-temp:x:update'/>",
+            "<x xmlns='vcard-temp:x:update'><photo/></x>",
+            "<x xmlns='vcard-temp:x:update'><photo>not a hash</photo></x>",
+            "<x xmlns='vcard-temp:x:update'><photo>abcd</photo></x>",
+            "<x xmlns='other'><photo>a9993e364706816aba3e25717850c26c9cd0d89d</photo></x>",
+        ] {
+            hear(&mut h, &presence_with(bob_phone(), x));
+        }
+        hear(
+            &mut h,
+            &Presence::new(PresenceType::None).with_from(Jid::new(bob_phone()).unwrap()),
+        );
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn xep_0084_wins_over_the_vcard_photo() {
+        // The PEP avatar came first: the hint is ignored.
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        deliver(
+            &mut h,
+            event(Some(metadata_element(b"pep image", "image/png"))),
+        );
+        h.sent_iqs();
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        assert!(h.sent_iqs().is_empty());
+        assert_eq!(stored(&h).unwrap().hash, sha1_hex(b"pep image"));
+
+        // The vCard photo came first: the PEP avatar replaces it.
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        h.sent_iqs();
+        deliver(
+            &mut h,
+            event(Some(metadata_element(b"pep image", "image/png"))),
+        );
+        assert_eq!(stored(&h).unwrap().hash, sha1_hex(b"pep image"));
+        assert_eq!(stored(&h).unwrap().data, None);
+        // A later hint does not bring the vCard photo back.
+        h.sent_iqs();
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn a_pep_avatar_that_arrives_during_the_vcard_fetch_wins() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        deliver(
+            &mut h,
+            event(Some(metadata_element(b"pep image", "image/png"))),
+        );
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        assert_eq!(stored(&h).unwrap().hash, sha1_hex(b"pep image"));
+    }
+
+    #[test]
+    fn a_vcard_fetch_that_runs_is_not_started_twice() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        let hash = sha1_hex(PNG);
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        hear(
+            &mut h,
+            &presence_with("bob@chord.localhost/laptop", &update(&hash)),
+        );
+        assert_eq!(h.sent_iqs().len(), 1);
+    }
+
+    #[test]
+    fn a_new_vcard_hash_replaces_the_photo() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        let other = b"\xff\xd8\xffjpeg image";
+        hear(
+            &mut h,
+            &presence_with(bob_phone(), &update(&sha1_hex(other))),
+        );
+        h.answer(is_vcard, Some(vcard_result(other)));
+        let avatar = stored(&h).unwrap();
+        assert_eq!(avatar.data.as_deref(), Some(&other[..]));
+        assert_eq!(avatar.mime.as_deref(), Some("image/jpeg"));
+    }
+
+    #[test]
+    fn a_photo_with_the_wrong_hash_is_dropped_and_not_asked_for_again() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        let hash = sha1_hex(PNG);
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        h.answer(is_vcard, Some(vcard_result(b"forged image")));
+        assert_eq!(stored(&h), None);
+        h.sent_iqs();
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn a_vcard_error_or_an_empty_vcard_is_not_asked_for_again_but_lost_is() {
+        let hash = sha1_hex(PNG);
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        h.respond(
+            is_vcard,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        assert_eq!(h.sent_iqs().len(), 1);
+
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        h.answer(
+            is_vcard,
+            Some("<vCard xmlns='vcard-temp'/>".parse().unwrap()),
+        );
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        assert_eq!(h.sent_iqs().len(), 1);
+
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        h.respond(is_vcard, IqResponse::Lost);
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        assert_eq!(h.sent_iqs().len(), 2);
+        assert_eq!(stored(&h), None);
+    }
+
+    #[test]
+    fn a_photo_that_is_no_image_is_dropped() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        let text = b"plain text";
+        hear(
+            &mut h,
+            &presence_with(bob_phone(), &update(&sha1_hex(text))),
+        );
+        let result: Element = format!(
+            "<vCard xmlns='vcard-temp'><PHOTO><TYPE>text/plain</TYPE>\
+             <BINVAL>{}</BINVAL></PHOTO></vCard>",
+            base64(text)
+        )
+        .parse()
+        .unwrap();
+        h.answer(is_vcard, Some(result));
+        assert_eq!(stored(&h), None);
+    }
+
+    #[test]
+    fn an_unknown_format_uses_the_type_hint() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        let data = b"some other format";
+        hear(
+            &mut h,
+            &presence_with(bob_phone(), &update(&sha1_hex(data))),
+        );
+        let result: Element = format!(
+            "<vCard xmlns='vcard-temp'><PHOTO><TYPE>image/x-icon</TYPE>\
+             <BINVAL>{}</BINVAL></PHOTO></vCard>",
+            base64(data)
+        )
+        .parse()
+        .unwrap();
+        h.answer(is_vcard, Some(result));
+        assert_eq!(stored(&h).unwrap().mime.as_deref(), Some("image/x-icon"));
+    }
+
+    #[test]
+    fn an_empty_photo_removes_only_a_photo_that_came_from_a_vcard() {
+        let mut h = Harness::new();
+        contact(&h, BOB, "both");
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        h.take_dirty();
+        let empty = "<x xmlns='vcard-temp:x:update'><photo/></x>";
+        hear(&mut h, &presence_with(bob_phone(), empty));
+        assert_eq!(stored(&h), None);
+        assert!(h.take_dirty().contains(&ViewKey::MemberList(bob())));
+
+        // A XEP-0084 avatar stays.
+        deliver(
+            &mut h,
+            event(Some(metadata_element(b"pep image", "image/png"))),
+        );
+        hear(&mut h, &presence_with(bob_phone(), empty));
+        assert!(stored(&h).is_some());
     }
 
     #[test]
