@@ -60,9 +60,38 @@ impl Direction {
     }
 }
 
+/// A 1:1 chat message, or a MUC message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Chat,
+    Groupchat,
+}
+
+impl MessageKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Groupchat => "groupchat",
+        }
+    }
+
+    fn parse(s: &str) -> rusqlite::Result<Self> {
+        match s {
+            "chat" => Ok(Self::Chat),
+            "groupchat" => Ok(Self::Groupchat),
+            other => Err(rusqlite::Error::InvalidColumnType(
+                0,
+                format!("kind {other}"),
+                rusqlite::types::Type::Text,
+            )),
+        }
+    }
+}
+
 /// A chat message, as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredMessage {
+    pub kind: MessageKind,
     pub key_kind: KeyKind,
     pub key: String,
     pub direction: Direction,
@@ -77,6 +106,7 @@ pub struct StoredMessage {
 
 /// A message to store. `timestamp` is `None` for "now".
 pub struct NewMessage<'a> {
+    pub kind: MessageKind,
     pub key_kind: KeyKind,
     pub key: &'a str,
     pub direction: Direction,
@@ -113,8 +143,8 @@ pub fn insert_message(
         .query_row(
             &format!(
                 "INSERT INTO messages
-                    (account_id, key_kind, key, direction, peer, sender, body, timestamp)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE(?8, {NOW_MS}))
+                    (account_id, key_kind, key, direction, peer, sender, body, timestamp, kind)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE(?8, {NOW_MS}), ?9)
                  ON CONFLICT (account_id, key_kind, key) DO NOTHING
                  RETURNING timestamp"
             ),
@@ -127,11 +157,13 @@ pub fn insert_message(
                 message.sender,
                 message.body,
                 message.timestamp,
+                message.kind.as_str(),
             ],
             |row| row.get(0),
         )
         .optional()?;
     Ok(timestamp.map(|timestamp| StoredMessage {
+        kind: message.kind,
         key_kind: message.key_kind,
         key: message.key.to_owned(),
         direction: message.direction,
@@ -165,6 +197,16 @@ pub fn upgrade_to_stanza_id(
     Ok(changed == 1)
 }
 
+/// Clear the tables that describe the live session: presence, occupants, and joined
+/// rooms. The actor calls it at each new session (not after a resumption).
+pub fn clear_volatile(store: &crate::store::Store, account_id: i64) -> rusqlite::Result<()> {
+    store.conn().execute_batch(&format!(
+        "DELETE FROM presences WHERE account_id = {account_id};
+         DELETE FROM occupants WHERE account_id = {account_id};
+         UPDATE rooms SET joined = 0 WHERE account_id = {account_id};"
+    ))
+}
+
 /// All messages with `peer`, oldest first.
 pub fn messages_with(
     conn: &Connection,
@@ -172,7 +214,7 @@ pub fn messages_with(
     peer: &str,
 ) -> rusqlite::Result<Vec<StoredMessage>> {
     let mut stmt = conn.prepare(
-        "SELECT key_kind, key, direction, peer, sender, body, timestamp FROM messages
+        "SELECT key_kind, key, direction, peer, sender, body, timestamp, kind FROM messages
          WHERE account_id = ?1 AND peer = ?2 ORDER BY timestamp, id",
     )?;
     let rows = stmt.query_map(params![account_id, peer], |row| {
@@ -184,6 +226,7 @@ pub fn messages_with(
             sender: row.get(4)?,
             body: row.get(5)?,
             timestamp: row.get(6)?,
+            kind: MessageKind::parse(&row.get::<_, String>(7)?)?,
         })
     })?;
     rows.collect()
@@ -196,6 +239,7 @@ mod tests {
 
     fn message(key: &str) -> NewMessage<'_> {
         NewMessage {
+            kind: MessageKind::Chat,
             key_kind: KeyKind::StanzaId,
             key,
             direction: Direction::In,
@@ -239,6 +283,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let account = ensure_account(store.conn(), "alice@chord.localhost").unwrap();
         let sent = NewMessage {
+            kind: MessageKind::Chat,
             key_kind: KeyKind::OriginId,
             key: "o-1",
             direction: Direction::Out,

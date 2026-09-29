@@ -179,7 +179,8 @@ async fn start_client() -> Result<(ClientHandle, ClientEvents, JoinHandle<()>, J
     let config = config()?;
     let path = db_path(&config.jid)?;
     let store = Store::open(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-    let (handle, mut events, actor) = actor::new::<NativeSession>(store);
+    let (handle, mut events, actor) = actor::new::<NativeSession>(store, config.jid.clone())
+        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     let task = tokio::spawn(actor.run());
 
     handle.login(config).await.map_err(|e| match e {
@@ -253,6 +254,7 @@ async fn listen(once: bool) -> Result<(), CliError> {
             }
             ClientEvent::ConnectionState(ConnectionState::Disconnected) => break,
             ClientEvent::ConnectionState(state) => println!("connection: {state:?}"),
+            ClientEvent::Notice(notice) => println!("notice: {notice}"),
         }
     }
     let stopped = stop_client(handle, task).await;

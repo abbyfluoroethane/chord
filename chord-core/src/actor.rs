@@ -1,32 +1,44 @@
-//! Command loop. One task owns the session and the database.
+//! Command loop. One task owns the session, the store, the feature state, and the views.
 //!
 //! The public API is `ClientHandle`: it is `Send + Sync + Clone` and only holds the
 //! sender of the command channel. The actor itself has no `Send` bound, so it also
 //! runs on a single-threaded WASM runtime in phase 2. The caller spawns `Actor::run`.
+//!
+//! For each input (a command, a session event, or an internal result) the actor:
+//! 1. calls the features with a `Ctx` (see `features`),
+//! 2. runs the effects that they queued (stanzas, events, uploads),
+//! 3. runs the queries of the changed views and sends the diffs.
+
+// TODO: remove when the feature modules use every framework slot.
+#![allow(dead_code)]
 
 use core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use std::collections::{HashMap, HashSet};
 
 use futures_channel::{mpsc, oneshot};
 use futures_core::Stream;
 use jid::{BareJid, Jid};
-use xmpp_parsers::delay::Delay;
 use xmpp_parsers::iq::Iq;
-use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::ping::Ping;
 use xmpp_parsers::stanza::Stanza;
-use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
-use crate::features::presence;
+use crate::features::{
+    self, Ctx, Effect, FeatureCommand, FeatureState, Internal, IqResponse, PendingIq, chat,
+};
 use crate::session::{
     AuthFailure, ConnectError, DisconnectReason, Session, SessionConfig, SessionError, SessionEvent,
 };
-use crate::store::Store;
-use crate::store::queries::{self, Direction, KeyKind, NewMessage, StoredMessage};
+use crate::store::queries::{self, StoredMessage};
+use crate::store::{Store, StoreError};
+use crate::views::{
+    ChannelItem, ChannelScope, MemberItem, QueryCtx, Registry, SpaceItem, TimelineItem, ViewKey,
+    ViewStream,
+};
 
 /// A command to the actor. Each one carries the channel for its reply.
-enum Command {
+pub(crate) enum Command {
     Login {
         config: SessionConfig,
         reply: oneshot::Sender<Result<(), ConnectError>>,
@@ -39,6 +51,15 @@ enum Command {
         body: String,
         reply: oneshot::Sender<Result<String, ClientError>>,
     },
+    SpaceList(oneshot::Sender<ViewStream<SpaceItem>>),
+    ChannelList(ChannelScope, oneshot::Sender<ViewStream<ChannelItem>>),
+    Timeline(BareJid, oneshot::Sender<(u64, ViewStream<TimelineItem>)>),
+    MemberList(BareJid, oneshot::Sender<ViewStream<MemberItem>>),
+    PaginateBack {
+        timeline: u64,
+        count: usize,
+    },
+    Feature(FeatureCommand),
 }
 
 /// The connection state, as a UI shows it.
@@ -64,6 +85,8 @@ pub enum ClientEvent {
     ConnectionState(ConnectionState),
     /// A new chat message arrived and is in the database.
     MessageReceived(StoredMessage),
+    /// A feature has a notice for the user, for example a failed room join.
+    Notice(String),
 }
 
 /// An error from a `ClientHandle` call.
@@ -72,6 +95,12 @@ pub enum ClientError {
     /// No session. Call `login` first.
     NotConnected,
     Session(SessionError),
+    /// The server answered with an error.
+    Server(String),
+    /// The request is not valid, for example a bad JID or a missing file.
+    Invalid(String),
+    /// The server does not offer the service, for example no upload service.
+    Unsupported(String),
     /// The actor stopped.
     ActorGone,
 }
@@ -81,6 +110,9 @@ impl fmt::Display for ClientError {
         match self {
             Self::NotConnected => f.write_str("not logged in"),
             Self::Session(e) => write!(f, "{e}"),
+            Self::Server(e) => write!(f, "server error: {e}"),
+            Self::Invalid(e) => write!(f, "invalid request: {e}"),
+            Self::Unsupported(e) => write!(f, "not supported: {e}"),
             Self::ActorGone => f.write_str("the client stopped"),
         }
     }
@@ -89,13 +121,16 @@ impl fmt::Display for ClientError {
 impl std::error::Error for ClientError {}
 
 /// The public handle. Cheap to clone. Each call sends a command to the actor.
+///
+/// Feature modules add more methods in their own `impl ClientHandle` blocks.
 #[derive(Clone)]
 pub struct ClientHandle {
     commands: mpsc::UnboundedSender<Command>,
 }
 
 impl ClientHandle {
-    /// Log in. Returns after the first login succeeds or fails.
+    /// Log in. Returns after the first login succeeds or fails. The JID must be the
+    /// account of the actor.
     pub async fn login(&self, config: SessionConfig) -> Result<(), LoginError> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::Login { config, reply })
@@ -122,8 +157,71 @@ impl ClientHandle {
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
+    /// The spaces for the space rail. Works offline, from the store.
+    pub async fn space_list(&self) -> Result<ViewStream<SpaceItem>, ClientError> {
+        self.ask(Command::SpaceList).await
+    }
+
+    /// The channels of a space, or of Home. Works offline, from the store.
+    pub async fn channel_list(
+        &self,
+        scope: ChannelScope,
+    ) -> Result<ViewStream<ChannelItem>, ClientError> {
+        self.ask(|reply| Command::ChannelList(scope, reply)).await
+    }
+
+    /// The messages of a room or a 1:1 chat. Works offline, from the store.
+    pub async fn timeline(&self, room: BareJid) -> Result<Timeline, ClientError> {
+        let (id, stream) = self.ask(|reply| Command::Timeline(room, reply)).await?;
+        Ok(Timeline {
+            id,
+            stream,
+            handle: self.clone(),
+        })
+    }
+
+    /// The members of a room, or both people of a 1:1 chat.
+    pub async fn member_list(&self, room: BareJid) -> Result<ViewStream<MemberItem>, ClientError> {
+        self.ask(|reply| Command::MemberList(room, reply)).await
+    }
+
+    async fn ask<T>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<T>) -> Command,
+    ) -> Result<T, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(command(reply))
+            .map_err(|_| ClientError::ActorGone)?;
+        answer.await.map_err(|_| ClientError::ActorGone)
+    }
+
+    /// Send a feature command. For the `impl ClientHandle` blocks of the features.
+    pub(crate) fn feature(&self, command: FeatureCommand) -> Result<(), ClientError> {
+        self.send(Command::Feature(command))
+            .map_err(|_| ClientError::ActorGone)
+    }
+
     fn send(&self, command: Command) -> Result<(), ()> {
         self.commands.unbounded_send(command).map_err(|_| ())
+    }
+}
+
+/// A timeline subscription: the diff stream, and `paginate_back`.
+pub struct Timeline {
+    id: u64,
+    pub stream: ViewStream<TimelineItem>,
+    handle: ClientHandle,
+}
+
+impl Timeline {
+    /// Show `count` older messages. If the store has fewer, MAM fetches them.
+    pub fn paginate_back(&self, count: usize) -> Result<(), ClientError> {
+        self.handle
+            .send(Command::PaginateBack {
+                timeline: self.id,
+                count,
+            })
+            .map_err(|_| ClientError::ActorGone)
     }
 }
 
@@ -160,42 +258,65 @@ impl Stream for ClientEvents {
 struct Online<S: Session> {
     session: S,
     events: S::Events,
-    account: BareJid,
-    /// Row id in `accounts`, or `None` if the database failed.
-    account_id: Option<i64>,
+    bound_jid: Option<Jid>,
     /// The id of the ping that `logout` waits for, and the logout reply.
     logout: Option<(String, oneshot::Sender<()>)>,
 }
 
-/// The actor. It owns the session and the database. Run it with `run`.
+/// The actor. It owns the session, the store, and the views. Run it with `run`.
 pub struct Actor<S: Session> {
     commands: mpsc::UnboundedReceiver<Command>,
     events: mpsc::UnboundedSender<ClientEvent>,
+    internal_tx: mpsc::UnboundedSender<Internal>,
+    internal_rx: mpsc::UnboundedReceiver<Internal>,
     store: Store,
+    account: BareJid,
+    account_id: i64,
     online: Option<Online<S>>,
+    state: FeatureState,
+    pending: HashMap<String, PendingIq>,
+    dirty: HashSet<ViewKey>,
+    effects: Vec<Effect>,
+    views: Registry,
 }
 
-/// Create an actor on `store`. Spawn `Actor::run`, then use the handle and the events.
-pub fn new<S: Session>(store: Store) -> (ClientHandle, ClientEvents, Actor<S>) {
+/// Create an actor for `account` on its `store`. Spawn `Actor::run`, then use the
+/// handle and the events. The views work before login, from the store.
+pub fn new<S: Session>(
+    store: Store,
+    account: BareJid,
+) -> Result<(ClientHandle, ClientEvents, Actor<S>), StoreError> {
+    let account_id = queries::ensure_account(store.conn(), account.as_str())?;
     let (command_tx, command_rx) = mpsc::unbounded();
     let (event_tx, event_rx) = mpsc::unbounded();
+    let (internal_tx, internal_rx) = mpsc::unbounded();
     let actor = Actor {
         commands: command_rx,
         events: event_tx,
+        internal_tx,
+        internal_rx,
         store,
+        account,
+        account_id,
         online: None,
+        state: FeatureState::default(),
+        pending: HashMap::new(),
+        dirty: HashSet::new(),
+        effects: Vec::new(),
+        views: Registry::default(),
     };
-    (
+    Ok((
         ClientHandle {
             commands: command_tx,
         },
         ClientEvents(event_rx),
         actor,
-    )
+    ))
 }
 
 enum Next<E> {
     Command(Option<Command>),
+    Internal(Internal),
     Session(Option<E>),
 }
 
@@ -206,20 +327,27 @@ impl<S: Session> Actor<S> {
             match self.next().await {
                 Next::Command(Some(command)) => self.handle_command(command).await,
                 Next::Command(None) => break,
+                Next::Internal(internal) => {
+                    self.with_ctx(|ctx| features::on_internal(ctx, internal));
+                }
                 Next::Session(Some(event)) => self.handle_session_event(event).await,
                 Next::Session(None) => self.went_offline(),
             }
+            self.flush().await;
         }
         if let Some(online) = self.online.take() {
             online.session.disconnect().await;
         }
     }
 
-    /// Wait for the next command or session event. Commands come first.
+    /// Wait for the next input. Commands come first.
     async fn next(&mut self) -> Next<SessionEvent> {
         core::future::poll_fn(|cx| {
             if let Poll::Ready(command) = Pin::new(&mut self.commands).poll_next(cx) {
                 return Poll::Ready(Next::Command(command));
+            }
+            if let Poll::Ready(Some(internal)) = Pin::new(&mut self.internal_rx).poll_next(cx) {
+                return Poll::Ready(Next::Internal(internal));
             }
             if let Some(online) = &mut self.online
                 && let Poll::Ready(event) = Pin::new(&mut online.events).poll_next(cx)
@@ -229,6 +357,48 @@ impl<S: Session> Actor<S> {
             Poll::Pending
         })
         .await
+    }
+
+    /// Call a feature function with a `Ctx`.
+    fn with_ctx<R>(&mut self, f: impl FnOnce(&mut Ctx<'_>) -> R) -> R {
+        let bound_jid = self.online.as_ref().and_then(|o| o.bound_jid.as_ref());
+        let mut ctx = Ctx {
+            store: &self.store,
+            account: &self.account,
+            account_id: self.account_id,
+            bound_jid,
+            state: &mut self.state,
+            effects: &mut self.effects,
+            pending: &mut self.pending,
+            dirty: &mut self.dirty,
+        };
+        f(&mut ctx)
+    }
+
+    /// Run the queued effects, then refresh the changed views.
+    async fn flush(&mut self) {
+        for effect in std::mem::take(&mut self.effects) {
+            match effect {
+                Effect::Send(stanza) => {
+                    if let Some(online) = &self.online
+                        && let Err(e) = online.session.send(*stanza).await
+                    {
+                        log::warn!("cannot send a stanza: {e}");
+                    }
+                }
+                Effect::Emit(event) => self.emit(event),
+                Effect::Upload(request) => {
+                    features::upload::start(request, self.internal_tx.clone());
+                }
+            }
+        }
+        let dirty = std::mem::take(&mut self.dirty);
+        let q = QueryCtx {
+            store: &self.store,
+            account_id: self.account_id,
+            account: &self.account,
+        };
+        self.views.refresh(&q, &dirty);
     }
 
     fn emit(&self, event: ClientEvent) {
@@ -248,18 +418,80 @@ impl<S: Session> Actor<S> {
             }
             Command::Logout { reply } => self.logout(reply).await,
             Command::SendChat { to, body, reply } => {
-                let _ = reply.send(self.send_chat(to, body).await);
+                let result = if self.online.is_some() {
+                    Ok(self.with_ctx(|ctx| chat::send(ctx, to, body)))
+                } else {
+                    Err(ClientError::NotConnected)
+                };
+                let _ = reply.send(result);
+            }
+            Command::SpaceList(reply) => {
+                let q = QueryCtx {
+                    store: &self.store,
+                    account_id: self.account_id,
+                    account: &self.account,
+                };
+                let _ = reply.send(self.views.subscribe_space_list(&q));
+            }
+            Command::ChannelList(scope, reply) => {
+                let q = QueryCtx {
+                    store: &self.store,
+                    account_id: self.account_id,
+                    account: &self.account,
+                };
+                let _ = reply.send(self.views.subscribe_channel_list(&q, scope));
+            }
+            Command::Timeline(room, reply) => {
+                let q = QueryCtx {
+                    store: &self.store,
+                    account_id: self.account_id,
+                    account: &self.account,
+                };
+                let _ = reply.send(self.views.subscribe_timeline(&q, room));
+            }
+            Command::MemberList(room, reply) => {
+                let q = QueryCtx {
+                    store: &self.store,
+                    account_id: self.account_id,
+                    account: &self.account,
+                };
+                let _ = reply.send(self.views.subscribe_member_list(&q, room));
+            }
+            Command::PaginateBack { timeline, count } => {
+                let q = QueryCtx {
+                    store: &self.store,
+                    account_id: self.account_id,
+                    account: &self.account,
+                };
+                if let Some(room) = self.views.paginate_back(&q, timeline, count)
+                    && self.online.is_some()
+                {
+                    self.with_ctx(|ctx| features::need_older(ctx, &room));
+                }
+            }
+            Command::Feature(command) => {
+                if self.online.is_some() {
+                    self.with_ctx(|ctx| features::on_command(ctx, command));
+                } else {
+                    features::on_command_offline(command);
+                }
             }
         }
     }
 
     async fn login(&mut self, config: SessionConfig) -> Result<(), ConnectError> {
+        if config.jid != self.account {
+            let msg = format!("this client is for {}, not {}", self.account, config.jid);
+            let error = ConnectError::AuthFailed(AuthFailure::Local(msg));
+            self.emit_state(ConnectionState::LoginFailed(error.clone()));
+            return Err(error);
+        }
         if let Some(online) = self.online.take() {
             online.session.disconnect().await;
+            self.fail_pending();
             self.emit_state(ConnectionState::Disconnected);
         }
         self.emit_state(ConnectionState::Connecting);
-        let account = config.jid.clone();
         let mut session = match S::connect(config).await {
             Ok(session) => session,
             Err(error) => {
@@ -270,14 +502,10 @@ impl<S: Session> Actor<S> {
         let events = session
             .events()
             .expect("a new session has its event stream");
-        let account_id = queries::ensure_account(self.store.conn(), account.as_str())
-            .map_err(|e| log::error!("cannot store the account: {e}"))
-            .ok();
         self.online = Some(Online {
             session,
             events,
-            account,
-            account_id,
+            bound_jid: None,
             logout: None,
         });
         Ok(())
@@ -290,86 +518,60 @@ impl<S: Session> Actor<S> {
             let _ = reply.send(());
             return;
         };
-        let id = format!("logout-{}", uuid::Uuid::new_v4());
-        let server = Jid::from(BareJid::from_parts(None, online.account.domain()));
+        let id = format!("logout-{}", features::new_id());
+        let server = features::disco::domain_of(&self.account);
         let ping = Iq::from_get(id.clone(), Ping).with_to(server);
         if online.session.send(ping.into()).await.is_err() {
             // The session is closed already.
-            self.close_session(Some(reply)).await;
+            self.close_session().await;
+            let _ = reply.send(());
             return;
         }
         online.logout = Some((id, reply));
     }
 
-    async fn close_session(&mut self, reply: Option<oneshot::Sender<()>>) {
+    async fn close_session(&mut self) {
         if let Some(online) = self.online.take() {
             online.session.disconnect().await;
-            self.emit_state(ConnectionState::Disconnected);
             if let Some((_, reply)) = online.logout {
                 let _ = reply.send(());
             }
-        }
-        if let Some(reply) = reply {
-            let _ = reply.send(());
+            self.fail_pending();
+            self.emit_state(ConnectionState::Disconnected);
         }
     }
 
     /// The session ended by itself.
     fn went_offline(&mut self) {
         if let Some(online) = self.online.take() {
-            self.emit_state(ConnectionState::Disconnected);
             if let Some((_, reply)) = online.logout {
                 let _ = reply.send(());
             }
+            self.fail_pending();
+            self.emit_state(ConnectionState::Disconnected);
         }
     }
 
-    async fn send_chat(&mut self, to: Jid, body: String) -> Result<String, ClientError> {
-        let Some(online) = &self.online else {
-            return Err(ClientError::NotConnected);
-        };
-        let origin_id = uuid::Uuid::new_v4().to_string();
-        let mut message = Message::chat(to.clone())
-            .with_body("".into(), body.clone())
-            .with_payload(OriginId {
-                id: origin_id.clone(),
-            });
-        message.id = Some(Id(origin_id.clone()));
-        online
-            .session
-            .send(message.into())
-            .await
-            .map_err(ClientError::Session)?;
-
-        if let Some(account_id) = online.account_id {
-            let sender = online.account.to_string();
-            let peer = to.to_bare().to_string();
-            let new = NewMessage {
-                key_kind: KeyKind::OriginId,
-                key: &origin_id,
-                direction: Direction::Out,
-                peer: &peer,
-                sender: &sender,
-                body: &body,
-                timestamp: None,
-            };
-            if let Err(e) = queries::insert_message(self.store.conn(), account_id, &new) {
-                log::error!("cannot store the sent message {origin_id}: {e}");
-            }
+    /// Tell each feature that its IQs will get no answer.
+    fn fail_pending(&mut self) {
+        for (_, pending) in std::mem::take(&mut self.pending) {
+            self.with_ctx(|ctx| features::on_iq_response(ctx, pending.then, IqResponse::Lost));
         }
-        Ok(origin_id)
     }
 
     async fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::Connected { bound_jid, resumed } => {
-                if presence::needs_initial(resumed)
-                    && let Some(online) = &self.online
-                    && let Err(e) = online.session.send(presence::initial().into()).await
-                {
-                    log::warn!("cannot send initial presence: {e}");
+                if let Some(online) = &mut self.online {
+                    online.bound_jid = Some(bound_jid.clone());
                 }
                 self.emit_state(ConnectionState::Connected { bound_jid, resumed });
+                if !resumed {
+                    // IQs from a lost stream get no answer.
+                    self.fail_pending();
+                    self.dirty.insert(ViewKey::All);
+                }
+                self.with_ctx(|ctx| features::on_connected(ctx, resumed));
             }
             SessionEvent::Disconnected(DisconnectReason::Suspended) => {
                 self.emit_state(ConnectionState::Suspended);
@@ -378,121 +580,47 @@ impl<S: Session> Actor<S> {
                 self.emit_state(ConnectionState::AuthFailed(failure));
             }
             SessionEvent::Disconnected(DisconnectReason::Closed) => self.went_offline(),
-            SessionEvent::Stanza(stanza) => match *stanza {
-                Stanza::Message(message) => self.handle_message(message),
-                Stanza::Iq(iq) => self.handle_iq(iq).await,
-                Stanza::Presence(_) => {}
-            },
+            SessionEvent::Stanza(stanza) => self.handle_stanza(*stanza).await,
         }
     }
 
-    async fn handle_iq(&mut self, iq: Iq) {
-        let is_logout_answer = matches!(
-            (&self.online, &iq),
-            (Some(Online { logout: Some((id, _)), .. }), Iq::Result { .. } | Iq::Error { .. })
-                if id == iq.id()
-        );
-        if is_logout_answer {
-            self.close_session(None).await;
+    async fn handle_stanza(&mut self, stanza: Stanza) {
+        if let Stanza::Iq(iq @ (Iq::Result { .. } | Iq::Error { .. })) = stanza {
+            self.handle_iq_answer(iq).await;
+            return;
         }
+        self.with_ctx(|ctx| features::on_stanza(ctx, stanza));
     }
 
-    /// Store a chat message and report it, once per key. A message from our own account
-    /// (for example a copy of a message sent from another client) is outgoing.
-    fn handle_message(&mut self, message: Message) {
-        let Some(online) = &self.online else { return };
-        let Some(account_id) = online.account_id else {
+    async fn handle_iq_answer(&mut self, iq: Iq) {
+        let is_logout = self
+            .online
+            .as_ref()
+            .and_then(|o| o.logout.as_ref())
+            .is_some_and(|(id, _)| id == iq.id());
+        if is_logout {
+            self.close_session().await;
+            return;
+        }
+        let Some(pending) = self.pending.remove(iq.id()) else {
+            // A late answer, or an answer to an IQ that the session library sent.
             return;
         };
-        if !matches!(message.type_, MessageType::Chat | MessageType::Normal) {
+        if !pending.accepts(iq.from(), &self.account) {
+            log::warn!(
+                "dropped an IQ answer from {:?}: the request went to {:?}",
+                iq.from(),
+                pending.to
+            );
+            self.pending.insert(iq.id().to_owned(), pending);
             return;
         }
-        let (Some(from), Some((_, body))) = (&message.from, message.get_best_body(vec![])) else {
-            return;
+        let response = match iq {
+            Iq::Result { payload, .. } => IqResponse::Result(payload),
+            Iq::Error { error, .. } => IqResponse::Error(error),
+            Iq::Get { .. } | Iq::Set { .. } => unreachable!("only answers come here"),
         };
-        let (direction, peer) = if from.to_bare() == online.account {
-            match &message.to {
-                Some(to) => (Direction::Out, to.to_bare().to_string()),
-                None => return,
-            }
-        } else {
-            (Direction::In, from.to_bare().to_string())
-        };
-        let ids = MessageIds::of(&message, &online.account);
-        let conn = self.store.conn();
-
-        // A message that is stored under its origin-id gets its stanza-id now.
-        if let (Some(stanza_id), Some(origin_id)) = (&ids.stanza_id, &ids.origin_id) {
-            match queries::upgrade_to_stanza_id(
-                conn, account_id, origin_id, direction, &peer, stanza_id,
-            ) {
-                Ok(true) => return,
-                Ok(false) => {}
-                Err(e) => log::error!("cannot update the key of message {origin_id}: {e}"),
-            }
-        }
-        let Some((key_kind, key)) = ids.key() else {
-            log::debug!("chat message from {from} has no stanza-id or origin-id. Not stored.");
-            return;
-        };
-        let timestamp = message
-            .payloads
-            .iter()
-            .find_map(|p| Delay::try_from(p.clone()).ok())
-            .map(|delay| delay.stamp.0.timestamp_millis());
-        let sender = from.to_string();
-        let new = NewMessage {
-            key_kind,
-            key: &key,
-            direction,
-            peer: &peer,
-            sender: &sender,
-            body,
-            timestamp,
-        };
-        match queries::insert_message(conn, account_id, &new) {
-            Ok(Some(stored)) => self.emit(ClientEvent::MessageReceived(stored)),
-            Ok(None) => log::debug!("message {key} is stored already"),
-            Err(e) => log::error!("cannot store the message {key}: {e}"),
-        }
-    }
-}
-
-/// The XEP-0359 ids of a message.
-struct MessageIds {
-    /// The stanza-id from our own server. A stanza-id from any other entity can be
-    /// forged, so it does not count (XEP-0359, section 7).
-    stanza_id: Option<String>,
-    origin_id: Option<String>,
-}
-
-impl MessageIds {
-    fn of(message: &Message, account: &BareJid) -> Self {
-        let own = Jid::from(account.clone());
-        let stanza_id = message
-            .payloads
-            .iter()
-            .filter_map(|p| StanzaId::try_from(p.clone()).ok())
-            .find(|id| id.by == own)
-            .map(|id| id.id);
-        let origin_id = message
-            .payloads
-            .iter()
-            .find_map(|p| OriginId::try_from(p.clone()).ok())
-            .map(|origin| origin.id);
-        Self {
-            stanza_id,
-            origin_id,
-        }
-    }
-
-    /// The key: the stanza-id, otherwise the origin-id.
-    fn key(self) -> Option<(KeyKind, String)> {
-        match (self.stanza_id, self.origin_id) {
-            (Some(id), _) => Some((KeyKind::StanzaId, id)),
-            (None, Some(id)) => Some((KeyKind::OriginId, id)),
-            (None, None) => None,
-        }
+        self.with_ctx(|ctx| features::on_iq_response(ctx, pending.then, response));
     }
 }
 
@@ -502,9 +630,13 @@ mod tests {
     use std::rc::Rc;
 
     use xmpp_parsers::date::DateTime;
+    use xmpp_parsers::delay::Delay;
+    use xmpp_parsers::message::{Id, Message};
+    use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
     use super::*;
     use crate::session::{SaslCondition, ServerAddr};
+    use crate::store::queries::{Direction, KeyKind};
     use crate::test_support::{FakeSession, next, run_with};
 
     const ALICE: &str = "alice@chord.localhost";
@@ -580,7 +712,8 @@ mod tests {
             // The same message again, for example from MAM: stored once, reported once.
             incoming(Some(("s-1", ALICE)), Some("o-1")),
         ]);
-        let (handle, mut events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+        let (handle, mut events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
 
         let seen = run_with(actor.run(), async {
             handle.login(config()).await.unwrap();
@@ -646,7 +779,8 @@ mod tests {
             connected(),
             SessionEvent::Stanza(Box::new(delayed.into())),
         ]);
-        let (handle, mut events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+        let (handle, mut events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
 
         let received = run_with(actor.run(), async {
             handle.login(config()).await.unwrap();
@@ -669,7 +803,8 @@ mod tests {
     fn send_chat_sends_origin_id_and_stores_the_message() {
         let path = temp_db();
         let sent: Rc<RefCell<Vec<Stanza>>> = FakeSession::prepare_connect(vec![connected()]);
-        let (handle, _events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+        let (handle, _events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
 
         let origin_id = run_with(actor.run(), async {
             assert_eq!(
@@ -690,11 +825,17 @@ mod tests {
         let sent = sent.borrow();
         assert!(
             matches!(&sent[0], Stanza::Presence(_)),
-            "initial presence after Connected: {sent:?}"
+            "initial presence comes first after Connected: {sent:?}"
         );
-        let Stanza::Message(message) = &sent[1] else {
-            panic!("expected a message: {sent:?}")
-        };
+        let messages: Vec<&Message> = sent
+            .iter()
+            .filter_map(|s| match s {
+                Stanza::Message(m) => Some(m),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages.len(), 1, "{sent:?}");
+        let message = messages[0];
         assert_eq!(message.id, Some(Id(origin_id.clone())));
         let origin = message
             .payloads
@@ -707,8 +848,8 @@ mod tests {
             })
         );
         assert!(
-            matches!(&sent[2], Stanza::Iq(Iq::Get { .. })),
-            "logout sends a ping"
+            matches!(sent.last(), Some(Stanza::Iq(Iq::Get { payload, .. })) if payload.is("ping", xmpp_parsers::ns::PING)),
+            "logout sends a ping last: {sent:?}"
         );
 
         let stored = stored_with_bob(&path);
@@ -724,7 +865,8 @@ mod tests {
     fn echo_of_a_sent_message_gets_its_stanza_id() {
         let path = temp_db();
         FakeSession::prepare_connect(vec![connected()]);
-        let (handle, mut events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+        let (handle, mut events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
 
         let seen = run_with(actor.run(), async {
             handle.login(config()).await.unwrap();
@@ -778,7 +920,8 @@ mod tests {
             connected(),
             SessionEvent::Stanza(Box::new(carbon.into())),
         ]);
-        let (handle, mut events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+        let (handle, mut events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
 
         let received = run_with(actor.run(), async {
             handle.login(config()).await.unwrap();
@@ -794,11 +937,60 @@ mod tests {
     }
 
     #[test]
+    fn timeline_and_channel_list_get_diffs_for_a_new_message() {
+        use crate::views::{ChannelKind, ChannelScope, ListDiff};
+        FakeSession::prepare_connect(vec![connected()]);
+        let (handle, _events, actor) = new::<FakeSession>(
+            Store::open_in_memory().unwrap(),
+            BareJid::new(ALICE).unwrap(),
+        )
+        .unwrap();
+        let bob = BareJid::new("bob@chord.localhost").unwrap();
+
+        let (timeline_diffs, channel_diffs) = run_with(actor.run(), async {
+            // Views work before login, from the store.
+            let mut timeline = handle.timeline(bob.clone()).await.unwrap();
+            let mut channels = handle.channel_list(ChannelScope::Home).await.unwrap();
+            assert_eq!(
+                next(&mut timeline.stream).await,
+                Some(ListDiff::Reset(vec![]))
+            );
+            assert_eq!(next(&mut channels).await, Some(ListDiff::Reset(vec![])));
+
+            handle.login(config()).await.unwrap();
+            FakeSession::push_event(incoming(Some(("s-1", ALICE)), None));
+            (next(&mut timeline.stream).await, next(&mut channels).await)
+        });
+
+        match timeline_diffs {
+            Some(ListDiff::Insert { index: 0, item }) => {
+                assert_eq!(item.id, "stanza-id:s-1");
+                assert_eq!(item.sender_name, "bob");
+                assert_eq!(item.body, "hi alice");
+                assert!(!item.outgoing);
+                assert!(!item.same_sender_as_previous);
+            }
+            other => panic!("expected an insert, got {other:?}"),
+        }
+        match channel_diffs {
+            Some(ListDiff::Insert { index: 0, item }) => {
+                assert_eq!(item.jid, "bob@chord.localhost");
+                assert_eq!(item.kind, ChannelKind::Direct);
+            }
+            other => panic!("expected an insert, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn login_failure_and_auth_failure_after_reconnect_are_reported() {
         FakeSession::prepare_connect_error(ConnectError::AuthFailed(AuthFailure::Sasl(
             SaslCondition::NotAuthorized,
         )));
-        let (handle, mut events, actor) = new::<FakeSession>(Store::open_in_memory().unwrap());
+        let (handle, mut events, actor) = new::<FakeSession>(
+            Store::open_in_memory().unwrap(),
+            BareJid::new(ALICE).unwrap(),
+        )
+        .unwrap();
         let failure = AuthFailure::Sasl(SaslCondition::NotAuthorized);
 
         let seen = run_with(actor.run(), async {
