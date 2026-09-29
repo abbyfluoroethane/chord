@@ -13,25 +13,41 @@
 //!   items keep their XML in `space_items.payload`. The avatar item goes to `avatars`.
 //! - Events: `on_event` keeps the tables in sync. It drops each event that does not come
 //!   from the service JID of a space that we follow.
+//! - Browse: `browse_spaces` pages the disco#items of the service with RSM (XEP-0059) when
+//!   the service advertises it. It stops at `MAX_BROWSE_NODES` nodes, and it keeps at most
+//!   `BROWSE_WINDOW` disco#info queries in flight. If the service advertises XEP-0462
+//!   (`urn:xmpp:pubsub-filter:0`), the query asks only for nodes of type `urn:xmpp:spaces:0`.
+//!   If it advertises XEP-0499 (`urn:xmpp:pubsub-ext-disco:0`), the query asks for the node
+//!   metadata in the items, so the browse needs no disco#info per node. An item without
+//!   metadata still gets a disco#info query. If the first request fails while it uses one of
+//!   these extensions, the browse starts again with a plain request.
+//! - Avatar: the avatar item holds XEP-0084 metadata. We store its hash and type in `avatars`
+//!   with the owner `service/node`. If the info has no URL, we fetch the image from the
+//!   `urn:xmpp:avatar:data` node of the service. An image at a URL needs an HTTP download,
+//!   which the features cannot do. `store_avatar_image` takes such an image from the caller.
 //! - Private spaces use the `whitelist` access model. The owner makes a member with
 //!   `add_space_member`, then the member calls `join_space`. Join requests (`authorize`)
 //!   only work where a server offers them. Prosody 13 does not.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use rusqlite::{Connection, params};
+use xmpp_parsers::avatar::Data as AvatarData;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
-use xmpp_parsers::disco::{DiscoInfoQuery, DiscoInfoResult, DiscoItemsQuery, DiscoItemsResult};
+use xmpp_parsers::disco::{DiscoInfoQuery, DiscoInfoResult, DiscoItemsQuery};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub::event::Payload;
+use xmpp_parsers::rsm::{SetQuery, SetResult};
 use xmpp_parsers::stanza_error::StanzaError;
 
+use super::avatars::{self, MAX_AVATAR_BYTES};
 use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, new_id, pubsub};
 use crate::actor::{ClientError, ClientHandle};
+use crate::store::Store;
 use crate::views::{ChannelScope, ViewKey};
 
 /// The `pubsub#type` of a space node.
@@ -57,8 +73,20 @@ const REQUIRED_FEATURES: &[&str] = &[
     "manage-subscriptions",
     "retrieve-items",
 ];
-/// The most nodes that `browse_spaces` checks with a disco#info query each.
-const MAX_BROWSE_NODES: usize = 200;
+/// The most nodes that `browse_spaces` reads from a service. It ignores the rest.
+pub const MAX_BROWSE_NODES: usize = 1000;
+/// The page size that `browse_spaces` asks for with RSM. A service may send less.
+const PAGE_SIZE: usize = 100;
+/// The most disco#info queries of one browse that wait for an answer at the same time.
+const BROWSE_WINDOW: usize = 20;
+const FEATURE_RSM: &str = "http://jabber.org/protocol/rsm";
+/// XEP-0462: filter the nodes of a disco#items query by `pubsub#type`.
+const NS_TYPE_FILTER: &str = "urn:xmpp:pubsub-filter:0";
+/// XEP-0499: node metadata in the disco#items result. The XEP text names the feature
+/// with and without the `:0`, so we accept both.
+const NS_EXT_DISCO: &str = "urn:xmpp:pubsub-ext-disco:0";
+const NS_EXT_DISCO_SHORT: &str = "urn:xmpp:pubsub-ext-disco";
+const NS_AVATAR_DATA: &str = "urn:xmpp:avatar:data";
 /// The most items that a space node keeps. Prosody keeps 20 by default.
 const MAX_ITEMS: &str = "256";
 
@@ -92,12 +120,37 @@ pub(crate) struct State {
     started: bool,
     next_browse: u64,
     browses: HashMap<u64, Browse>,
+    /// The space avatar images that we fetch now, as (owner, hash).
+    avatar_fetching: HashSet<(String, String)>,
+}
+
+/// The extensions that a browse uses. The disco features of the service set them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Mode {
+    rsm: bool,
+    filter: bool,
+    ext: bool,
+}
+
+impl Mode {
+    fn any(self) -> bool {
+        self.rsm || self.filter || self.ext
+    }
 }
 
 #[derive(Debug)]
 struct Browse {
     service: BareJid,
-    outstanding: usize,
+    mode: Mode,
+    /// The pages that arrived.
+    pages: usize,
+    /// The `last` of the newest page, for the next request.
+    after: Option<String>,
+    /// Every node that we saw, to skip repeats and to keep the cap.
+    known: HashSet<String>,
+    /// The nodes that wait for a disco#info query.
+    queue: VecDeque<String>,
+    in_flight: usize,
     found: Vec<SpaceInfo>,
     reply: Reply<Vec<SpaceInfo>>,
 }
@@ -151,9 +204,9 @@ pub(crate) enum Pending {
         node: String,
         join: Option<Reply<JoinOutcome>>,
     },
+    /// One page of the disco#items of the service.
     BrowseItems {
-        service: BareJid,
-        reply: Reply<Vec<SpaceInfo>>,
+        browse: u64,
     },
     BrowseInfo {
         browse: u64,
@@ -181,6 +234,12 @@ pub(crate) enum Pending {
     Done {
         action: Action,
         reply: Reply<()>,
+    },
+    /// The image of a space avatar, from the data node of the service.
+    AvatarData {
+        service: BareJid,
+        node: String,
+        hash: String,
     },
     /// The answer does not matter.
     Ignore,
@@ -566,20 +625,7 @@ fn request_items(
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
         Command::Browse { reply } => match service_of(ctx) {
-            Ok(service) => {
-                let iq = Iq::from_get(
-                    "",
-                    DiscoItemsQuery {
-                        node: None,
-                        rsm: None,
-                    },
-                )
-                .with_to(Jid::from(service.clone()));
-                ctx.request(
-                    iq,
-                    FeaturePending::Spaces(Pending::BrowseItems { service, reply }),
-                );
-            }
+            Ok(service) => start_browse(ctx, service, reply),
             Err(e) => {
                 let _ = reply.send(Err(e));
             }
@@ -821,7 +867,12 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 });
             }
         }
-        Pending::BrowseItems { service, reply } => on_browse_items(ctx, service, reply, result),
+        Pending::BrowseItems { browse } => on_browse_page(ctx, browse, result),
+        Pending::AvatarData {
+            service,
+            node,
+            hash,
+        } => on_avatar_data(ctx, &service, &node, &hash, result),
         Pending::BrowseInfo { browse, node } => on_browse_info(ctx, browse, &node, result),
         Pending::Subscribe {
             service,
@@ -1049,14 +1100,19 @@ struct Meta {
 
 /// The pubsub#meta-data form of a node disco#info.
 fn meta_of(info: &DiscoInfoResult) -> Meta {
-    let mut meta = Meta::default();
-    let Some(form) = info
+    match info
         .extensions
         .iter()
         .find(|f| f.form_type() == Some(NS_META))
-    else {
-        return meta;
-    };
+    {
+        Some(form) => meta_of_form(form),
+        None => Meta::default(),
+    }
+}
+
+/// The values of a pubsub#meta-data form.
+fn meta_of_form(form: &DataForm) -> Meta {
+    let mut meta = Meta::default();
     let value = |var: &str| {
         form.fields
             .iter()
@@ -1070,53 +1126,257 @@ fn meta_of(info: &DiscoInfoResult) -> Meta {
     meta
 }
 
-fn on_browse_items(
-    ctx: &mut Ctx<'_>,
-    service: BareJid,
-    reply: Reply<Vec<SpaceInfo>>,
-    result: Result<Option<Element>, ClientError>,
-) {
-    let items = match result {
-        Ok(Some(p)) => {
-            DiscoItemsResult::try_from(p).map_err(|e| ClientError::Server(e.to_string()))
-        }
-        Ok(None) => Err(ClientError::Server("empty answer".into())),
-        Err(e) => Err(e),
+/// The extensions that the service advertises, from the disco state.
+fn browse_mode(ctx: &Ctx<'_>, service: &BareJid) -> Mode {
+    let Some((_, info)) = ctx
+        .state
+        .disco
+        .services
+        .iter()
+        .find(|(jid, _)| jid.to_bare() == *service)
+    else {
+        return Mode::default();
     };
-    let items = match items {
-        Ok(items) => items,
-        Err(e) => {
-            let _ = reply.send(Err(e));
-            return;
-        }
-    };
-    let nodes: Vec<String> = items
-        .items
-        .into_iter()
-        .filter_map(|i| i.node)
-        .take(MAX_BROWSE_NODES)
-        .collect();
-    if nodes.is_empty() {
-        let _ = reply.send(Ok(Vec::new()));
-        return;
+    let has = |feature: &str| info.features.contains(feature);
+    Mode {
+        rsm: has(FEATURE_RSM),
+        filter: has(NS_TYPE_FILTER),
+        ext: has(NS_EXT_DISCO) || has(NS_EXT_DISCO_SHORT),
     }
+}
+
+/// The disco#items query of one browse page.
+fn browse_query(mode: Mode, after: Option<&str>) -> Element {
+    let rsm = mode.rsm.then(|| SetQuery {
+        max: Some(PAGE_SIZE),
+        after: after.map(str::to_owned),
+        before: None,
+        index: None,
+    });
+    let mut query = Element::from(DiscoItemsQuery { node: None, rsm });
+    if mode.filter {
+        let form = DataForm::new(
+            DataFormType::Submit,
+            NS_TYPE_FILTER,
+            vec![Field::new("included-types", FieldType::ListMulti).with_value(NS_SPACES)],
+        );
+        let filter = Element::builder("filter", NS_TYPE_FILTER)
+            .append(Element::from(form))
+            .build();
+        query.append_child(filter);
+    }
+    if mode.ext {
+        let form = DataForm::new(
+            DataFormType::Submit,
+            NS_EXT_DISCO,
+            vec![
+                Field::new("type", FieldType::ListMulti).with_value("nodes"),
+                Field::new("full_metadata", FieldType::Boolean).with_value("true"),
+            ],
+        );
+        query.append_child(Element::from(form));
+    }
+    query
+}
+
+fn start_browse(ctx: &mut Ctx<'_>, service: BareJid, reply: Reply<Vec<SpaceInfo>>) {
     let id = ctx.state.spaces.next_browse;
     ctx.state.spaces.next_browse += 1;
+    let mode = browse_mode(ctx, &service);
     ctx.state.spaces.browses.insert(
         id,
         Browse {
-            service: service.clone(),
-            outstanding: nodes.len(),
+            service,
+            mode,
+            pages: 0,
+            after: None,
+            known: HashSet::new(),
+            queue: VecDeque::new(),
+            in_flight: 0,
             found: Vec::new(),
             reply,
         },
     );
-    for node in nodes {
-        let iq = info_iq(&service, &node);
+    request_page(ctx, id);
+}
+
+/// Ask for the next page of the nodes of a browse.
+fn request_page(ctx: &mut Ctx<'_>, id: u64) {
+    let Some(browse) = ctx.state.spaces.browses.get(&id) else {
+        return;
+    };
+    let payload = browse_query(browse.mode, browse.after.as_deref());
+    let iq = Iq::Get {
+        from: None,
+        to: Some(Jid::from(browse.service.clone())),
+        id: String::new(),
+        payload,
+    };
+    ctx.request(
+        iq,
+        FeaturePending::Spaces(Pending::BrowseItems { browse: id }),
+    );
+}
+
+/// End a browse with an error.
+fn fail_browse(ctx: &mut Ctx<'_>, id: u64, error: ClientError) {
+    if let Some(browse) = ctx.state.spaces.browses.remove(&id) {
+        let _ = browse.reply.send(Err(error));
+    }
+}
+
+/// One node of a disco#items page. `meta` is the XEP-0499 metadata form, if the item has it.
+struct PageItem {
+    node: String,
+    meta: Option<Meta>,
+}
+
+struct Page {
+    items: Vec<PageItem>,
+    /// RSM `last`, and `count`.
+    last: Option<String>,
+    count: Option<usize>,
+}
+
+fn parse_page(payload: &Element) -> Option<Page> {
+    if !payload.is("query", ns::DISCO_ITEMS) {
+        return None;
+    }
+    let items = payload
+        .children()
+        .filter(|c| c.is("item", ns::DISCO_ITEMS))
+        .filter_map(|item| {
+            let node = item.attr("node")?.to_owned();
+            let meta = item
+                .children()
+                .find(|c| c.is("x", ns::DATA_FORMS))
+                .and_then(|x| DataForm::try_from(x.clone()).ok())
+                .filter(|form| form.form_type() == Some(NS_META))
+                .map(|form| meta_of_form(&form));
+            Some(PageItem { node, meta })
+        })
+        .collect();
+    let rsm = payload
+        .children()
+        .find(|c| c.is("set", ns::RSM))
+        .and_then(|set| SetResult::try_from(set.clone()).ok());
+    Some(Page {
+        items,
+        last: rsm.as_ref().and_then(|r| r.last.clone()),
+        count: rsm.as_ref().and_then(|r| r.count),
+    })
+}
+
+fn space_info(service: &BareJid, node: &str, meta: Meta) -> SpaceInfo {
+    SpaceInfo {
+        service: service.to_string(),
+        name: meta.title.unwrap_or_else(|| node.to_owned()),
+        node: node.to_owned(),
+        description: meta.description,
+        access_model: meta.access_model,
+    }
+}
+
+/// Browse lists open spaces only.
+fn is_open_space(meta: &Meta) -> bool {
+    meta.type_.as_deref() == Some(NS_SPACES) && meta.access_model.as_deref() == Some("open")
+}
+
+fn on_browse_page(ctx: &mut Ctx<'_>, id: u64, result: Result<Option<Element>, ClientError>) {
+    let Some(browse) = ctx.state.spaces.browses.get_mut(&id) else {
+        return;
+    };
+    let page = match result {
+        Ok(Some(payload)) => {
+            parse_page(&payload).ok_or_else(|| ClientError::Server("bad disco#items answer".into()))
+        }
+        Ok(None) => Err(ClientError::Server("empty answer".into())),
+        Err(e) => Err(e),
+    };
+    let page = match page {
+        Ok(page) => page,
+        Err(ClientError::NotConnected) => return fail_browse(ctx, id, ClientError::NotConnected),
+        Err(e) if browse.pages == 0 && browse.mode.any() => {
+            // The service may not support an extension that it advertises. Start again.
+            log::warn!(
+                "browse with {:?} failed: {e}. Trying a plain request.",
+                browse.mode
+            );
+            browse.mode = Mode::default();
+            request_page(ctx, id);
+            return;
+        }
+        Err(e) if browse.pages == 0 => return fail_browse(ctx, id, e),
+        Err(e) => {
+            // Keep the nodes of the earlier pages.
+            log::warn!("browse: a later page failed: {e}");
+            return pump_browse(ctx, id);
+        }
+    };
+    browse.pages += 1;
+    let before = browse.known.len();
+    for item in page.items {
+        if browse.known.len() >= MAX_BROWSE_NODES {
+            break;
+        }
+        if !browse.known.insert(item.node.clone()) {
+            continue;
+        }
+        // Trust the metadata only if we asked for it, and only if it names a type.
+        match item.meta.filter(|m| browse.mode.ext && m.type_.is_some()) {
+            Some(meta) if is_open_space(&meta) => {
+                browse
+                    .found
+                    .push(space_info(&browse.service, &item.node, meta));
+            }
+            Some(_) => {}
+            None => browse.queue.push_back(item.node),
+        }
+    }
+    // Another page follows if this one brought new nodes, and the service has more.
+    let added = browse.known.len() - before;
+    let more = browse.mode.rsm
+        && added > 0
+        && browse.known.len() < MAX_BROWSE_NODES
+        && page.last.is_some()
+        && page.last != browse.after
+        && page.count.is_none_or(|count| browse.known.len() < count);
+    if more {
+        browse.after = page.last;
+        request_page(ctx, id);
+    } else {
+        pump_browse(ctx, id);
+    }
+}
+
+/// Send the disco#info queries that fit in the window. End the browse if none is left.
+fn pump_browse(ctx: &mut Ctx<'_>, id: u64) {
+    loop {
+        let Some(browse) = ctx.state.spaces.browses.get_mut(&id) else {
+            return;
+        };
+        if browse.in_flight >= BROWSE_WINDOW {
+            return;
+        }
+        let Some(node) = browse.queue.pop_front() else {
+            break;
+        };
+        browse.in_flight += 1;
+        let iq = info_iq(&browse.service, &node);
         ctx.request(
             iq,
             FeaturePending::Spaces(Pending::BrowseInfo { browse: id, node }),
         );
+    }
+    let Some(browse) = ctx.state.spaces.browses.get(&id) else {
+        return;
+    };
+    if browse.in_flight == 0
+        && let Some(mut done) = ctx.state.spaces.browses.remove(&id)
+    {
+        done.found
+            .sort_by(|a, b| a.name.cmp(&b.name).then(a.node.cmp(&b.node)));
+        let _ = done.reply.send(Ok(done.found));
     }
 }
 
@@ -1129,29 +1389,20 @@ fn on_browse_info(
     let Some(browse) = ctx.state.spaces.browses.get_mut(&id) else {
         return;
     };
-    browse.outstanding -= 1;
+    browse.in_flight = browse.in_flight.saturating_sub(1);
+    // The session ended: no answer for the other queries will come.
+    if matches!(result, Err(ClientError::NotConnected)) {
+        return fail_browse(ctx, id, ClientError::NotConnected);
+    }
     if let Ok(Some(payload)) = result
         && let Ok(info) = DiscoInfoResult::try_from(payload)
     {
         let meta = meta_of(&info);
-        if meta.type_.as_deref() == Some(NS_SPACES) && meta.access_model.as_deref() == Some("open")
-        {
-            browse.found.push(SpaceInfo {
-                service: browse.service.to_string(),
-                name: meta.title.unwrap_or_else(|| node.to_owned()),
-                node: node.to_owned(),
-                description: meta.description,
-                access_model: meta.access_model,
-            });
+        if is_open_space(&meta) {
+            browse.found.push(space_info(&browse.service, node, meta));
         }
     }
-    if browse.outstanding == 0
-        && let Some(mut done) = ctx.state.spaces.browses.remove(&id)
-    {
-        done.found
-            .sort_by(|a, b| a.name.cmp(&b.name).then(a.node.cmp(&b.node)));
-        let _ = done.reply.send(Ok(done.found));
-    }
+    pump_browse(ctx, id);
 }
 
 // --- Items ---
@@ -1208,65 +1459,201 @@ fn store_item(
     payload: Option<&Element>,
     position: Option<i64>,
 ) {
-    let conn = ctx.store.conn();
-    let account_id = ctx.account_id;
-    let result = if id == AVATAR_ITEM {
-        match payload.and_then(avatar_of) {
-            Some((hash, mime)) => db::upsert_avatar(
-                conn,
-                account_id,
-                &format!("{service}/{node}"),
-                &hash,
-                mime.as_deref(),
-            ),
-            None => Ok(()),
-        }
-    } else {
-        let room = payload
-            .filter(|p| p.is("conference", ns::BOOKMARKS2))
-            .and_then(|_| BareJid::new(id).ok());
-        let name = payload
-            .filter(|_| room.is_some())
-            .and_then(|p| p.attr("name"));
-        let xml = payload.map(String::from);
-        db::upsert_item(
-            conn,
-            account_id,
-            &db::Item {
-                service,
-                node,
-                id,
-                room_jid: room.as_ref().map(|r| r.as_str()),
-                name,
-                payload: xml.as_deref(),
-            },
-            position,
-        )
-    };
+    if id == AVATAR_ITEM {
+        store_avatar_item(ctx, service, node, payload);
+        return;
+    }
+    let room = payload
+        .filter(|p| p.is("conference", ns::BOOKMARKS2))
+        .and_then(|_| BareJid::new(id).ok());
+    let name = payload
+        .filter(|_| room.is_some())
+        .and_then(|p| p.attr("name"));
+    let xml = payload.map(String::from);
+    let result = db::upsert_item(
+        ctx.store.conn(),
+        ctx.account_id,
+        &db::Item {
+            service,
+            node,
+            id,
+            room_jid: room.as_ref().map(|r| r.as_str()),
+            name,
+            payload: xml.as_deref(),
+        },
+        position,
+    );
     if let Err(e) = result {
         ctx.store_error("store a space item", e);
     }
 }
 
-/// The hash and MIME type of the first `<info/>` of an avatar metadata element.
-fn avatar_of(payload: &Element) -> Option<(String, Option<String>)> {
+/// The first `<info/>` of an avatar metadata element.
+struct AvatarInfo {
+    hash: String,
+    mime: Option<String>,
+    bytes: Option<usize>,
+    url: Option<String>,
+}
+
+/// `None` if `payload` is no metadata element. `Some(None)` if it has no info: the space
+/// has no avatar (XEP-0084, 4.2).
+fn avatar_of(payload: &Element) -> Option<Option<AvatarInfo>> {
     if !payload.is("metadata", NS_AVATAR_METADATA) {
         return None;
     }
     let info = payload
         .children()
-        .find(|c| c.is("info", NS_AVATAR_METADATA))?;
-    Some((
-        info.attr("id")?.to_owned(),
-        info.attr("type").map(str::to_owned),
-    ))
+        .find(|c| c.is("info", NS_AVATAR_METADATA))
+        .and_then(|info| {
+            Some(AvatarInfo {
+                hash: info.attr("id")?.to_owned(),
+                mime: info.attr("type").map(str::to_owned),
+                bytes: info.attr("bytes").and_then(|b| b.parse().ok()),
+                url: info.attr("url").map(str::to_owned),
+            })
+        });
+    Some(info)
+}
+
+/// The owner of the avatar of a space.
+fn avatar_owner(service: &str, node: &str) -> String {
+    format!("{service}/{node}")
+}
+
+/// The stored avatar of a space, or `None`. The space list has only its hash.
+pub fn load_avatar(
+    store: &Store,
+    account_id: i64,
+    service: &str,
+    node: &str,
+) -> rusqlite::Result<Option<avatars::Avatar>> {
+    avatars::load_key(store, account_id, &avatar_owner(service, node))
+}
+
+/// Store the image of a space avatar, after a check of its size and its SHA-1 against
+/// the stored hash (lower case hex). Returns false if the space has another avatar now.
+/// Use it for an image that the caller downloaded from the URL of the avatar info.
+pub fn store_avatar_image(
+    store: &Store,
+    account_id: i64,
+    service: &str,
+    node: &str,
+    hash: &str,
+    data: &[u8],
+) -> Result<bool, ClientError> {
+    avatars::verify_image(hash, data)?;
+    avatars::store_data(store, account_id, &avatar_owner(service, node), hash, data)
+        .map_err(|e| ClientError::Invalid(format!("store error: {e}")))
+}
+
+/// Handle the avatar item of a space: store the hash, and ask for the image if we lack it.
+fn store_avatar_item(ctx: &mut Ctx<'_>, service: &str, node: &str, payload: Option<&Element>) {
+    let owner = avatar_owner(service, node);
+    let info = match payload.and_then(avatar_of) {
+        Some(Some(info)) => info,
+        Some(None) => {
+            if let Err(e) = avatars::remove(ctx.store, ctx.account_id, &owner) {
+                ctx.store_error("remove a space avatar", e);
+            }
+            return;
+        }
+        None => return,
+    };
+    // The hash of a proper info is lower case hex. Make sure that our check finds it so.
+    let hash = info.hash.to_ascii_lowercase();
+    let stored = match avatars::store_metadata(
+        ctx.store,
+        ctx.account_id,
+        &owner,
+        &hash,
+        info.mime.as_deref(),
+    ) {
+        Ok(stored) => stored,
+        Err(e) => return ctx.store_error("store a space avatar", e),
+    };
+    if !stored.needs_data {
+        return;
+    }
+    let sane = hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit());
+    if !sane || info.bytes.is_some_and(|b| b > MAX_AVATAR_BYTES) {
+        log::warn!("the avatar of {owner} has a bad hash or a big size. Not fetched.");
+        return;
+    }
+    if info.url.is_some() {
+        log::debug!("the avatar of {owner} is at a URL. Not fetched.");
+        return;
+    }
+    let Ok(service) = BareJid::new(service) else {
+        return;
+    };
+    if !ctx
+        .state
+        .spaces
+        .avatar_fetching
+        .insert((owner, hash.clone()))
+    {
+        return;
+    }
+    let inner = format!(
+        "<items node='{NS_AVATAR_DATA}'><item id='{}'/></items>",
+        xml_escape(&hash)
+    );
+    let node = node.to_owned();
+    match pubsub_iq(false, &service, &inner) {
+        Ok(iq) => {
+            let pending = Pending::AvatarData {
+                service,
+                node,
+                hash,
+            };
+            ctx.request(iq, FeaturePending::Spaces(pending));
+        }
+        Err(e) => log::warn!("avatar request: {e}"),
+    }
+}
+
+fn on_avatar_data(
+    ctx: &mut Ctx<'_>,
+    service: &BareJid,
+    node: &str,
+    hash: &str,
+    result: Result<Option<Element>, ClientError>,
+) {
+    let s = service.to_string();
+    ctx.state
+        .spaces
+        .avatar_fetching
+        .remove(&(avatar_owner(&s, node), hash.to_owned()));
+    let data = result
+        .as_ref()
+        .ok()
+        .and_then(|p| p.as_ref())
+        .and_then(|p| p.get_child("items", ns::PUBSUB))
+        .and_then(|items| {
+            items
+                .children()
+                .filter(|c| c.is("item", ns::PUBSUB))
+                .find_map(|item| item.children().next())
+        })
+        .and_then(|element| AvatarData::try_from(element.clone()).ok())
+        .map(|d| d.data);
+    let Some(data) = data else {
+        log::debug!("no avatar image for {node} of {service}: {result:?}");
+        return;
+    };
+    match store_avatar_image(ctx.store, ctx.account_id, &s, node, hash, &data) {
+        Ok(true) => changed(ctx, &s, node),
+        Ok(false) => {}
+        Err(e) => log::warn!("avatar image for {node} of {service}: {e}"),
+    }
 }
 
 fn remove_item(ctx: &mut Ctx<'_>, service: &str, node: &str, id: &str) {
     let conn = ctx.store.conn();
     let result = db::delete_item(conn, ctx.account_id, service, node, id).and_then(|_| {
         if id == AVATAR_ITEM {
-            db::delete_avatar(conn, ctx.account_id, &format!("{service}/{node}"))
+            avatars::remove(ctx.store, ctx.account_id, &avatar_owner(service, node)).map(|_| ())
         } else {
             Ok(())
         }
@@ -1277,7 +1664,10 @@ fn remove_item(ctx: &mut Ctx<'_>, service: &str, node: &str, id: &str) {
 }
 
 fn remove_space(ctx: &mut Ctx<'_>, service: &str, node: &str) {
-    if let Err(e) = db::delete_space(ctx.store.conn(), ctx.account_id, service, node) {
+    let result = db::delete_space(ctx.store.conn(), ctx.account_id, service, node).and_then(|_| {
+        avatars::remove(ctx.store, ctx.account_id, &avatar_owner(service, node)).map(|_| ())
+    });
+    if let Err(e) = result {
         ctx.store_error("remove a space", e);
     }
     changed(ctx, service, node);
@@ -1421,7 +1811,7 @@ mod db {
             "DELETE FROM spaces WHERE account_id = ?1 AND service = ?2 AND node = ?3",
             params![account_id, service, node],
         )?;
-        delete_avatar(conn, account_id, &format!("{service}/{node}"))
+        Ok(())
     }
 
     /// Store an item. With no position, a new item goes last and an old one keeps its place.
@@ -1480,32 +1870,6 @@ mod db {
             "DELETE FROM space_items
              WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND item_id = ?4",
             params![account_id, service, node, id],
-        )?;
-        Ok(())
-    }
-
-    /// Store the avatar hash. The image data stays if the hash is the same.
-    pub fn upsert_avatar(
-        conn: &Connection,
-        account_id: i64,
-        owner: &str,
-        hash: &str,
-        mime: Option<&str>,
-    ) -> rusqlite::Result<()> {
-        conn.execute(
-            "INSERT INTO avatars (account_id, owner, hash, mime) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (account_id, owner) DO UPDATE SET
-                 data = CASE WHEN avatars.hash = excluded.hash THEN avatars.data ELSE NULL END,
-                 hash = excluded.hash, mime = excluded.mime",
-            params![account_id, owner, hash, mime],
-        )?;
-        Ok(())
-    }
-
-    pub fn delete_avatar(conn: &Connection, account_id: i64, owner: &str) -> rusqlite::Result<()> {
-        conn.execute(
-            "DELETE FROM avatars WHERE account_id = ?1 AND owner = ?2",
-            params![account_id, owner],
         )?;
         Ok(())
     }

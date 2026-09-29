@@ -196,3 +196,41 @@ async fn browse_finds_a_public_space_and_not_a_private_one() {
     );
     assert!(!found.iter().any(|s| s.node == private));
 }
+
+/// More spaces than the browse window (20 disco#info queries at a time). Prosody has no
+/// RSM, type filtering, or extended disco for pubsub, so this covers the plain path.
+#[tokio::test]
+#[ignore = "needs the dev Prosody server: ./dev/prosody/setup.sh"]
+async fn browse_finds_more_spaces_than_the_query_window() {
+    const COUNT: usize = 22;
+    let alice = login("alice").await;
+    let suffix = uuid_suffix();
+    let mut nodes = Vec::new();
+    let mut service = String::new();
+    for i in 0..COUNT {
+        let (s, node) = create_space(&alice, &format!("Many {suffix} {i:02}"), false).await;
+        service = s;
+        nodes.push(node);
+    }
+
+    let found = alice.browse_spaces().await;
+    for node in &nodes {
+        let _ = alice.delete_space(&service, node).await;
+    }
+    alice.logout().await;
+
+    let found = found.expect("browse_spaces");
+    for node in &nodes {
+        assert!(found.iter().any(|s| &s.node == node), "missing {node}");
+    }
+    // The list is sorted by name.
+    let names: Vec<&str> = found
+        .iter()
+        .filter(|s| s.name.starts_with(&format!("Many {suffix}")))
+        .map(|s| s.name.as_str())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert_eq!(names.len(), COUNT);
+}

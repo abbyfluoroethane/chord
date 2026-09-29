@@ -738,7 +738,8 @@ fn browse_lists_the_open_spaces_only() {
         );
     }
     assert_eq!(rx.try_recv(), Ok(None));
-    h.respond(is_browse_info, IqResponse::Lost);
+    // The last query fails with a server error: skip that node.
+    h.respond(is_browse_info, forbidden());
     let Ok(Some(Ok(found))) = rx.try_recv() else {
         panic!("expected the list")
     };
@@ -747,6 +748,24 @@ fn browse_lists_the_open_spaces_only() {
     assert_eq!(found[0].service, SERVICE);
     assert_eq!(found[0].name, "Space a-open");
     assert!(h.state.spaces.browses.is_empty());
+}
+
+#[test]
+fn browse_info_lost_fails_the_browse() {
+    let mut h = harness();
+    let (reply, mut rx) = oneshot::channel();
+    h.with_ctx(|ctx| on_command(ctx, Command::Browse { reply }));
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::BrowseItems { .. })),
+        Some(xml("<query xmlns='http://jabber.org/protocol/disco#items'>
+               <item jid='pubsub.chord.localhost' node='a'/>
+               <item jid='pubsub.chord.localhost' node='b'/></query>")),
+    );
+    h.respond(is_browse_info, IqResponse::Lost);
+    assert_eq!(rx.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    assert!(h.state.spaces.browses.is_empty());
+    // The other query gets the same answer later. It changes nothing.
+    h.respond(is_browse_info, IqResponse::Lost);
 }
 
 #[test]
@@ -815,4 +834,576 @@ fn a_bad_service_jid_is_invalid() {
         parse_service("not a jid@@"),
         Err(ClientError::Invalid(_))
     ));
+}
+
+// --- Browse with paging and extensions ---
+
+const RSM: &str = "http://jabber.org/protocol/rsm";
+
+/// A harness whose pubsub service also advertises `features`.
+fn harness_with(features: &[&str]) -> Harness {
+    let mut h = harness();
+    h.state.disco.services[0]
+        .1
+        .features
+        .extend(features.iter().map(|f| (*f).to_owned()));
+    h
+}
+
+type Found = Result<Vec<SpaceInfo>, ClientError>;
+
+fn browse(h: &mut Harness) -> oneshot::Receiver<Found> {
+    let (reply, rx) = oneshot::channel();
+    h.with_ctx(|ctx| on_command(ctx, Command::Browse { reply }));
+    rx
+}
+
+fn is_page(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::BrowseItems { .. }))
+}
+
+/// A disco#items result. `rsm` is the `last` and the `count` of the RSM element.
+fn page(nodes: &[&str], rsm: Option<(&str, Option<usize>)>) -> Element {
+    let items: String = nodes
+        .iter()
+        .map(|n| format!("<item jid='{SERVICE}' node='{n}'/>"))
+        .collect();
+    page_xml(&items, rsm)
+}
+
+fn page_xml(items: &str, rsm: Option<(&str, Option<usize>)>) -> Element {
+    let set = rsm
+        .map(|(last, count)| {
+            let count = count
+                .map(|c| format!("<count>{c}</count>"))
+                .unwrap_or_default();
+            format!(
+                "<set xmlns='http://jabber.org/protocol/rsm'><first>x</first>\
+                 <last>{last}</last>{count}</set>"
+            )
+        })
+        .unwrap_or_default();
+    xml(&format!(
+        "<query xmlns='http://jabber.org/protocol/disco#items'>{items}{set}</query>"
+    ))
+}
+
+/// The one IQ that the harness sent, as its payload element.
+fn sent_query(h: &mut Harness) -> Element {
+    let mut iqs = h.sent_iqs();
+    assert_eq!(iqs.len(), 1, "{iqs:?}");
+    match iqs.remove(0) {
+        Iq::Get { payload, .. } => payload,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn open_info(h: &mut Harness, node: &str) {
+    let node = node.to_owned();
+    let info = node_info(&node, NS_SPACES, &format!("Space {node}"), "open");
+    h.answer(
+        move |p| {
+            matches!(p, FeaturePending::Spaces(Pending::BrowseInfo { node: n, .. }) if *n == node)
+        },
+        Some(info),
+    );
+}
+
+fn rsm_after(query: &Element) -> Option<String> {
+    let set = query.get_child("set", ns::RSM)?;
+    Some(set.get_child("after", ns::RSM)?.text())
+}
+
+fn nodes_of(found: &[SpaceInfo]) -> Vec<&str> {
+    found.iter().map(|s| s.node.as_str()).collect()
+}
+
+#[test]
+fn browse_pages_with_rsm_until_the_count_is_reached() {
+    let mut h = harness_with(&[RSM]);
+    let mut rx = browse(&mut h);
+    let first = sent_query(&mut h);
+    let set = first.get_child("set", ns::RSM).expect("an RSM element");
+    assert_eq!(set.get_child("max", ns::RSM).unwrap().text(), "100");
+    assert_eq!(rsm_after(&first), None);
+    assert!(first.get_child("filter", NS_TYPE_FILTER).is_none());
+
+    h.answer(is_page, Some(page(&["a", "b"], Some(("b", Some(3))))));
+    let second = sent_query(&mut h);
+    assert_eq!(rsm_after(&second).as_deref(), Some("b"));
+    h.answer(is_page, Some(page(&["c"], Some(("c", Some(3))))));
+    // The count is reached: three disco#info queries follow, and no third page.
+    let iqs = h.sent_iqs();
+    assert_eq!(iqs.len(), 3);
+    for node in ["a", "b", "c"] {
+        open_info(&mut h, node);
+    }
+    let Ok(Some(Ok(found))) = rx.try_recv() else {
+        panic!("expected the list")
+    };
+    assert_eq!(nodes_of(&found), ["a", "b", "c"]);
+}
+
+#[test]
+fn browse_stops_paging_on_a_page_with_nothing_new_or_a_repeated_last() {
+    // No count: the second page repeats the first, so it adds nothing.
+    let mut h = harness_with(&[RSM]);
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    h.answer(is_page, Some(page(&["a"], Some(("a", None)))));
+    assert_eq!(h.sent_iqs().len(), 1);
+    h.answer(is_page, Some(page(&["a"], Some(("a2", None)))));
+    let infos = h.sent_iqs();
+    assert_eq!(infos.len(), 1, "{infos:?}");
+    assert!(matches!(&infos[0], Iq::Get { payload, .. } if payload.is("query", ns::DISCO_INFO)));
+    open_info(&mut h, "a");
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(_)))));
+
+    // A `last` that equals the last request would loop, so it stops the paging.
+    let mut h = harness_with(&[RSM]);
+    let _rx = browse(&mut h);
+    h.sent_iqs();
+    h.answer(is_page, Some(page(&["a"], Some(("a", None)))));
+    h.sent_iqs();
+    h.answer(is_page, Some(page(&["b"], Some(("a", None)))));
+    let iqs = h.sent_iqs();
+    assert_eq!(iqs.len(), 2);
+    assert!(
+        iqs.iter()
+            .all(|iq| matches!(iq, Iq::Get { payload, .. } if payload.is("query", ns::DISCO_INFO)))
+    );
+}
+
+#[test]
+fn browse_without_the_rsm_feature_sends_one_plain_request() {
+    let mut h = harness();
+    let mut rx = browse(&mut h);
+    let query = sent_query(&mut h);
+    assert!(query.get_child("set", ns::RSM).is_none());
+    assert!(query.children().next().is_none());
+    // The answer carries an RSM element and a metadata form. We use neither.
+    let items = format!(
+        "<item jid='{SERVICE}' node='a'>
+           <x xmlns='jabber:x:data' type='result'>
+             <field var='FORM_TYPE' type='hidden'><value>{NS_META}</value></field>
+             <field var='pubsub#type'><value>{NS_SPACES}</value></field>
+             <field var='pubsub#access_model'><value>open</value></field>
+           </x></item>"
+    );
+    h.answer(is_page, Some(page_xml(&items, Some(("a", Some(9))))));
+    assert_eq!(h.sent_iqs().len(), 1);
+    open_info(&mut h, "a");
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(found))) if found.len() == 1));
+}
+
+#[test]
+fn browse_stops_at_the_cap() {
+    let mut h = harness_with(&[RSM]);
+    let _rx = browse(&mut h);
+    h.sent_iqs();
+    let names: Vec<String> = (0..1200).map(|i| format!("n{i:04}")).collect();
+    let refs = |from: usize, to: usize| -> Vec<&str> {
+        names[from..to].iter().map(String::as_str).collect()
+    };
+    h.answer(is_page, Some(page(&refs(0, 600), Some(("n0599", None)))));
+    assert_eq!(h.sent_iqs().len(), 1);
+    h.answer(is_page, Some(page(&refs(600, 1200), Some(("n1199", None)))));
+    let iqs = h.sent_iqs();
+    // No third page. The disco#info queries start, up to the window.
+    assert_eq!(iqs.len(), BROWSE_WINDOW);
+    assert!(
+        iqs.iter()
+            .all(|iq| matches!(iq, Iq::Get { payload, .. } if payload.is("query", ns::DISCO_INFO)))
+    );
+    let browse = h.state.spaces.browses.values().next().unwrap();
+    assert_eq!(browse.known.len(), MAX_BROWSE_NODES);
+    assert_eq!(browse.queue.len() + browse.in_flight, MAX_BROWSE_NODES);
+}
+
+#[test]
+fn browse_keeps_a_window_of_info_queries() {
+    let mut h = harness();
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    let names: Vec<String> = (0..25).map(|i| format!("n{i:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    h.answer(is_page, Some(page(&refs, None)));
+    assert_eq!(h.sent_iqs().len(), BROWSE_WINDOW);
+    // Each answer lets one more query go out.
+    open_info(&mut h, "n00");
+    assert_eq!(h.sent_iqs().len(), 1);
+    for name in &names[1..] {
+        open_info(&mut h, name);
+        h.sent_iqs();
+    }
+    let Ok(Some(Ok(found))) = rx.try_recv() else {
+        panic!("expected the list")
+    };
+    assert_eq!(found.len(), 25);
+    assert!(h.state.spaces.browses.is_empty());
+}
+
+#[test]
+fn browse_asks_for_the_space_type_when_the_service_has_type_filtering() {
+    let mut h = harness_with(&[NS_TYPE_FILTER]);
+    let mut rx = browse(&mut h);
+    let query = sent_query(&mut h);
+    assert!(query.get_child("set", ns::RSM).is_none());
+    let filter = query.get_child("filter", NS_TYPE_FILTER).expect("a filter");
+    let form = DataForm::try_from(filter.children().next().unwrap().clone()).unwrap();
+    assert_eq!(form.type_, DataFormType::Submit);
+    assert_eq!(form.form_type(), Some(NS_TYPE_FILTER));
+    let field = form
+        .fields
+        .iter()
+        .find(|f| f.var.as_deref() == Some("included-types"))
+        .unwrap();
+    assert_eq!(field.values, [NS_SPACES]);
+    // The service may ignore the filter, so the info check stays.
+    h.answer(is_page, Some(page(&["a", "b"], None)));
+    assert_eq!(h.sent_iqs().len(), 2);
+    open_info(&mut h, "a");
+    let other = node_info("b", "other", "B", "open");
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::BrowseInfo { node, .. }) if node == "b"),
+        Some(other),
+    );
+    let Ok(Some(Ok(found))) = rx.try_recv() else {
+        panic!("expected the list")
+    };
+    assert_eq!(nodes_of(&found), ["a"]);
+}
+
+fn meta_item(node: &str, type_: Option<&str>, title: &str, access: &str) -> String {
+    let type_ = type_
+        .map(|t| format!("<field var='pubsub#type'><value>{t}</value></field>"))
+        .unwrap_or_default();
+    format!(
+        "<item jid='{SERVICE}' node='{node}'>
+           <x xmlns='jabber:x:data' type='result'>
+             <field var='FORM_TYPE' type='hidden'><value>{NS_META}</value></field>
+             {type_}
+             <field var='pubsub#title'><value>{title}</value></field>
+             <field var='pubsub#description'><value>About {node}</value></field>
+             <field var='pubsub#access_model'><value>{access}</value></field>
+           </x></item>"
+    )
+}
+
+#[test]
+fn browse_with_extended_disco_reads_the_metadata_from_the_items() {
+    for feature in [NS_EXT_DISCO, NS_EXT_DISCO_SHORT] {
+        let mut h = harness_with(&[feature, NS_TYPE_FILTER, RSM]);
+        let mut rx = browse(&mut h);
+        let query = sent_query(&mut h);
+        assert!(query.get_child("filter", NS_TYPE_FILTER).is_some());
+        assert!(query.get_child("set", ns::RSM).is_some());
+        let form = query
+            .children()
+            .find(|c| c.is("x", ns::DATA_FORMS))
+            .expect("the XEP-0499 form");
+        let form = DataForm::try_from(form.clone()).unwrap();
+        assert_eq!(form.type_, DataFormType::Submit);
+        assert_eq!(form.form_type(), Some(NS_EXT_DISCO));
+        let value = |var: &str| {
+            form.fields
+                .iter()
+                .find(|f| f.var.as_deref() == Some(var))
+                .and_then(|f| f.values.first().cloned())
+        };
+        assert_eq!(value("type").as_deref(), Some("nodes"));
+        assert_eq!(value("full_metadata").as_deref(), Some("true"));
+
+        let items = [
+            meta_item("b-open", Some(NS_SPACES), "Bee", "open"),
+            meta_item("closed", Some(NS_SPACES), "Closed", "whitelist"),
+            meta_item("other", Some("x"), "Other", "open"),
+            // A metadata form with no type: ask disco#info for it.
+            meta_item("no-type", None, "No type", "open"),
+            // No form at all: ask disco#info for it.
+            format!("<item jid='{SERVICE}' node='plain'/>"),
+            meta_item("a-open", Some(NS_SPACES), "Ay", "open"),
+        ]
+        .concat();
+        h.answer(is_page, Some(page_xml(&items, Some(("a-open", Some(6))))));
+        // Only the two items without a type need a disco#info query.
+        let infos = h.sent_iqs();
+        assert_eq!(infos.len(), 2, "{infos:?}");
+        assert!(rx.try_recv().unwrap().is_none());
+        open_info(&mut h, "no-type");
+        h.respond(
+            |p| matches!(p, FeaturePending::Spaces(Pending::BrowseInfo { node, .. }) if node == "plain"),
+            IqResponse::Error(StanzaError::new(
+                ErrorType::Cancel,
+                DefinedCondition::ItemNotFound,
+                "en",
+                "",
+            )),
+        );
+        let Ok(Some(Ok(found))) = rx.try_recv() else {
+            panic!("expected the list")
+        };
+        assert_eq!(nodes_of(&found), ["a-open", "b-open", "no-type"]);
+        assert_eq!(found[0].name, "Ay");
+        assert_eq!(found[0].description.as_deref(), Some("About a-open"));
+        assert_eq!(found[0].access_model.as_deref(), Some("open"));
+        assert_eq!(found[0].service, SERVICE);
+    }
+}
+
+#[test]
+fn browse_with_extended_disco_needs_no_info_query_when_the_items_hold_the_metadata() {
+    let mut h = harness_with(&[NS_EXT_DISCO]);
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    let items = meta_item("a", Some(NS_SPACES), "Ay", "open");
+    h.answer(is_page, Some(page_xml(&items, None)));
+    assert!(h.sent_iqs().is_empty());
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(found))) if found.len() == 1));
+    assert!(h.state.spaces.browses.is_empty());
+}
+
+#[test]
+fn browse_starts_again_with_a_plain_request_when_an_extension_fails() {
+    let mut h = harness_with(&[NS_EXT_DISCO, NS_TYPE_FILTER, RSM]);
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    let bad = StanzaError::new(ErrorType::Modify, DefinedCondition::BadRequest, "en", "");
+    h.respond(is_page, IqResponse::Error(bad));
+    let plain = sent_query(&mut h);
+    assert!(plain.children().next().is_none());
+    assert!(rx.try_recv().unwrap().is_none());
+    h.answer(is_page, Some(page(&["a"], None)));
+    assert_eq!(h.sent_iqs().len(), 1);
+    open_info(&mut h, "a");
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(found))) if found.len() == 1));
+
+    // A plain request that fails is an error.
+    let mut h = harness();
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    h.respond(is_page, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    assert!(h.state.spaces.browses.is_empty());
+}
+
+#[test]
+fn browse_keeps_the_nodes_of_earlier_pages_when_a_later_page_fails() {
+    let mut h = harness_with(&[RSM]);
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    h.answer(is_page, Some(page(&["a"], Some(("a", None)))));
+    h.sent_iqs();
+    h.respond(is_page, forbidden());
+    assert_eq!(h.sent_iqs().len(), 1);
+    open_info(&mut h, "a");
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(found))) if found.len() == 1));
+}
+
+#[test]
+fn browse_lost_ends_the_browse_at_any_stage() {
+    let mut h = harness_with(&[RSM]);
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    h.answer(is_page, Some(page(&["a"], Some(("a", None)))));
+    h.sent_iqs();
+    h.respond(is_page, IqResponse::Lost);
+    assert_eq!(rx.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    assert!(h.state.spaces.browses.is_empty());
+
+    // A bad answer is a server error.
+    let mut h = harness();
+    let mut rx = browse(&mut h);
+    h.sent_iqs();
+    h.answer(is_page, Some(xml("<query xmlns='other'/>")));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+}
+
+// --- Space avatars ---
+
+const IMAGE: &[u8] = b"\x89PNG\r\n\x1a\nspace image";
+
+fn avatar_event(info: &str) -> Payload {
+    event(&format!(
+        "<items node='dev'><item id='{AVATAR_ITEM}'>
+           <metadata xmlns='urn:xmpp:avatar:metadata'>{info}</metadata></item></items>"
+    ))
+}
+
+fn is_avatar_data(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::AvatarData { .. }))
+}
+
+fn avatar_data_result(data: &[u8]) -> Element {
+    let item = xmpp_parsers::pubsub::pubsub::Item::new(
+        None,
+        None,
+        Some(AvatarData {
+            data: data.to_vec(),
+        }),
+    );
+    xmpp_parsers::pubsub::pubsub::PubSub::Items(xmpp_parsers::pubsub::pubsub::Items {
+        max_items: None,
+        node: xmpp_parsers::pubsub::NodeName(NS_AVATAR_DATA.to_owned()),
+        subid: None,
+        items: vec![item],
+    })
+    .into()
+}
+
+fn stored_avatar(h: &Harness) -> Option<avatars::Avatar> {
+    load_avatar(&h.store, h.account_id, SERVICE, "dev").unwrap()
+}
+
+fn deliver_avatar(h: &mut Harness, info: &str) {
+    h.with_ctx(|ctx| on_event(ctx, &service_jid(), avatar_event(info)));
+}
+
+#[test]
+fn space_avatar_without_a_url_is_fetched_from_the_data_node() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_avatar(
+        &mut h,
+        &format!(
+            "<info bytes='{}' id='{hash}' type='image/png'/>",
+            IMAGE.len()
+        ),
+    );
+    let avatar = stored_avatar(&h).unwrap();
+    assert_eq!(avatar.hash, hash);
+    assert_eq!(avatar.mime.as_deref(), Some("image/png"));
+    assert_eq!(avatar.data, None);
+    let sent = h.sent_iqs();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to().unwrap().as_str(), SERVICE);
+    let text = payload_of(&sent[0]);
+    assert!(text.contains(NS_AVATAR_DATA), "{text}");
+    assert!(text.contains(&format!("id=\"{hash}\"")) || text.contains(&format!("id='{hash}'")));
+
+    // The same event again: the fetch runs already.
+    deliver_avatar(
+        &mut h,
+        &format!(
+            "<info bytes='{}' id='{hash}' type='image/png'/>",
+            IMAGE.len()
+        ),
+    );
+    assert!(h.sent_iqs().is_empty());
+
+    h.take_dirty();
+    h.answer(is_avatar_data, Some(avatar_data_result(IMAGE)));
+    assert_eq!(stored_avatar(&h).unwrap().data.as_deref(), Some(IMAGE));
+    assert!(h.take_dirty().contains(&ViewKey::SpaceList));
+
+    // The image is here: a new event with the same hash fetches nothing.
+    deliver_avatar(
+        &mut h,
+        &format!(
+            "<info bytes='{}' id='{hash}' type='image/png'/>",
+            IMAGE.len()
+        ),
+    );
+    assert!(h.sent_iqs().is_empty());
+}
+
+#[test]
+fn space_avatar_hash_in_upper_case_is_stored_in_lower_case() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_avatar(
+        &mut h,
+        &format!("<info id='{}' type='image/png'/>", hash.to_uppercase()),
+    );
+    assert_eq!(stored_avatar(&h).unwrap().hash, hash);
+    h.answer(is_avatar_data, Some(avatar_data_result(IMAGE)));
+    assert!(stored_avatar(&h).unwrap().data.is_some());
+}
+
+#[test]
+fn space_avatar_image_with_the_wrong_hash_or_an_error_is_not_stored() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    let info = format!("<info bytes='4' id='{hash}' type='image/png'/>");
+    deliver_avatar(&mut h, &info);
+    h.answer(is_avatar_data, Some(avatar_data_result(b"forged")));
+    assert_eq!(stored_avatar(&h).unwrap().data, None);
+
+    // The fetch is over, so a new event can start it again. Error and Lost end it too.
+    deliver_avatar(&mut h, &info);
+    h.respond(is_avatar_data, forbidden());
+    assert_eq!(stored_avatar(&h).unwrap().data, None);
+    deliver_avatar(&mut h, &info);
+    h.respond(is_avatar_data, IqResponse::Lost);
+    deliver_avatar(&mut h, &info);
+    h.answer(is_avatar_data, None);
+    assert_eq!(stored_avatar(&h).unwrap().data, None);
+    assert!(h.state.spaces.avatar_fetching.len() <= 1);
+}
+
+#[test]
+fn space_avatar_that_a_new_hash_replaced_is_dropped() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_avatar(&mut h, &format!("<info id='{hash}' type='image/png'/>"));
+    let other = avatars::sha1_hex(b"other");
+    deliver_avatar(&mut h, &format!("<info id='{other}' type='image/png'/>"));
+    h.answer(is_avatar_data, Some(avatar_data_result(IMAGE)));
+    let avatar = stored_avatar(&h).unwrap();
+    assert_eq!(avatar.hash, other);
+    assert_eq!(avatar.data, None);
+}
+
+#[test]
+fn space_avatar_at_a_url_or_too_big_or_with_a_bad_hash_is_not_fetched() {
+    let mut h = followed();
+    h.sent_iqs();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_avatar(
+        &mut h,
+        &format!("<info id='{hash}' type='image/png' url='https://example.org/a.png'/>"),
+    );
+    assert_eq!(stored_avatar(&h).unwrap().hash, hash);
+    deliver_avatar(
+        &mut h,
+        &format!(
+            "<info id='{hash}' type='image/png' bytes='{}'/>",
+            MAX_AVATAR_BYTES + 1
+        ),
+    );
+    deliver_avatar(&mut h, "<info id='not a hash' type='image/png'/>");
+    assert!(h.sent_iqs().is_empty());
+}
+
+#[test]
+fn empty_avatar_metadata_removes_the_space_avatar() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_avatar(&mut h, &format!("<info id='{hash}' type='image/png'/>"));
+    assert!(stored_avatar(&h).is_some());
+    deliver_avatar(&mut h, "");
+    assert_eq!(stored_avatar(&h), None);
+}
+
+#[test]
+fn store_avatar_image_checks_the_hash_and_the_size() {
+    let mut h = followed();
+    let hash = avatars::sha1_hex(IMAGE);
+    deliver_avatar(&mut h, &format!("<info id='{hash}' type='image/png'/>"));
+    let store = |hash: &str, data: &[u8]| {
+        store_avatar_image(&h.store, h.account_id, SERVICE, "dev", hash, data)
+    };
+    assert!(store(&hash, b"forged").is_err());
+    assert!(store(&hash, &vec![0; MAX_AVATAR_BYTES + 1]).is_err());
+    // A hash that the space does not have any more stores nothing.
+    let other = avatars::sha1_hex(b"other");
+    assert_eq!(store(&other, b"other"), Ok(false));
+    assert_eq!(store(&hash, IMAGE), Ok(true));
+    assert_eq!(stored_avatar(&h).unwrap().data.as_deref(), Some(IMAGE));
 }
