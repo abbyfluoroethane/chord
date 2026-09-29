@@ -703,7 +703,7 @@ fn owner_commands_send_the_right_requests() {
 }
 
 #[test]
-fn browse_lists_the_open_spaces_only() {
+fn browse_lists_the_open_and_authorize_spaces_only() {
     let mut h = harness();
     let (reply, mut rx) = oneshot::channel();
     h.with_ctx(|ctx| on_command(ctx, Command::Browse { reply }));
@@ -715,11 +715,12 @@ fn browse_lists_the_open_spaces_only() {
                <item jid='pubsub.chord.localhost' node='b-open'/>
                <item jid='pubsub.chord.localhost' node='a-open'/>
                <item jid='pubsub.chord.localhost' node='closed'/>
+               <item jid='pubsub.chord.localhost' node='c-ask'/>
                <item jid='pubsub.chord.localhost' node='other'/>
                <item jid='pubsub.chord.localhost' node='broken'/></query>",
         )),
     );
-    assert_eq!(h.sent_iqs().len(), 5);
+    assert_eq!(h.sent_iqs().len(), 6);
     let info = |node: &str, kind: &str, access: &str| {
         let e = node_info(node, kind, &format!("Space {node}"), access);
         (node.to_owned(), e)
@@ -728,6 +729,7 @@ fn browse_lists_the_open_spaces_only() {
         info("b-open", NS_SPACES, "open"),
         info("a-open", NS_SPACES, "open"),
         info("closed", NS_SPACES, "whitelist"),
+        info("c-ask", NS_SPACES, "authorize"),
         info("other", "x", "open"),
     ] {
         h.answer(
@@ -744,7 +746,7 @@ fn browse_lists_the_open_spaces_only() {
         panic!("expected the list")
     };
     let nodes: Vec<&str> = found.iter().map(|s| s.node.as_str()).collect();
-    assert_eq!(nodes, ["a-open", "b-open"]);
+    assert_eq!(nodes, ["a-open", "b-open", "c-ask"]);
     assert_eq!(found[0].service, SERVICE);
     assert_eq!(found[0].name, "Space a-open");
     assert!(h.state.spaces.browses.is_empty());

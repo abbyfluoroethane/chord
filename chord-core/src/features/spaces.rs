@@ -1300,9 +1300,11 @@ fn space_info(service: &BareJid, node: &str, meta: Meta) -> SpaceInfo {
     }
 }
 
-/// Browse lists open spaces only.
+/// Browse lists the spaces that a user can join: `open` spaces, and `authorize` spaces,
+/// where the owner approves each join request. `access_model` tells a UI which one.
 fn is_open_space(meta: &Meta) -> bool {
-    meta.type_.as_deref() == Some(NS_SPACES) && meta.access_model.as_deref() == Some("open")
+    meta.type_.as_deref() == Some(NS_SPACES)
+        && matches!(meta.access_model.as_deref(), Some("open" | "authorize"))
 }
 
 fn on_browse_page(ctx: &mut Ctx<'_>, id: u64, result: Result<Option<Element>, ClientError>) {
