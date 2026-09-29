@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Integration tests need the Docker Prosody server (see dev/). They are marked
+# #[ignore], so `cargo test` skips them. They do not run in CI.
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p chord-core --target wasm32-unknown-unknown --no-default-features
+
+  ffi-no-dev-insecure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check that default builds exclude dev-insecure and insecure-tcp
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          for pkg in chord-ffi chord-cli; do
+            tree="$(cargo tree -e features -p "$pkg")"
+            if echo "$tree" | grep -E 'dev-insecure|insecure-tcp'; then
+              echo "::error::$pkg enables dev-insecure or insecure-tcp in its default build."
+              status=1
+            else
+              echo "OK: $pkg does not enable dev-insecure or insecure-tcp."
+            fi
+          done
+          exit "$status"

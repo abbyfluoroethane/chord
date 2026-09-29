@@ -23,6 +23,10 @@ tokio-xmpp = { workspace = true, optional = true }
 # Only session/native.rs and runtime.rs use tokio.
 tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time"] }
 
+# xmpp-parsers and xso use uuid. On wasm32-unknown-unknown it needs a JS randomness source.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["js"] }
+
 [dev-dependencies]
 # Paused time for the retry loop tests in session/native.rs.
 tokio = { workspace = true, features = ["test-util", "macros", "rt", "time", "sync"] }
