@@ -579,11 +579,36 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    /// Count the panics from the tokio-xmpp worker when a connector drops its slot
+    /// (tokio-xmpp 6.0.0 src/stanzastream/worker.rs:549). The hook is global, so it keeps
+    /// the previous hook and only counts this one message.
+    fn worker_panics() -> &'static AtomicUsize {
+        static COUNT: AtomicUsize = AtomicUsize::new(0);
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let payload = info.payload();
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+                if message == Some("Backend was unable to handle reconnect request.") {
+                    COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+                previous(info);
+            }));
+        });
+        &COUNT
+    }
+
     /// The whole path, with the real `StanzaStream` worker and a fake login: a reconnect
     /// fails with `not-authorized`. The session reports `AuthFailed`, then `Closed`, and
-    /// the session task ends.
-    #[tokio::test]
+    /// the session task ends. The worker panics when the slot drops. The runtime catches
+    /// the panic, and the process keeps running. This needs `panic = "unwind"`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn auth_failure_on_reconnect_closes_session_without_zombie() {
+        let panics_before = worker_panics().load(Ordering::SeqCst);
         let calls = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&calls);
         let attempt = move || {
@@ -627,5 +652,10 @@ mod tests {
             1,
             "no retry after a fatal failure"
         );
+        // The worker ended through its panic. `Closed` comes only after `close` returns,
+        // and `close` returns only after the worker ends.
+        assert_eq!(worker_panics().load(Ordering::SeqCst), panics_before + 1);
+        // The runtime and the process keep running after the panic.
+        assert_eq!(tokio::spawn(async { 40 + 2 }).await.unwrap(), 42);
     }
 }
