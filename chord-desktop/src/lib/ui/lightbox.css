@@ -1,19 +1,29 @@
 /* PhotoSwipe in Chord colours and style guide motion. */
 .pswp {
-  /* See-through, with the chat blurred behind it. */
-  --pswp-bg: color-mix(in srgb, var(--surface-100) 72%, transparent);
+  /* See-through: the blurred app shows behind the photo. */
+  --pswp-bg: color-mix(in srgb, var(--surface-100) 60%, transparent);
   --pswp-placeholder-bg: var(--surface-200);
   --pswp-icon-color: var(--ink);
   --pswp-icon-color-secondary: var(--surface-100);
   --pswp-icon-stroke-color: var(--surface-100);
   --pswp-transition-duration: 240ms;
 }
-.pswp__bg {
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+
+/* The app behind an open viewer: blurred. Arrive in 240ms, leave in 120ms. */
+.app {
+  transition: filter 120ms cubic-bezier(0.2, 0, 0, 1);
 }
+.lightbox-open .app {
+  filter: blur(16px);
+  transition-duration: 240ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pswp {
     --pswp-transition-duration: 0ms;
+  }
+  .app,
+  .lightbox-open .app {
+    transition: none;
   }
 }

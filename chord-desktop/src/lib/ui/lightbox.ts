@@ -67,6 +67,12 @@ export async function openLightbox(images: LightboxImage[], index: number): Prom
     const size = sizes.get(images[i].src) ?? FALLBACK;
     return { ...item, width: size.w, height: size.h };
   });
+  // Blur the app behind the viewer. A backdrop-filter inside the viewer does not work:
+  // PhotoSwipe fades its root with opacity, and that stops a backdrop blur in any child.
+  const root = document.documentElement;
+  pswp.on('openingAnimationStart', () => root.classList.add('lightbox-open'));
+  pswp.on('close', () => root.classList.remove('lightbox-open'));
+  pswp.on('destroy', () => root.classList.remove('lightbox-open'));
   pswp.init();
   // Measure the other images, and redraw each slide when its size arrives.
   images.forEach((image, i) => {
