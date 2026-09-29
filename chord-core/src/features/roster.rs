@@ -4,14 +4,22 @@
 //! - Applies roster pushes. A push counts only from our own account (RFC 6121, 2.1.6).
 //! - Stores the presence of contacts, one row per resource.
 //! - Reports a subscription request with `ClientEvent::SubscriptionRequest`.
+//! - Pre-approves a subscription (RFC 6121, 3.4) with `ClientHandle::preapprove_subscription`.
+//!   The stream feature `sub` is not visible here, so the command sends the `subscribed`
+//!   presence and then a ping as a barrier. The server sends the roster push before it
+//!   answers the ping. If the push did not set `approved`, the server does not support
+//!   pre-approval, and the command fails with `Unsupported`.
+//! - The `contacts.ask` column holds two bits: 1 for a pending request of ours, 2 for a
+//!   pre-approval. It needs no new column.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use rusqlite::{Connection, OptionalExtension, params};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::ns;
+use xmpp_parsers::ping::Ping;
 use xmpp_parsers::presence::{Presence, Show, Type};
 use xmpp_parsers::roster::{Ask, Group, Item, Roster, Subscription as WireSubscription};
 use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
@@ -27,6 +35,8 @@ use crate::views::{ChannelScope, ViewKey};
 pub(crate) struct State {
     /// Contacts that asked to see our presence, and that we did not answer yet.
     requests: HashSet<BareJid>,
+    /// Pre-approvals that wait for their barrier ping, with the callers to answer.
+    preapprovals: HashMap<BareJid, Vec<Reply>>,
 }
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
@@ -40,6 +50,8 @@ pub(crate) enum Pending {
     Add { jid: BareJid, reply: Reply },
     /// A roster set that removes a contact.
     Remove { reply: Reply },
+    /// The ping that follows a pre-approval. See the module comment.
+    Preapprove { jid: BareJid },
 }
 
 /// A command from the public API.
@@ -58,6 +70,10 @@ pub(crate) enum Command {
         reply: Reply,
     },
     Deny {
+        jid: BareJid,
+        reply: Reply,
+    },
+    Preapprove {
         jid: BareJid,
         reply: Reply,
     },
@@ -99,6 +115,9 @@ pub struct Contact {
     /// We asked for a subscription and wait for the answer.
     pub ask: bool,
     pub groups: Vec<String>,
+    /// We pre-approved the subscription request of this contact (RFC 6121, 3.4). The
+    /// server accepts the request for us when it comes.
+    pub approved: bool,
 }
 
 impl ClientHandle {
@@ -124,6 +143,17 @@ impl ClientHandle {
     /// Refuse a subscription request, or stop a contact from seeing our presence.
     pub async fn deny_subscription(&self, jid: BareJid) -> Result<(), ClientError> {
         self.roster_call(|reply| Command::Deny { jid, reply }).await
+    }
+
+    /// Accept a subscription request of `jid` before it arrives (RFC 6121, 3.4). The
+    /// server creates a roster item with `approved` set, and accepts the request when it
+    /// comes. If `jid` sent a request already, this is the same as `approve_subscription`.
+    /// Fails with `Unsupported` when the server does not support pre-approval.
+    /// `remove_contact` cancels a pre-approval. A server may keep the flag after
+    /// `deny_subscription`.
+    pub async fn preapprove_subscription(&self, jid: BareJid) -> Result<(), ClientError> {
+        self.roster_call(|reply| Command::Preapprove { jid, reply })
+            .await
     }
 
     /// The contacts of the roster, sorted by name. Needs a session.
@@ -180,7 +210,40 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             };
             let _ = reply.send(result);
         }
+        Pending::Preapprove { jid } => on_preapprove_barrier(ctx, jid, response),
     }
+}
+
+/// The ping came back, so the roster push of the server, if any, came first.
+fn on_preapprove_barrier(ctx: &mut Ctx<'_>, jid: BareJid, response: IqResponse) {
+    let replies = ctx
+        .state
+        .roster
+        .preapprovals
+        .remove(&jid)
+        .unwrap_or_default();
+    let result = if matches!(response, IqResponse::Lost) {
+        Err(ClientError::NotConnected)
+    } else {
+        match read_contact(ctx.store.conn(), ctx.account_id, &jid) {
+            Ok(Some(c)) if is_preapproved(&c) => Ok(()),
+            _ => Err(ClientError::Unsupported(
+                "the server did not pre-approve the subscription".into(),
+            )),
+        }
+    };
+    for reply in replies {
+        let _ = reply.send(result.clone());
+    }
+}
+
+/// True if the contact sees our presence already, or the server will accept its request.
+fn is_preapproved(contact: &Contact) -> bool {
+    contact.approved
+        || matches!(
+            contact.subscription,
+            Subscription::From | Subscription::Both
+        )
 }
 
 fn failure(response: IqResponse) -> ClientError {
@@ -260,11 +323,48 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             ctx.send(Presence::new(Type::Unsubscribed).with_to(jid));
             let _ = reply.send(Ok(()));
         }
+        Command::Preapprove { jid, reply } => preapprove(ctx, jid, reply),
         Command::Contacts { reply } => {
             let result = list_contacts(ctx.store.conn(), ctx.account_id)
                 .map_err(|e| ClientError::Invalid(format!("store: {e}")));
             let _ = reply.send(result);
         }
+    }
+}
+
+fn preapprove(ctx: &mut Ctx<'_>, jid: BareJid, reply: Reply) {
+    if jid == *ctx.account {
+        let _ = reply.send(Err(ClientError::Invalid(
+            "we cannot pre-approve our own account".into(),
+        )));
+        return;
+    }
+    // A request waits: the presence is a normal approval.
+    if ctx.state.roster.requests.remove(&jid) {
+        ctx.send(Presence::subscribed().with_to(jid));
+        let _ = reply.send(Ok(()));
+        return;
+    }
+    let known = read_contact(ctx.store.conn(), ctx.account_id, &jid)
+        .ok()
+        .flatten();
+    if known.as_ref().is_some_and(is_preapproved) {
+        let _ = reply.send(Ok(()));
+        return;
+    }
+    let waiting = ctx
+        .state
+        .roster
+        .preapprovals
+        .entry(jid.clone())
+        .or_default();
+    waiting.push(reply);
+    if waiting.len() == 1 {
+        ctx.send(Presence::subscribed().with_to(jid.clone()));
+        ctx.request(
+            Iq::from_get("", Ping),
+            FeaturePending::Roster(Pending::Preapprove { jid }),
+        );
     }
 }
 
@@ -281,7 +381,8 @@ pub(crate) fn offline(command: Command) {
         Command::Add { reply, .. }
         | Command::Remove { reply, .. }
         | Command::Approve { reply, .. }
-        | Command::Deny { reply, .. } => {
+        | Command::Deny { reply, .. }
+        | Command::Preapprove { reply, .. } => {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
         Command::Contacts { reply } => {
@@ -514,12 +615,17 @@ fn upsert_contact(conn: &Connection, account_id: i64, item: &Item) -> rusqlite::
             item.jid.as_str(),
             item.name,
             subscription_str(&item.subscription),
-            i64::from(item.ask == Ask::Subscribe),
+            ASK_BIT * i64::from(item.ask == Ask::Subscribe)
+                + APPROVED_BIT * i64::from(item.approved == Some(true)),
             groups_to_json(&groups),
         ],
     )
     .map(|_| ())
 }
+
+/// The bits of the `contacts.ask` column.
+const ASK_BIT: i64 = 1;
+const APPROVED_BIT: i64 = 2;
 
 fn subscription_str(subscription: &WireSubscription) -> &'static str {
     match subscription {
@@ -549,12 +655,14 @@ fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>
     let jid: String = row.get(0)?;
     let subscription: String = row.get(2)?;
     let groups: String = row.get(4)?;
+    let flags = row.get::<_, i64>(3).unwrap_or(0);
     Ok(BareJid::new(&jid).ok().map(|jid| Contact {
         jid,
         name: row.get(1).ok().flatten(),
         subscription: Subscription::parse(&subscription),
-        ask: row.get::<_, i64>(3).unwrap_or(0) != 0,
+        ask: flags & ASK_BIT != 0,
         groups: groups_from_json(&groups),
+        approved: flags & APPROVED_BIT != 0,
     }))
 }
 
@@ -1175,6 +1283,170 @@ mod tests {
         offline(Command::Add {
             jid: bare(BOB),
             name: None,
+            reply,
+        });
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::NotConnected))
+        );
+    }
+
+    fn is_preapprove(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Roster(Pending::Preapprove { .. }))
+    }
+
+    fn preapprove_cmd(h: &mut Harness, jid: &str) -> oneshot::Receiver<Result<(), ClientError>> {
+        let (reply, answer) = oneshot::channel();
+        let jid = bare(jid);
+        h.with_ctx(|ctx| on_command(ctx, Command::Preapprove { jid, reply }));
+        answer
+    }
+
+    fn approved_push(jid: &str, approved: bool) -> Iq {
+        let attr = if approved { " approved='true'" } else { "" };
+        push(
+            Some("alice@chord.localhost"),
+            &format!(
+                "<query xmlns='jabber:iq:roster'><item jid='{jid}' subscription='none'{attr}/></query>"
+            ),
+        )
+    }
+
+    #[test]
+    fn approved_flag_is_stored_and_ask_stays_separate() {
+        let mut h = Harness::new();
+        connect_with(
+            &mut h,
+            "<query xmlns='jabber:iq:roster' ver='v1'>\
+             <item jid='bob@chord.localhost' subscription='none' approved='true'/>\
+             <item jid='carol@chord.localhost' subscription='none' ask='subscribe' approved='true'/>\
+             <item jid='dave@chord.localhost' subscription='none' ask='subscribe'/>\
+             <item jid='erin@chord.localhost' subscription='none'/></query>",
+        );
+        let flags: Vec<_> = contacts(&h).iter().map(|c| (c.ask, c.approved)).collect();
+        assert_eq!(
+            flags,
+            [(false, true), (true, true), (true, false), (false, false)]
+        );
+        // A push without the attribute clears the flag (RFC 6121, 3.4.2).
+        let iq = approved_push(BOB, false);
+        h.with_ctx(|ctx| assert!(on_iq(ctx, &iq)));
+        assert!(!contacts(&h)[0].approved);
+    }
+
+    #[test]
+    fn preapprove_sends_subscribed_then_a_ping_and_succeeds_on_the_push() {
+        let mut h = Harness::new();
+        let mut answer = preapprove_cmd(&mut h, BOB);
+        let sent = h.take_sent();
+        assert_eq!(sent.len(), 2);
+        let Stanza::Presence(p) = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(p.type_, Type::Subscribed);
+        assert_eq!(p.to, Some(Jid::new(BOB).unwrap()));
+        let Stanza::Iq(Iq::Get { payload, to, .. }) = &sent[1] else {
+            panic!("{sent:?}")
+        };
+        assert!(payload.is("ping", ns::PING));
+        assert!(to.is_none());
+        assert_eq!(answer.try_recv().unwrap(), None);
+        // The push comes before the answer to the ping.
+        let iq = approved_push(BOB, true);
+        h.with_ctx(|ctx| assert!(on_iq(ctx, &iq)));
+        assert_eq!(answer.try_recv().unwrap(), None);
+        h.answer(is_preapprove, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(contacts(&h)[0].approved);
+        assert!(h.state.roster.preapprovals.is_empty());
+    }
+
+    #[test]
+    fn preapprove_fails_when_no_push_comes_before_the_ping_answer() {
+        let mut h = Harness::new();
+        let mut answer = preapprove_cmd(&mut h, BOB);
+        // A server without the feature answers the ping with an error or a result.
+        h.respond(
+            is_preapprove,
+            IqResponse::Error(StanzaError::new(
+                ErrorType::Cancel,
+                DefinedCondition::ServiceUnavailable,
+                "en",
+                "no",
+            )),
+        );
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Unsupported(_)))
+        ));
+    }
+
+    #[test]
+    fn preapprove_reports_a_lost_session() {
+        let mut h = Harness::new();
+        let mut answer = preapprove_cmd(&mut h, BOB);
+        h.respond(is_preapprove, IqResponse::Lost);
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::NotConnected))
+        );
+    }
+
+    #[test]
+    fn two_preapprovals_of_one_contact_send_one_presence() {
+        let mut h = Harness::new();
+        let mut first = preapprove_cmd(&mut h, BOB);
+        let mut second = preapprove_cmd(&mut h, BOB);
+        assert_eq!(h.take_sent().len(), 2);
+        let iq = approved_push(BOB, true);
+        h.with_ctx(|ctx| assert!(on_iq(ctx, &iq)));
+        h.answer(is_preapprove, None);
+        assert_eq!(first.try_recv().unwrap(), Some(Ok(())));
+        assert_eq!(second.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn preapprove_needs_nothing_for_an_approved_or_subscribed_contact() {
+        let mut h = Harness::new();
+        connect_with(
+            &mut h,
+            "<query xmlns='jabber:iq:roster' ver='v1'>\
+             <item jid='bob@chord.localhost' subscription='none' approved='true'/>\
+             <item jid='carol@chord.localhost' subscription='from'/></query>",
+        );
+        h.take_sent();
+        for jid in [BOB, "carol@chord.localhost"] {
+            let mut answer = preapprove_cmd(&mut h, jid);
+            assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        }
+        assert!(h.take_sent().is_empty());
+    }
+
+    #[test]
+    fn preapprove_after_a_request_is_a_normal_approval() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| on_presence(ctx, &presence(BOB, Type::Subscribe)));
+        h.take_sent();
+        let mut answer = preapprove_cmd(&mut h, BOB);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let sent = h.take_sent();
+        assert_eq!(sent.len(), 1);
+        assert!(matches!(&sent[0], Stanza::Presence(p) if p.type_ == Type::Subscribed));
+        assert!(h.state.roster.requests.is_empty());
+    }
+
+    #[test]
+    fn preapprove_rejects_our_own_account_and_fails_offline() {
+        let mut h = Harness::new();
+        let mut answer = preapprove_cmd(&mut h, "alice@chord.localhost");
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        assert!(h.take_sent().is_empty());
+        let (reply, mut answer) = oneshot::channel();
+        offline(Command::Preapprove {
+            jid: bare(BOB),
             reply,
         });
         assert_eq!(

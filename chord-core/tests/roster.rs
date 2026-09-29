@@ -177,6 +177,51 @@ async fn subscribe_approve_presence_and_remove() {
     let _ = std::fs::remove_file(&bob.path);
 }
 
+#[tokio::test]
+#[ignore = "needs the dev Prosody server: ./dev/prosody/setup.sh"]
+async fn preapprove_sets_the_approved_flag_and_remove_clears_it() {
+    let tag = uuid_tag();
+    // A JID that no other test uses. Pre-approval needs no account behind the JID.
+    let jid = BareJid::new(&format!("preapprove-{tag}@chord.localhost")).unwrap();
+    let alice = start("alice", &tag).await;
+    // Remove the items that an earlier run that stopped half way left.
+    for c in alice.handle.contacts().await.unwrap() {
+        if c.jid.as_str().starts_with("preapprove-") {
+            let _ = alice.handle.remove_contact(c.jid).await;
+        }
+    }
+
+    let result = within(
+        "pre-approve",
+        alice.handle.preapprove_subscription(jid.clone()),
+    )
+    .await;
+    match result {
+        Ok(()) => {
+            wait_contact(&alice.handle, &jid, |c| {
+                c.is_some_and(|c| c.approved && c.subscription == Subscription::None)
+            })
+            .await;
+            // Pre-approval again is a no-op that succeeds at once.
+            alice
+                .handle
+                .preapprove_subscription(jid.clone())
+                .await
+                .unwrap();
+            // Removing the contact cancels the pre-approval. Prosody keeps the flag after
+            // an `unsubscribed` presence, so the test does not use it.
+        }
+        Err(actor::ClientError::Unsupported(_)) => {
+            eprintln!("this server does not support pre-approval");
+        }
+        Err(e) => panic!("pre-approve: {e}"),
+    }
+    let _ = alice.handle.remove_contact(jid.clone()).await;
+    wait_contact(&alice.handle, &jid, |c| c.is_none()).await;
+    alice.handle.logout().await;
+    let _ = std::fs::remove_file(&alice.path);
+}
+
 fn uuid_tag() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
