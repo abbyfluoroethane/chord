@@ -25,6 +25,25 @@ jobs:
       - name: Generate the Kotlin bindings
         run: ./dev/ffi-bindgen-check.sh
 
+  # Compile the generated Kotlin bindings and run a small offline smoke program.
+  # dev/ffi-bindgen-check.sh downloads kotlinc, JNA and kotlinx-coroutines.
+  # It checks each download against a pinned sha256.
+  kotlin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile and run the Kotlin smoke test
+        env:
+          CHORD_KOTLIN_FETCH: "1"
+          CHORD_KOTLIN_REQUIRE: "1"
+        run: ./dev/ffi-bindgen-check.sh
+
   wasm:
     runs-on: ubuntu-latest
     steps:
