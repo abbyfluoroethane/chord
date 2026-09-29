@@ -153,7 +153,7 @@ async fn rooms_and_bookmarks() {
                 _ => continue,
             };
             if let Some(item) = items.iter().find(|i| i.body == "hello room")
-                && item.id.starts_with("stanza-id:")
+                && item.stanza_id.is_some()
             {
                 assert!(item.outgoing);
                 return;
