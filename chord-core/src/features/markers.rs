@@ -705,7 +705,13 @@ mod tests {
         let a = put(&h, "a", Direction::In, MessageKind::Chat, PEER);
         let b = put(&h, "b", Direction::In, MessageKind::Chat, PEER);
         let c = put(&h, "c", Direction::In, MessageKind::Chat, PEER);
-        put(&h, "other", Direction::In, MessageKind::Chat, "eve@chord.localhost");
+        put(
+            &h,
+            "other",
+            Direction::In,
+            MessageKind::Chat,
+            "eve@chord.localhost",
+        );
         h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
         assert_eq!(last_read(&h, PEER), Some(c));
         h.take_sent();
