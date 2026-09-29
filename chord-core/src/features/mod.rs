@@ -411,6 +411,9 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Avatars(avatars::Command::Get { owner, reply }) => {
             let _ = reply.send(avatars::load(store, account_id, &owner).map_err(store_error));
         }
+        FeatureCommand::Push(push::Command::List { reply }) => {
+            let _ = reply.send(push::list(store, account_id));
+        }
         FeatureCommand::Roster(c) => roster::offline(c),
         FeatureCommand::Mam(c) => mam::offline(c),
         FeatureCommand::Muc(c) => muc::offline(c),
