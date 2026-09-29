@@ -117,3 +117,49 @@ export interface FolderCircle {
   name: string;
   avatar: string | null;
 }
+
+/** A contact, a pending request, or a blocked address. */
+export interface ContactItem {
+  address: string;
+  name: string;
+  avatar: string | null;
+  show: Show;
+  online: boolean;
+  /** Free status text the contact set, if any. */
+  status: string | null;
+  /** Ms since epoch. Null when unknown. */
+  since: number | null;
+}
+
+/** Everything the profile views need about one address. */
+export interface Person {
+  address: string;
+  name: string;
+  avatar: string | null;
+  show: Show;
+  online: boolean;
+  status: string | null;
+  since: number | null;
+  isMe: boolean;
+  isContact: boolean;
+  isBlocked: boolean;
+  /** Set when the person is a member of the circle you are in. */
+  affiliation: Affiliation | null;
+  role: string | null;
+}
+
+export type ContactsTab = 'online' | 'all' | 'pending' | 'blocked' | 'add';
+
+export type SettingsPage =
+  | 'account'
+  | 'privacy'
+  | 'notifications'
+  | 'appearance'
+  | 'keybinds'
+  | 'about';
+
+export type DisplayMode = 'cozy' | 'compact';
+
+export function affiliationLabel(a: Affiliation): string {
+  return a === 'none' ? 'Guest' : a[0].toUpperCase() + a.slice(1);
+}

@@ -1,13 +1,13 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import ProfilePopout from './ProfilePopout.svelte';
   import { app } from './app.svelte';
   import { presenceKind, type MemberItem } from './types';
+  import { ui } from './ui.svelte';
 
   let { member }: { member: MemberItem } = $props();
 
   let btn = $state<HTMLButtonElement>();
-  let open = $state(false);
+  const open = $derived(!!btn && ui.popout?.anchor === btn);
   const isMe = $derived(member.id === app.me.address);
 </script>
 
@@ -17,7 +17,8 @@
   class:offline={!member.online}
   aria-haspopup="dialog"
   aria-expanded={open}
-  onclick={() => (open = !open)}
+  onclick={() => btn && ui.openPopout(member.id, btn, member.name, 'left-start')}
+  oncontextmenu={(e) => ui.openPersonMenu(e, member.id, member.name)}
 >
   <Avatar
     name={member.name}
@@ -31,10 +32,6 @@
     {#if member.role}<span class="role meta">{member.role}</span>{/if}
   </span>
 </button>
-
-{#if open && btn}
-  <ProfilePopout {member} anchor={btn} onclose={() => (open = false)} />
-{/if}
 
 <style>
   .row {

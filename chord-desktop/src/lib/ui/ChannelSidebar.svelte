@@ -5,6 +5,7 @@
   import ChannelRow from './ChannelRow.svelte';
   import CircleDialog from './CircleDialog.svelte';
   import CircleHeader from './CircleHeader.svelte';
+  import ContactsRow from './ContactsRow.svelte';
   import Icon from './Icon.svelte';
   import UserPanel from './UserPanel.svelte';
   import { app, HOME } from './app.svelte';
@@ -27,6 +28,7 @@
   {/if}
 
   <div class="scroll">
+    {#if isHome}<ContactsRow />{/if}
     <div class="group">
       <span class="label">{isHome ? 'Direct messages' : 'Channels'}</span>
       {#if !isHome}
@@ -43,7 +45,12 @@
     <ul>
       {#each app.spaceChannels as c (c.jid)}
         <li>
-          <ChannelRow channel={c} selected={c.jid === app.selectedJid} onclick={() => app.selectChannel(c.jid)} />
+          <ChannelRow
+            channel={c}
+            selected={c.jid === app.selectedJid && !app.showContacts}
+            onclick={() => app.selectChannel(c.jid)}
+            onclose={c.kind === 'dm' ? () => app.closeDm(c.jid) : undefined}
+          />
         </li>
       {/each}
     </ul>

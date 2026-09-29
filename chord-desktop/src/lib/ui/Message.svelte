@@ -16,7 +16,9 @@
   import Reply from 'lucide-svelte/icons/reply';
   import { app } from './app.svelte';
   import { clock, domainOf, stamp } from './format';
+  import { prefs } from './prefs.svelte';
   import type { TimelineItem } from './types';
+  import { ui } from './ui.svelte';
 
   let {
     item,
@@ -28,6 +30,7 @@
   let more = $state<HTMLElement | null>(null);
   let deleting = $state(false);
 
+  const compact = $derived(prefs.display === 'compact');
   const editing = $derived(app.editingId === item.id);
   const foreign = $derived(domainOf(item.sender) !== domainOf(app.me.address));
   const full = $derived(new Date(item.timestamp).toLocaleString());
@@ -57,6 +60,7 @@
 <div
   class="msg"
   class:grouped
+  class:compact
   class:mention={item.mention && !item.retracted}
   class:editing
   class:sending={item.status === 'sending'}
@@ -81,23 +85,41 @@
   {/if}
 
   <div class="gutter">
-    {#if grouped}
+    {#if grouped || compact}
       <time class="hover-time meta" datetime={new Date(item.timestamp).toISOString()} title={full}>
         {clock(item.timestamp)}
       </time>
     {:else}
-      <Avatar name={item.senderName} src={item.avatar} size={40} cut="var(--surface-100)" />
+      <button
+        class="who"
+        aria-label="Profile of {item.senderName}"
+        aria-haspopup="dialog"
+        onclick={(e) => ui.openPopout(item.sender, e.currentTarget, item.senderName, 'right-start')}
+        oncontextmenu={(e) => ui.openPersonMenu(e, item.sender, item.senderName)}
+      >
+        <Avatar name={item.senderName} src={item.avatar} size={40} cut="var(--surface-100)" />
+      </button>
     {/if}
   </div>
 
   <div class="main">
     {#if !grouped}
       <div class="head">
-        <span class="name" class:own={item.outgoing} class:foreign>{item.senderName}</span>
+        <button
+          class="name"
+          class:own={item.outgoing}
+          class:foreign
+          aria-haspopup="dialog"
+          onclick={(e) => ui.openPopout(item.sender, e.currentTarget, item.senderName, 'right-start')}
+          oncontextmenu={(e) => ui.openPersonMenu(e, item.sender, item.senderName)}
+          >{item.senderName}</button
+        >
         {#if foreign}<span class="addr mono">@{domainOf(item.sender)}</span>{/if}
-        <time class="meta" datetime={new Date(item.timestamp).toISOString()} title={full}>
-          {stamp(item.timestamp)}
-        </time>
+        {#if !compact}
+          <time class="meta" datetime={new Date(item.timestamp).toISOString()} title={full}>
+            {stamp(item.timestamp)}
+          </time>
+        {/if}
       </div>
     {/if}
 
@@ -260,7 +282,54 @@
     color: var(--accent);
   }
   .text {
-    line-height: 22px;
+    font-size: var(--message-size, 15px);
+    line-height: var(--message-line, 22px);
+  }
+  .who {
+    display: block;
+    height: 40px;
+    border-radius: 50%;
+  }
+  .name:hover {
+    text-decoration: underline;
+  }
+
+  /* Compact: times on the left, no avatars, tight rows */
+  .msg.compact {
+    grid-template-columns: 48px minmax(0, 1fr);
+    column-gap: var(--space-2);
+    margin-top: 0;
+    padding-top: 1px;
+    padding-bottom: 1px;
+  }
+  .msg.compact .hover-time {
+    opacity: 1;
+    align-self: start;
+    text-align: right;
+    line-height: var(--message-line, 22px);
+  }
+  .msg.compact .gutter {
+    justify-content: flex-end;
+    padding-top: 0;
+  }
+  .msg.compact .main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: var(--space-2);
+  }
+  .msg.compact .head {
+    min-height: 0;
+  }
+  .msg.compact .text {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .msg.compact .main > :global(:not(.head):not(.text)) {
+    flex-basis: 100%;
+  }
+  .msg.compact .reply::before {
+    display: none;
   }
   .edited {
     margin-left: var(--space-1);

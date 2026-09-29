@@ -1,15 +1,25 @@
 <script lang="ts">
   import Hash from 'lucide-svelte/icons/hash';
+  import X from 'lucide-svelte/icons/x';
   import BellOff from 'lucide-svelte/icons/bell-off';
   import Avatar from './Avatar.svelte';
   import Icon from './Icon.svelte';
+  import { tooltip } from './tooltip';
   import { presenceKind, type ChannelItem } from './types';
+  import { ui } from './ui.svelte';
 
   let {
     channel,
     selected,
-    onclick
-  }: { channel: ChannelItem; selected: boolean; onclick: () => void } = $props();
+    onclick,
+    onclose
+  }: {
+    channel: ChannelItem;
+    selected: boolean;
+    onclick: () => void;
+    /** DMs only. Hides the row from the list. */
+    onclose?: () => void;
+  } = $props();
 
   const isDm = $derived(channel.kind === 'dm');
   const unread = $derived(channel.unread > 0 && !channel.muted);
@@ -21,7 +31,11 @@
   );
 </script>
 
-<div class="wrap">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="wrap"
+  oncontextmenu={isDm ? (e) => ui.openPersonMenu(e, channel.jid, channel.name) : undefined}
+>
   {#if unread && !selected}<span class="pill"></span>{/if}
   <button
     class="row"
@@ -52,6 +66,16 @@
       <span class="badge" aria-hidden="true">{count > 99 ? '99+' : count}</span>
     {/if}
   </button>
+  {#if onclose}
+    <button
+      class="close"
+      aria-label="Close DM with {channel.name}"
+      use:tooltip={{ text: 'Close DM', side: 'top' }}
+      onclick={onclose}
+    >
+      <Icon icon={X} size={14} />
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -116,6 +140,30 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .close {
+    position: absolute;
+    right: calc(var(--space-2) + 6px);
+    top: 50%;
+    display: none;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    transform: translateY(-50%);
+    border-radius: var(--radius-sm);
+    background: var(--surface-200);
+    color: var(--ink-muted);
+  }
+  .close:hover {
+    color: var(--ink);
+  }
+  .wrap:hover .close,
+  .wrap:focus-within .close {
+    display: grid;
+  }
+  .wrap:hover .badge,
+  .wrap:focus-within .badge {
+    visibility: hidden;
   }
   .badge {
     min-width: 18px;

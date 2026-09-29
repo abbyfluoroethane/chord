@@ -12,6 +12,7 @@ import type {
 import { spaceKey } from './types';
 
 export const HOME = 'home';
+const HIDDEN_KEY = 'chord.hiddenDms';
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
@@ -38,6 +39,11 @@ class AppState {
   replyingTo = $state<TimelineItem | null>(null);
   editingId = $state<string | null>(null);
 
+  /** Home shows the contacts page instead of a DM. */
+  showContacts = $state(false);
+  /** DMs the user closed. They come back when the user opens them again. Local only. */
+  hiddenDms = $state<string[]>([]);
+
   constructor() {
     // Start in the first circle, on its first channel.
     this.selectedSpace = spaceKey(this.spaces[0]);
@@ -54,7 +60,7 @@ class AppState {
   );
   spaceChannels = $derived(
     this.selectedSpace === HOME
-      ? this.channels.filter((c) => c.kind === 'dm')
+      ? this.channels.filter((c) => c.kind === 'dm' && !this.hiddenDms.includes(c.jid))
       : this.channels.filter((c) => c.space === this.selectedSpace)
   );
   currentSpace = $derived(this.spaces.find((s) => spaceKey(s) === this.selectedSpace) ?? null);
@@ -83,7 +89,8 @@ class AppState {
     if (key === this.selectedSpace) return;
     this.leaveChannel();
     this.selectedSpace = key;
-    const list = key === HOME ? this.channels.filter((c) => c.kind === 'dm') : this.channels.filter((c) => c.space === key);
+    this.showContacts = false;
+    const list = key === HOME ? this.channels.filter((c) => c.kind === 'dm' && !this.hiddenDms.includes(c.jid)) : this.channels.filter((c) => c.space === key);
     const remembered = this.lastChannel[key];
     const target = list.find((c) => c.jid === remembered) ?? list[0];
     this.selectedJid = target?.jid ?? '';
@@ -93,12 +100,43 @@ class AppState {
   selectChannel(jid: string) {
     const c = this.channels.find((x) => x.jid === jid);
     if (!c) return;
+    this.showContacts = false;
+    this.hiddenDms = this.hiddenDms.filter((x) => x !== jid);
     if (jid === this.selectedJid) return;
     this.leaveChannel();
     this.selectedSpace = c.kind === 'dm' ? HOME : (c.space ?? HOME);
     this.selectedJid = jid;
     this.lastChannel[this.selectedSpace] = jid;
     this.enterChannel();
+  }
+
+  /** Go Home and show the contacts page. */
+  openContacts() {
+    this.selectSpace(HOME);
+    this.showContacts = true;
+  }
+
+  /** Hide a DM from the list. The messages stay. */
+  closeDm(jid: string) {
+    if (!this.hiddenDms.includes(jid)) this.hiddenDms.push(jid);
+    try {
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify(this.hiddenDms));
+    } catch {
+      /* ignore */
+    }
+    if (jid !== this.selectedJid) return;
+    const next = this.spaceChannels[0];
+    if (next) this.selectChannel(next.jid);
+    else this.showContacts = true;
+  }
+
+  loadLocal() {
+    try {
+      const raw = localStorage.getItem(HIDDEN_KEY);
+      if (raw) this.hiddenDms = JSON.parse(raw) as string[];
+    } catch {
+      /* ignore */
+    }
   }
 
   private leaveChannel() {
@@ -338,9 +376,9 @@ class AppState {
   }
 
   /** Open a DM with a member. Creates the row when it is missing. */
-  openDm(id: string, name: string) {
+  openDm(id: string, name: string, info?: { avatar: string | null; show: Show; online: boolean }) {
     if (!this.channels.some((c) => c.jid === id)) {
-      const m = Object.values(this.members).flat().find((x) => x.id === id);
+      const m = info ?? Object.values(this.members).flat().find((x) => x.id === id);
       this.channels.push({
         jid: id,
         name,

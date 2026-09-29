@@ -6,16 +6,23 @@
   import Chat from './Chat.svelte';
   import CircleRail from './CircleRail.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
+  import ContactsPage from './ContactsPage.svelte';
   import MemberList from './MemberList.svelte';
+  import PersonLayer from './PersonLayer.svelte';
   import QuickSwitcher from './QuickSwitcher.svelte';
+  import SettingsOverlay from './SettingsOverlay.svelte';
   import ShortcutsModal from './ShortcutsModal.svelte';
+  import Toast from './Toast.svelte';
   import { app, HOME } from './app.svelte';
+  import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
   import { spaceKey } from './types';
   import { ui } from './ui.svelte';
 
   onMount(() => {
     ui.load();
+    prefs.load();
+    app.loadLocal();
     void rail.init(app.spaces.map(spaceKey));
   });
 
@@ -30,6 +37,10 @@
     if (mod && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       ui.switcherOpen = !ui.switcherOpen;
+    } else if (mod && e.key === ',') {
+      e.preventDefault();
+      if (ui.settingsOpen) ui.settingsOpen = false;
+      else ui.openSettings();
     } else if (mod && e.key === '/') {
       e.preventDefault();
       ui.shortcutsOpen = !ui.shortcutsOpen;
@@ -51,13 +62,19 @@
   <div class="cols">
     <CircleRail />
     <ChannelSidebar />
-    <Chat />
+    {#if app.selectedSpace === HOME && app.showContacts}
+      <ContactsPage />
+    {:else}
+      <Chat />
+    {/if}
     {#if ui.membersOpen && app.selectedSpace !== HOME}
       <MemberList />
     {/if}
   </div>
 </div>
 
+<PersonLayer />
+{#if ui.settingsOpen}<SettingsOverlay />{:else}<Toast />{/if}
 {#if ui.switcherOpen}<QuickSwitcher />{/if}
 {#if ui.shortcutsOpen}<ShortcutsModal onclose={() => (ui.shortcutsOpen = false)} />{/if}
 {#if ui.addCircleOpen}<AddCircleModal onclose={() => (ui.addCircleOpen = false)} />{/if}

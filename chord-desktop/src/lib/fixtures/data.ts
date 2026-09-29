@@ -1,6 +1,7 @@
 // Sample data for the UI shell. The bridge replaces all of this later.
 import type {
   ChannelItem,
+  ContactItem,
   MemberItem,
   Me,
   PublicCircle,
@@ -350,4 +351,54 @@ export const firstUnread: Record<string, string> = {
 
 export const typing: Record<string, string[]> = {
   'launch-ops-general@chat.foid.space': ['Bay']
+};
+
+// --- contacts --------------------------------------------------------
+
+function contact(
+  address: string,
+  name: string,
+  show: Show,
+  online: boolean,
+  status: string | null = null,
+  daysAgo: number | null = null
+): ContactItem {
+  return {
+    address,
+    name,
+    avatar: null,
+    show,
+    online,
+    status,
+    since: daysAgo === null ? null : at(daysAgo, 12, 0)
+  };
+}
+
+export const contacts: ContactItem[] = [
+  contact('rin@foid.space', 'Rin', 'chat', true, 'On the range until 17:00', 210),
+  contact('sam@other.example', 'Sam', 'away', true, 'Back in ten minutes', 95),
+  contact('jo@foid.space', 'Jo', 'dnd', true, 'Deep work. Text if it burns.', 320),
+  contact('lee@foid.space', 'Lee', null, false, null, 40),
+  contact('bay@foid.space', 'Bay', 'chat', true, null, 150),
+  contact('kit@foid.space', 'Kit', null, false, 'Gone climbing', 60),
+  contact('ivy@foid.space', 'Ivy', 'xa', false, null, 12)
+];
+
+export const incomingRequests: ContactItem[] = [
+  contact('noor@chord.example', 'Noor', null, false),
+  contact('tam@rooms.other.example', 'Tam', null, false)
+];
+
+export const outgoingRequests: ContactItem[] = [contact('wren@chord.example', 'Wren', null, false)];
+
+export const blockedContacts: ContactItem[] = [
+  contact('spam@junk.example', 'Spam Bot', null, false)
+];
+
+/** Contacts you and this address both have. Sample data only. */
+export const sharedContacts: Record<string, string[]> = {
+  'rin@foid.space': ['bay@foid.space', 'jo@foid.space'],
+  'sam@other.example': ['rin@foid.space'],
+  'jo@foid.space': ['rin@foid.space', 'kit@foid.space'],
+  'bay@foid.space': ['rin@foid.space', 'ivy@foid.space', 'kit@foid.space']
 };

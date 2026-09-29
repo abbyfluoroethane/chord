@@ -12,12 +12,15 @@
     onclose,
     size = 'small',
     footer,
+    heading,
     children
   }: {
     title: string;
     onclose: () => void;
     size?: 'small' | 'medium';
     footer?: Snippet;
+    /** Replaces the title text in the header. The title stays the accessible name. */
+    heading?: Snippet;
     children: Snippet;
   } = $props();
 
@@ -47,7 +50,11 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 <dialog bind:this={dlg} class={size} aria-label={title} onclick={backdrop} oncancel={cancel}>
   <header>
-    <h2 class="title">{title}</h2>
+    {#if heading}
+      {@render heading()}
+    {:else}
+      <h2 class="title">{title}</h2>
+    {/if}
     <button class="close" aria-label="Close" onclick={onclose}><Icon icon={X} size={18} /></button>
   </header>
   <div class="body">{@render children()}</div>
@@ -81,6 +88,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: var(--space-4);
     padding: var(--space-4) var(--space-4) var(--space-2) var(--space-6);
   }
   h2 {
