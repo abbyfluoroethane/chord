@@ -14,6 +14,7 @@ dev-insecure = ["native-session", "tokio-xmpp/insecure-tcp"]
 
 [dependencies]
 xmpp-parsers.workspace = true
+sha1.workspace = true
 jid.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true

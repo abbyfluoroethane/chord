@@ -26,6 +26,8 @@ log = "0.4"
 futures-channel = "0.3"
 # XEP-0359 origin-ids. xmpp-parsers already depends on it with v4.
 uuid = { version = "1", features = ["v4"] }
+# SHA-1 of avatar images (XEP-0084). xmpp-parsers already depends on this version.
+sha1 = "0.11"
 
 # panic = "unwind" is required. Do not set panic = "abort" in any profile.
 #
