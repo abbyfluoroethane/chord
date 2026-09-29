@@ -442,6 +442,13 @@ pub enum ClientEvent {
         reason: Option<String>,
         password: Option<String>,
     },
+    /// The people who type in a conversation changed (XEP-0085). `peer` is a bare JID, or
+    /// room@service/nick for a private message. `typers` are bare JIDs in a chat and nicks
+    /// in a room. An empty list means nobody types.
+    Typing {
+        peer: String,
+        typers: Vec<String>,
+    },
     /// An event that this binding version does not know.
     Unknown,
 }
@@ -590,6 +597,7 @@ impl From<core_actor::ClientEvent> for ClientEvent {
                 reason,
                 password,
             },
+            E::Typing { peer, typers } => Self::Typing { peer, typers },
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,
         }

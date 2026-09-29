@@ -108,6 +108,13 @@ pub enum ClientEvent {
         reason: Option<String>,
         password: Option<String>,
     },
+    /// The people who type in a conversation changed (XEP-0085). `peer` is the bare JID of
+    /// a chat or a room, or room@service/nick for a private message. `typers` holds bare
+    /// JIDs in a chat and nicks in a room. An empty list means nobody types now.
+    Typing {
+        peer: String,
+        typers: Vec<String>,
+    },
 }
 
 /// An error from a `ClientHandle` call.
@@ -673,7 +680,10 @@ impl<S: Session> Actor<S> {
             }
             SessionEvent::Disconnected(DisconnectReason::Closed) => self.went_offline(),
             SessionEvent::Stanza(stanza) => self.handle_stanza(*stanza).await,
-            SessionEvent::Tick => self.expire_pending(),
+            SessionEvent::Tick => {
+                self.expire_pending();
+                self.with_ctx(features::on_tick);
+            }
         }
     }
 

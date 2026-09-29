@@ -17,7 +17,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::oob::Oob;
 
 use super::chat::MessageIds;
-use super::{Ctx, corrections, markers, muc, notify, reactions, replies, retraction};
+use super::{Ctx, chat_states, corrections, markers, muc, notify, reactions, replies, retraction};
 use crate::actor::ClientError;
 use crate::store::queries::{Direction, MessageExtras, MessageKind, StoredMessage};
 use crate::views::ViewKey;
@@ -100,7 +100,9 @@ pub(crate) fn after_store(
 
 /// Payloads for every outgoing chat or groupchat message.
 pub(crate) fn outgoing_payloads(ctx: &mut Ctx<'_>) -> Vec<Element> {
-    markers::outgoing_payloads(ctx)
+    let mut payloads = markers::outgoing_payloads(ctx);
+    payloads.extend(chat_states::outgoing_payloads(ctx));
+    payloads
 }
 
 /// Send a message that changes or annotates an earlier message (a correction, a

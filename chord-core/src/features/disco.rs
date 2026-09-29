@@ -30,6 +30,7 @@ pub const FEATURES: &[&str] = &[
     "http://jabber.org/protocol/muc",
     "urn:xmpp:bookmarks:1+notify",
     "urn:xmpp:avatar:metadata+notify",
+    "http://jabber.org/protocol/chatstates",
 ];
 
 /// Our disco#info answer.

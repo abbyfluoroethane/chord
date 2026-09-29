@@ -181,6 +181,7 @@ pub(crate) fn send_message(ctx: &mut Ctx<'_>, to: Jid, body: String, out: Outgoi
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         ctx.store_error("store a sent message", e);
     }
+    super::chat_states::on_sent(ctx, &peer_str);
     ctx.changed(ViewKey::Timeline(peer));
     ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
     origin_id

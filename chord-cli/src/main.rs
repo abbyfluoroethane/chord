@@ -22,6 +22,7 @@
 //!   read <jid>                      mark as read (also with --offline)
 //!   pm <room> <nick> <text>         private message to a room occupant
 //!   read-private <room> <nick>      mark a private chat as read (also with --offline)
+//!   typing <jid> on|off             send a typing state (XEP-0085)
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
 //!   nick <room> <nick>              change our nick in a room
 //!   room-member <room> <jid> [member|admin|owner|none|outcast]   set an affiliation
@@ -80,7 +81,7 @@ space-add-member <service> <node> <jid> | space-delete <service> <node> | space-
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
-read-private <room> <nick> | moderate <item-id> [reason] | \
+read-private <room> <nick> | typing <jid> on|off | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
 invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
@@ -240,6 +241,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "read",
         "pm",
         "read-private",
+        "typing",
         "moderate",
         "nick",
         "room-member",
@@ -263,6 +265,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "state"
             | "read"
             | "read-private"
+            | "typing"
             | "push-list"
             | "notify"
             | "space-pending"
@@ -317,6 +320,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("reply", [item, text]) => actions::reply(&client, item, text).await,
         ("read", [peer]) => actions::read(&client, peer).await,
         ("pm", [room, nick, text]) => actions::pm(&client, room, nick, text).await,
+        ("typing", [peer, state]) => actions::typing(&client, peer, state).await,
         ("read-private", [room, nick]) => actions::read_private(&client, room, nick).await,
         ("moderate", args) => actions::moderate(&client, args).await,
         ("nick", [room, nick]) => actions::nick(&client, room, nick).await,
@@ -474,6 +478,13 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
                 println!("{}: {}", message.sender, message.body);
                 if once {
                     break;
+                }
+            }
+            ClientEvent::Typing { peer, typers } => {
+                if typers.is_empty() {
+                    println!("{peer}: nobody types");
+                } else {
+                    println!("{peer}: {} typing", typers.join(", "));
                 }
             }
             ClientEvent::ConnectionState(ConnectionState::AuthFailed(failure)) => {

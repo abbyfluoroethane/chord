@@ -355,6 +355,18 @@ pub async fn read(client: &Client, peer: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// `typing <jid> on|off`: send a XEP-0085 typing state.
+pub async fn typing(client: &Client, peer: &str, state: &str) -> Result<(), CliError> {
+    let on = match state {
+        "on" => true,
+        "off" => false,
+        other => return Err(format!("typing: expected on or off, got {other}").into()),
+    };
+    client.handle.set_typing(peer.to_owned(), on).map_err(err)?;
+    println!("typing {state} for {peer}");
+    Ok(())
+}
+
 /// `read-private <room> <nick>`: mark a private chat with a room occupant as read.
 pub async fn read_private(client: &Client, room: &str, nick: &str) -> Result<(), CliError> {
     let room = bare(room)?;

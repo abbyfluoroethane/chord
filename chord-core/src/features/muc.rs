@@ -1053,7 +1053,7 @@ fn remember_nick(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str) {
 
 /// Whether a groupchat message from `nick` is ours. The occupant-id decides when the
 /// message has one and we know ours. Else our current nick or an earlier one decides.
-fn is_ours(ctx: &Ctx<'_>, room: &BareJid, nick: &str, message: &Message) -> bool {
+pub(crate) fn is_ours(ctx: &Ctx<'_>, room: &BareJid, nick: &str, message: &Message) -> bool {
     if let (Some(ours), Some(theirs)) = (
         ctx.state.muc.occupant_ids.get(room),
         occupant_id(&message.payloads),
@@ -1220,6 +1220,7 @@ pub(crate) fn send_private_message(
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         ctx.store_error("store a sent message", e);
     }
+    super::chat_states::on_sent(ctx, &peer);
     private_changed(ctx, room, nick);
     Ok(origin_id)
 }
@@ -1434,6 +1435,7 @@ pub(crate) fn send_message(
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         ctx.store_error("store a sent message", e);
     }
+    super::chat_states::on_sent(ctx, &peer);
     mark_room(ctx, room);
     Ok(origin_id)
 }

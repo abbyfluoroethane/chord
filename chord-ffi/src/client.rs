@@ -510,6 +510,15 @@ impl ChordClient {
         Ok(setting.into())
     }
 
+    /// Tell a chat, a room, or a room occupant (room@service/nick) that we start or stop
+    /// to type (XEP-0085). Call it with `true` on input and with `false` after 5 seconds
+    /// without input. It sends nothing until the peer sent us a chat state, except in a
+    /// joined room.
+    pub async fn set_typing(&self, peer: String, typing: bool) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.set_typing(peer, typing) })
+            .await
+    }
+
     /// Mark a private chat with a room occupant as read.
     pub async fn mark_read_private(&self, room: String, nick: String) -> Result<(), ChordError> {
         let room = parse_bare(&room)?;

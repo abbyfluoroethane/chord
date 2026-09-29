@@ -14,6 +14,7 @@ pub mod avatars;
 pub mod bookmarks;
 pub mod carbons;
 pub mod chat;
+pub mod chat_states;
 pub mod corrections;
 pub mod disco;
 pub mod mam;
@@ -120,6 +121,7 @@ pub(crate) struct FeatureState {
     pub spaces: spaces::State,
     pub upload: upload::State,
     pub avatars: avatars::State,
+    pub chat_states: chat_states::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -140,6 +142,7 @@ pub(crate) enum FeatureCommand {
     Markers(markers::Command),
     Push(push::Command),
     Notify(notify::Command),
+    ChatStates(chat_states::Command),
 }
 
 /// Everything a feature function can use.
@@ -223,6 +226,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
         // The server kept the presence, the carbons state, and the room joins.
         return;
     }
+    chat_states::on_new_session(ctx);
     // The MUC state keeps the rooms to join again, and fails the joins that wait.
     let muc_state = muc::next_session(ctx);
     // Commands that wait for service discovery stay: the new session runs discovery again.
@@ -266,6 +270,7 @@ fn on_message(ctx: &mut Ctx<'_>, message: Message) {
     if mam::on_result(ctx, &message) {
         return;
     }
+    chat_states::on_message(ctx, &message);
     if muc::on_message(ctx, &message) {
         return;
     }
@@ -388,6 +393,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Markers(c) => markers::on_command(ctx, c),
         FeatureCommand::Push(c) => push::on_command(ctx, c),
         FeatureCommand::Notify(c) => notify::on_command(ctx, c),
+        FeatureCommand::ChatStates(c) => chat_states::on_command(ctx, c),
     }
 }
 
@@ -427,8 +433,14 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Reactions(c) => reactions::offline(c),
         FeatureCommand::Replies(c) => replies::offline(c),
         FeatureCommand::Push(c) => push::offline(c),
+        FeatureCommand::ChatStates(c) => chat_states::offline(c),
     }
     false
+}
+
+/// A session tick. Features use it for time limits.
+pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
+    chat_states::on_tick(ctx);
 }
 
 /// A result from work outside the session.
