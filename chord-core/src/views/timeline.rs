@@ -11,9 +11,14 @@ pub const GROUP_GAP_MS: i64 = 5 * 60 * 1000;
 /// One message, ready to show.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimelineItem {
-    /// Stable id: `stanza-id:<id>` or `origin-id:<id>`. Commands that refer to a message
-    /// (reply, edit, retract, react) take this id.
+    /// Stable id: `m:<row id>`. It does not change when the server echo or the archive
+    /// changes the key of the message. Commands that refer to a message (reply, edit,
+    /// retract, react) take this id.
     pub id: String,
+    /// The stanza-id from the server or the room, if known. It can arrive after the message.
+    pub stanza_id: Option<String>,
+    /// The XEP-0359 origin-id, if the message has one.
+    pub origin_id: Option<String>,
     /// JID of the sender. For a room message: room@service/nick.
     pub sender: String,
     /// Display name: roster name, room nick, or the local part of the JID.
@@ -80,8 +85,8 @@ impl ViewItem for TimelineItem {
 
 struct Row {
     rowid: i64,
-    key_kind: String,
-    key: String,
+    stanza_id: Option<String>,
+    origin_id: Option<String>,
     outgoing: bool,
     sender: String,
     body: String,
@@ -113,7 +118,7 @@ pub(crate) fn query(
 ) -> rusqlite::Result<Vec<TimelineItem>> {
     let conn = q.store.conn();
     let mut stmt = conn.prepare_cached(
-        "SELECT id, key_kind, key, direction, sender, COALESCE(edited_body, body), timestamp,
+        "SELECT id, stanza_id, origin_id, direction, sender, COALESCE(edited_body, body), timestamp,
                 kind, edited_body IS NOT NULL, retracted_at IS NOT NULL, reply_to,
                 reply_to_sender, oob_url, status
          FROM messages
@@ -123,8 +128,8 @@ pub(crate) fn query(
     let rows = stmt.query_map(params![q.account_id, room, window as i64], |row| {
         Ok(Row {
             rowid: row.get(0)?,
-            key_kind: row.get(1)?,
-            key: row.get(2)?,
+            stanza_id: row.get(1)?,
+            origin_id: row.get(2)?,
             outgoing: row.get::<_, String>(3)? == "out",
             sender: row.get(4)?,
             body: row.get(5)?,
@@ -159,7 +164,9 @@ pub(crate) fn query(
             None => None,
         };
         items.push(TimelineItem {
-            id: format!("{}:{}", row.key_kind, row.key),
+            id: format!("m:{}", row.rowid),
+            stanza_id: row.stanza_id,
+            origin_id: row.origin_id,
             sender: row.sender,
             sender_name,
             avatar,
@@ -250,19 +257,13 @@ fn reply_preview(
     match found {
         Some(m) => {
             let (sender_name, _) = display_name(q, &m.sender, groupchat)?;
-            let key: Option<String> = q
-                .store
-                .conn()
-                .prepare_cached("SELECT key_kind || ':' || key FROM messages WHERE id = ?1")?
-                .query_row(params![m.rowid], |row| row.get(0))
-                .optional()?;
             let body = if m.retracted {
                 String::new()
             } else {
                 m.body.chars().take(PREVIEW_CHARS).collect()
             };
             Ok(ReplyPreview {
-                id: key,
+                id: Some(format!("m:{}", m.rowid)),
                 sender_name,
                 body,
             })
@@ -306,4 +307,69 @@ pub(crate) fn local_part(jid: &str) -> String {
     jid.split_once('@')
         .map_or(jid, |(local, _)| local)
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+    use crate::store::queries::{
+        Direction, KeyKind, MessageExtras, MessageKind, NewMessage, ensure_account,
+        find_by_timeline_id, insert_message, upgrade_to_stanza_id,
+    };
+    use crate::views::diff::{ListDiff, diff};
+
+    #[test]
+    fn a_key_upgrade_gives_one_update() {
+        let store = Store::open_in_memory().unwrap();
+        let account = BareJid::new("alice@chord.localhost").unwrap();
+        let account_id = ensure_account(store.conn(), account.as_str()).unwrap();
+        let q = QueryCtx {
+            store: &store,
+            account_id,
+            account: &account,
+        };
+        let peer = "bob@chord.localhost";
+        insert_message(
+            store.conn(),
+            account_id,
+            &NewMessage {
+                kind: MessageKind::Chat,
+                key_kind: KeyKind::OriginId,
+                key: "o-1",
+                direction: Direction::Out,
+                peer,
+                sender: "alice@chord.localhost",
+                body: "hi",
+                timestamp: None,
+                extras: MessageExtras::default(),
+            },
+        )
+        .unwrap();
+        let before = query(&q, peer, 50).unwrap();
+        assert_eq!(before[0].origin_id.as_deref(), Some("o-1"));
+        assert_eq!(before[0].stanza_id, None);
+        assert!(
+            upgrade_to_stanza_id(store.conn(), account_id, "o-1", Direction::Out, peer, "s-1")
+                .unwrap()
+        );
+        let after = query(&q, peer, 50).unwrap();
+        assert_eq!(before[0].id, after[0].id);
+        assert_eq!(after[0].stanza_id.as_deref(), Some("s-1"));
+        let diffs = diff(&before, &after);
+        assert!(matches!(
+            diffs.as_slice(),
+            [ListDiff::Update { index: 0, .. }]
+        ));
+        // The new id and both old forms find the row.
+        for id in [&after[0].id, "origin-id:o-1", "stanza-id:s-1"] {
+            let row = find_by_timeline_id(store.conn(), account_id, id).unwrap();
+            assert!(row.is_some(), "{id}");
+        }
+        assert!(
+            find_by_timeline_id(store.conn(), account_id, "m:999")
+                .unwrap()
+                .is_none()
+        );
+    }
 }

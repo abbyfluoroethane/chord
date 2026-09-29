@@ -32,6 +32,11 @@ impl Show for ChannelItem {
         let kind = match self.kind {
             ChannelKind::Direct => "@",
             ChannelKind::Room => "#",
+            ChannelKind::PrivateMessage { .. } => "@",
+        };
+        let in_room = match &self.kind {
+            ChannelKind::PrivateMessage { room, .. } => format!(" (in {room})"),
+            _ => String::new(),
         };
         let category = self
             .category
@@ -45,12 +50,18 @@ impl Show for ChannelItem {
             String::new()
         };
         format!(
-            "{category}{kind}{}  <{}>{joined}{unread}",
+            "{category}{kind}{}{in_room}  <{}>{joined}{unread}",
             self.name, self.jid
         )
     }
 
     fn json(&self) -> String {
+        let (room, nick) = match &self.kind {
+            ChannelKind::PrivateMessage { room, nick } => {
+                (Some(room.as_str()), Some(nick.as_str()))
+            }
+            _ => (None, None),
+        };
         Obj::new()
             .str("jid", &self.jid)
             .str("name", &self.name)
@@ -59,8 +70,11 @@ impl Show for ChannelItem {
                 match self.kind {
                     ChannelKind::Direct => "direct",
                     ChannelKind::Room => "room",
+                    ChannelKind::PrivateMessage { .. } => "private",
                 },
             )
+            .opt_str("room", room)
+            .opt_str("nick", nick)
             .opt_str("category", self.category.as_deref())
             .bool("joined", self.joined)
             .opt_num("last_activity", self.last_activity)
@@ -120,6 +134,8 @@ impl Show for TimelineItem {
     fn json(&self) -> String {
         Obj::new()
             .str("id", &self.id)
+            .opt_str("stanza_id", self.stanza_id.as_deref())
+            .opt_str("origin_id", self.origin_id.as_deref())
             .str("sender", &self.sender)
             .str("sender_name", &self.sender_name)
             .opt_str("avatar", self.avatar.as_deref())

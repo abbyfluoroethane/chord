@@ -1077,7 +1077,7 @@ mod tests {
 
         match timeline_diffs {
             Some(ListDiff::Insert { index: 0, item }) => {
-                assert_eq!(item.id, "stanza-id:s-1");
+                assert_eq!(item.stanza_id.as_deref(), Some("s-1"));
                 assert_eq!(item.sender_name, "bob");
                 assert_eq!(item.body, "hi alice");
                 assert!(!item.outgoing);

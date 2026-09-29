@@ -299,8 +299,9 @@ pub fn find_message(
     .optional()
 }
 
-/// The message with this timeline id (`TimelineItem::id`: `stanza-id:<id>` or
-/// `origin-id:<id>`).
+/// The message with this timeline id. `TimelineItem::id` is `m:<row id>` and stays the
+/// same for the life of the row. The old forms `stanza-id:<id>` and `origin-id:<id>` still
+/// work.
 pub fn find_by_timeline_id(
     conn: &Connection,
     account_id: i64,
@@ -309,6 +310,17 @@ pub fn find_by_timeline_id(
     let Some((kind, key)) = timeline_id.split_once(':') else {
         return Ok(None);
     };
+    if kind == "m" {
+        let Ok(rowid) = key.parse::<i64>() else {
+            return Ok(None);
+        };
+        return conn
+            .prepare_cached(&format!(
+                "SELECT {ROW_COLUMNS} FROM messages WHERE account_id = ?1 AND id = ?2"
+            ))?
+            .query_row(params![account_id, rowid], message_row)
+            .optional();
+    }
     let found = conn
         .prepare_cached(&format!(
             "SELECT {ROW_COLUMNS} FROM messages

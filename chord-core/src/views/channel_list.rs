@@ -14,17 +14,24 @@ pub enum ChannelScope {
     Space { service: String, node: String },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChannelKind {
     /// A 1:1 chat.
     Direct,
     /// A MUC room.
     Room,
+    /// The private messages with one room occupant. The `jid` of the item is
+    /// `room/nick`, and its name is the nick. A UI can show "nick (in room)".
+    PrivateMessage {
+        /// Bare JID of the room.
+        room: String,
+        nick: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelItem {
-    /// Bare JID of the room or the peer.
+    /// Bare JID of the room or the peer. `room/nick` for a private message channel.
     pub jid: String,
     pub name: String,
     pub kind: ChannelKind,
@@ -82,10 +89,21 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
         .query_map(params![q.account_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     for (jid, last) in dms {
+        let (name, kind) = match jid.split_once('/') {
+            // A room occupant. A user JID with a resource never is a peer here.
+            Some((room, nick)) => (
+                nick.to_owned(),
+                ChannelKind::PrivateMessage {
+                    room: room.to_owned(),
+                    nick: nick.to_owned(),
+                },
+            ),
+            None => (contact_name(q, &jid)?, ChannelKind::Direct),
+        };
         out.push(ChannelItem {
-            name: contact_name(q, &jid)?,
+            name,
             jid,
-            kind: ChannelKind::Direct,
+            kind,
             category: None,
             joined: true,
             last_activity: Some(last),
@@ -146,4 +164,104 @@ fn space(q: &QueryCtx<'_>, service: &str, node: &str) -> rusqlite::Result<Vec<Ch
         })
     })?;
     rows.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+    use crate::store::queries::{
+        Direction, KeyKind, MessageExtras, MessageKind, NewMessage, ensure_account, insert_message,
+    };
+    use jid::BareJid;
+
+    fn put(store: &Store, account_id: i64, key: &str, dir: Direction, peer: &str) -> i64 {
+        insert_message(
+            store.conn(),
+            account_id,
+            &NewMessage {
+                kind: MessageKind::Chat,
+                key_kind: KeyKind::StanzaId,
+                key,
+                direction: dir,
+                peer,
+                sender: peer,
+                body: "hi",
+                timestamp: None,
+                extras: MessageExtras::default(),
+            },
+        )
+        .unwrap()
+        .unwrap()
+        .rowid
+    }
+
+    #[test]
+    fn private_peer_and_chat_use_the_same_read_position() {
+        let store = Store::open_in_memory().unwrap();
+        let account = BareJid::new("alice@chord.localhost").unwrap();
+        let account_id = ensure_account(store.conn(), account.as_str()).unwrap();
+        let q = QueryCtx {
+            store: &store,
+            account_id,
+            account: &account,
+        };
+        let pm = "room@muc.chord.localhost/bob";
+        let chat = "carol@chord.localhost";
+        for peer in [pm, chat] {
+            put(
+                &store,
+                account_id,
+                &format!("{peer}-1"),
+                Direction::In,
+                peer,
+            );
+            put(
+                &store,
+                account_id,
+                &format!("{peer}-2"),
+                Direction::In,
+                peer,
+            );
+            put(
+                &store,
+                account_id,
+                &format!("{peer}-3"),
+                Direction::Out,
+                peer,
+            );
+        }
+        let items = query(&q, &ChannelScope::Home).unwrap();
+        let pm_item = items.iter().find(|i| i.jid == pm).unwrap();
+        assert_eq!(pm_item.name, "bob");
+        assert_eq!(
+            pm_item.kind,
+            ChannelKind::PrivateMessage {
+                room: "room@muc.chord.localhost".into(),
+                nick: "bob".into()
+            }
+        );
+        assert_eq!(pm_item.unread, 2);
+        assert_eq!(items.iter().find(|i| i.jid == chat).unwrap().unread, 2);
+
+        // Read the first incoming message of each peer, as mark_read does.
+        for peer in [pm, chat] {
+            let first: i64 = store
+                .conn()
+                .query_row(
+                    "SELECT MIN(id) FROM messages WHERE peer = ?1",
+                    params![peer],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            store
+                .conn()
+                .execute(
+                    "INSERT INTO read_state (account_id, peer, last_read) VALUES (?1, ?2, ?3)",
+                    params![account_id, peer, first],
+                )
+                .unwrap();
+            assert_eq!(unread(&q, peer).unwrap(), 1, "{peer}");
+        }
+    }
 }

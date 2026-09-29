@@ -13,10 +13,14 @@ use chord_core::views as core_views;
 
 // ---- Views ----
 
-/// One message, ready to show. `id` is the "kind:key" id that commands take.
+/// One message, ready to show. `id` is the "m:<row id>" id that commands take.
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
 pub struct TimelineItem {
     pub id: String,
+    /// The stanza-id from the server or the room, if known.
+    pub stanza_id: Option<String>,
+    /// The XEP-0359 origin-id, if the message has one.
+    pub origin_id: Option<String>,
     pub sender: String,
     pub sender_name: String,
     pub avatar: Option<String>,
@@ -58,10 +62,15 @@ pub enum DeliveryStatus {
 }
 
 /// The kind of a channel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum ChannelKind {
     Direct,
     Room,
+    /// Private messages with a room occupant. The `jid` of the item is `room/nick`.
+    PrivateMessage {
+        room: String,
+        nick: String,
+    },
 }
 
 /// Which channels a list shows.
@@ -109,6 +118,8 @@ impl From<core_views::TimelineItem> for TimelineItem {
     fn from(i: core_views::TimelineItem) -> Self {
         Self {
             id: i.id,
+            stanza_id: i.stanza_id,
+            origin_id: i.origin_id,
             sender: i.sender,
             sender_name: i.sender_name,
             avatar: i.avatar,
@@ -161,6 +172,9 @@ impl From<core_views::ChannelKind> for ChannelKind {
         match k {
             core_views::ChannelKind::Direct => Self::Direct,
             core_views::ChannelKind::Room => Self::Room,
+            core_views::ChannelKind::PrivateMessage { room, nick } => {
+                Self::PrivateMessage { room, nick }
+            }
         }
     }
 }
@@ -614,7 +628,9 @@ mod tests {
     #[test]
     fn timeline_item_converts_nested_records() {
         let core = core_views::TimelineItem {
-            id: "origin-id:1".into(),
+            id: "m:1".into(),
+            stanza_id: None,
+            origin_id: Some("1".into()),
             sender: "a@b/c".into(),
             sender_name: "c".into(),
             avatar: None,

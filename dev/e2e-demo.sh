@@ -69,7 +69,7 @@ grep -qF "$text" <<<"$timeline" || fail "bob timeline lacks the message: $timeli
 
 echo "4. alice edits the message, and bob sees the edit"
 id=$(alice --json timeline "$room" --limit 5 | find_item "$text" "item['id']")
-[[ "$id" == stanza-id:* ]] || fail "alice has no stanza-id for her message: '$id'"
+[[ "$id" == m:* ]] || fail "alice has no timeline id for her message: '$id'"
 alice edit "$id" "$text (edited)"
 edited=$(bob --json timeline "$room" --limit 5 | find_item "$text" "item['body'], item['edited']")
 [[ "$edited" == "$text (edited) True" ]] || fail "bob does not see the edit: $edited"
