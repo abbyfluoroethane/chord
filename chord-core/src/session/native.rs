@@ -39,7 +39,7 @@ use xmpp_parsers::stream_features::StreamFeatures;
 
 use super::{
     AuthFailure, ConnectError, DisconnectReason, SaslRetry, ServerAddr, Session, SessionConfig,
-    SessionError, SessionEvent, sasl_retry,
+    SessionError, SessionEvent, TICK, sasl_retry,
 };
 
 /// Size of the inbound and outbound queues.
@@ -362,8 +362,15 @@ async fn run(
 ) {
     // `StreamEvent::Resumed` does not carry the JID, so keep the one from the last `Reset`.
     let mut bound_jid: Option<Jid> = None;
+    let mut features: Vec<String> = Vec::new();
+    let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + TICK, TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
+            _ = tick.tick() => {
+                // A full queue means that the actor is busy. It gets the next tick.
+                let _ = events.try_send(SessionEvent::Tick);
+            }
             command = commands.recv() => match command {
                 Some(Command::Send(stanza)) => {
                     // The token reports delivery progress. Nothing uses it yet.
@@ -379,12 +386,18 @@ async fn run(
             event = next_event(&mut stream) => {
                 let mapped = match event {
                     Some(Event::Stanza(stanza)) => SessionEvent::Stanza(Box::new(stanza)),
-                    Some(Event::Stream(StreamEvent::Reset { bound_jid: jid, .. })) => {
+                    Some(Event::Stream(StreamEvent::Reset { bound_jid: jid, features: stream_features })) => {
                         bound_jid = Some(jid.clone());
-                        SessionEvent::Connected { bound_jid: jid, resumed: false }
+                        // xmpp-parsers stream_features.rs:62: the elements that it does not parse.
+                        features = stream_features.others.iter().map(|e| e.ns()).collect();
+                        SessionEvent::Connected { bound_jid: jid, resumed: false, features: features.clone() }
                     }
                     Some(Event::Stream(StreamEvent::Resumed)) => match &bound_jid {
-                        Some(jid) => SessionEvent::Connected { bound_jid: jid.clone(), resumed: true },
+                        Some(jid) => SessionEvent::Connected {
+                            bound_jid: jid.clone(),
+                            resumed: true,
+                            features: features.clone(),
+                        },
                         // tokio-xmpp only resumes a stream that it bound before.
                         None => continue,
                     },

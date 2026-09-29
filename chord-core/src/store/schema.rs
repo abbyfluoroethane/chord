@@ -41,7 +41,7 @@ pub const MIGRATIONS: &[&str] = &[
         jid          TEXT NOT NULL,              -- bare JID
         name         TEXT,
         subscription TEXT NOT NULL DEFAULT 'none',
-        ask          INTEGER NOT NULL DEFAULT 0, -- 1 if a subscription request is pending
+        ask          INTEGER NOT NULL DEFAULT 0, -- bit flags: 1 = our subscription request is pending, 2 = pre-approved (roster.rs)
         groups       TEXT NOT NULL DEFAULT '[]', -- JSON array of group names
         PRIMARY KEY (account_id, jid)
     );

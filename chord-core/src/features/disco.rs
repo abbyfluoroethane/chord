@@ -320,7 +320,7 @@ mod tests {
         });
         // The command arrives after login, before `Connected`.
         h.with_ctx(|ctx| on_command(ctx, command));
-        h.with_ctx(|ctx| crate::features::on_connected(ctx, false));
+        h.with_ctx(|ctx| crate::features::on_connected(ctx, false, &[]));
         assert_eq!(
             h.state.deferred.len(),
             1,

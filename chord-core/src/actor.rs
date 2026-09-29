@@ -20,6 +20,7 @@ use jid::{BareJid, Jid};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::ping::Ping;
 use xmpp_parsers::stanza::Stanza;
+use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
 
 use crate::features::{
     self, Ctx, Effect, FeatureCommand, FeatureState, Internal, IqResponse, PendingIq, muc,
@@ -33,6 +34,10 @@ use crate::views::{
     ChannelItem, ChannelScope, MemberItem, QueryCtx, Registry, SpaceItem, TimelineItem, ViewKey,
     ViewStream,
 };
+
+/// An IQ with no answer after this many session ticks (`session::TICK`, 15 s) fails.
+/// A time limit of 60 s to 75 s.
+const IQ_TIMEOUT_TICKS: u8 = 5;
 
 /// A command to the actor. Each one carries the channel for its reply.
 pub(crate) enum Command {
@@ -593,6 +598,34 @@ impl<S: Session> Actor<S> {
         }
     }
 
+    /// Count a session tick for each pending IQ. An IQ with no answer after
+    /// `IQ_TIMEOUT_TICKS` ticks fails with `remote-server-timeout`, so its command does
+    /// not wait forever. A late answer is then dropped.
+    fn expire_pending(&mut self) {
+        let mut expired = Vec::new();
+        for (id, pending) in &mut self.pending {
+            pending.ticks = pending.ticks.saturating_add(1);
+            if pending.ticks >= IQ_TIMEOUT_TICKS {
+                expired.push(id.clone());
+            }
+        }
+        for id in expired {
+            let Some(pending) = self.pending.remove(&id) else {
+                continue;
+            };
+            log::warn!("no answer to IQ {id} from {:?}. It failed.", pending.to);
+            let error = StanzaError::new(
+                ErrorType::Wait,
+                DefinedCondition::RemoteServerTimeout,
+                "en",
+                "no answer in time",
+            );
+            self.with_ctx(|ctx| {
+                features::on_iq_response(ctx, pending.then, IqResponse::Error(error))
+            });
+        }
+    }
+
     /// Tell each feature that its IQs will get no answer.
     fn fail_pending(&mut self) {
         for (_, pending) in std::mem::take(&mut self.pending) {
@@ -602,7 +635,11 @@ impl<S: Session> Actor<S> {
 
     async fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::Connected { bound_jid, resumed } => {
+            SessionEvent::Connected {
+                bound_jid,
+                resumed,
+                features,
+            } => {
                 if let Some(online) = &mut self.online {
                     online.bound_jid = Some(bound_jid.clone());
                 }
@@ -612,7 +649,7 @@ impl<S: Session> Actor<S> {
                     self.fail_pending();
                     self.dirty.insert(ViewKey::All);
                 }
-                self.with_ctx(|ctx| features::on_connected(ctx, resumed));
+                self.with_ctx(|ctx| features::on_connected(ctx, resumed, &features));
             }
             SessionEvent::Disconnected(DisconnectReason::Suspended) => {
                 self.emit_state(ConnectionState::Suspended);
@@ -622,6 +659,7 @@ impl<S: Session> Actor<S> {
             }
             SessionEvent::Disconnected(DisconnectReason::Closed) => self.went_offline(),
             SessionEvent::Stanza(stanza) => self.handle_stanza(*stanza).await,
+            SessionEvent::Tick => self.expire_pending(),
         }
     }
 
@@ -698,6 +736,7 @@ mod tests {
         SessionEvent::Connected {
             bound_jid: jid("alice@chord.localhost/chord"),
             resumed: false,
+            features: Vec::new(),
         }
     }
 
@@ -899,6 +938,36 @@ mod tests {
         assert_eq!(stored[0].key, origin_id);
         assert_eq!(stored[0].direction, Direction::Out);
         assert_eq!(stored[0].body, "hello bob");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_iq_with_no_answer_fails_after_the_time_limit() {
+        let path = temp_db();
+        let _sent = FakeSession::prepare_connect(vec![connected()]);
+        let (handle, _events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
+
+        let result = run_with(actor.run(), async {
+            handle.login(config()).await.unwrap();
+            // The server never answers. The ticks arrive after the roster set goes out,
+            // because the actor takes commands first.
+            for _ in 0..IQ_TIMEOUT_TICKS {
+                FakeSession::push_event(SessionEvent::Tick);
+            }
+            let result = handle
+                .add_contact(BareJid::new("bob@chord.localhost").unwrap(), None)
+                .await;
+            drop(handle);
+            result
+        });
+
+        match result {
+            Err(ClientError::Server(text)) => {
+                assert!(text.contains("RemoteServerTimeout"), "{text}");
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
         let _ = std::fs::remove_file(&path);
     }
 

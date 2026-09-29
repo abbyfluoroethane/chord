@@ -37,7 +37,12 @@ pub(crate) struct State {
     requests: HashSet<BareJid>,
     /// Pre-approvals that wait for their barrier ping, with the callers to answer.
     preapprovals: HashMap<BareJid, Vec<Reply>>,
+    /// The server offers subscription pre-approval (RFC 6121, 3.4).
+    pub pre_approval: bool,
 }
+
+/// The stream feature for subscription pre-approval (RFC 6121, 3.4).
+pub const NS_PRE_APPROVAL: &str = "urn:xmpp:features:pre-approval";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 
@@ -172,7 +177,8 @@ impl ClientHandle {
 
 /// Ask for the roster. The version of the stored roster lets the server send only a
 /// change, or nothing.
-pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
+pub(crate) fn on_connected(ctx: &mut Ctx<'_>, stream_features: &[String]) {
+    ctx.state.roster.pre_approval = stream_features.iter().any(|f| f == NS_PRE_APPROVAL);
     let version = match stored_version(ctx.store.conn(), ctx.account_id) {
         Ok(version) => version,
         Err(e) => {
@@ -343,6 +349,13 @@ fn preapprove(ctx: &mut Ctx<'_>, jid: BareJid, reply: Reply) {
     if ctx.state.roster.requests.remove(&jid) {
         ctx.send(Presence::subscribed().with_to(jid));
         let _ = reply.send(Ok(()));
+        return;
+    }
+    // RFC 6121, 3.4: a client must not pre-approve when the server does not offer it.
+    if !ctx.state.roster.pre_approval {
+        let _ = reply.send(Err(ClientError::Unsupported(
+            "the server does not offer subscription pre-approval".into(),
+        )));
         return;
     }
     let known = read_contact(ctx.store.conn(), ctx.account_id, &jid)
@@ -804,7 +817,7 @@ mod tests {
     }
 
     fn connect_with(h: &mut Harness, roster_xml: &str) {
-        h.with_ctx(on_connected);
+        h.with_ctx(|ctx| on_connected(ctx, &[]));
         h.answer(is_get, Some(el(roster_xml)));
     }
 
@@ -815,7 +828,7 @@ mod tests {
     #[test]
     fn get_asks_with_an_empty_ver_at_first() {
         let mut h = Harness::new();
-        h.with_ctx(on_connected);
+        h.with_ctx(|ctx| on_connected(ctx, &[]));
         let iqs = h.sent_iqs();
         let Iq::Get { payload, .. } = &iqs[0] else {
             panic!("{iqs:?}")
@@ -852,7 +865,7 @@ mod tests {
         let mut h = Harness::new();
         connect_with(&mut h, FULL);
         h.sent_iqs();
-        h.with_ctx(on_connected);
+        h.with_ctx(|ctx| on_connected(ctx, &[]));
         let iqs = h.sent_iqs();
         let Iq::Get { payload, .. } = &iqs[0] else {
             panic!("{iqs:?}")
@@ -899,7 +912,7 @@ mod tests {
             )),
             IqResponse::Lost,
         ] {
-            h.with_ctx(on_connected);
+            h.with_ctx(|ctx| on_connected(ctx, &[]));
             h.respond(is_get, response);
             assert_eq!(contacts(&h).len(), 2);
         }
@@ -1298,6 +1311,7 @@ mod tests {
     fn preapprove_cmd(h: &mut Harness, jid: &str) -> oneshot::Receiver<Result<(), ClientError>> {
         let (reply, answer) = oneshot::channel();
         let jid = bare(jid);
+        h.state.roster.pre_approval = true;
         h.with_ctx(|ctx| on_command(ctx, Command::Preapprove { jid, reply }));
         answer
     }
@@ -1332,6 +1346,35 @@ mod tests {
         let iq = approved_push(BOB, false);
         h.with_ctx(|ctx| assert!(on_iq(ctx, &iq)));
         assert!(!contacts(&h)[0].approved);
+    }
+
+    #[test]
+    fn preapprove_needs_the_stream_feature() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| on_connected(ctx, &[]));
+        assert!(!h.state.roster.pre_approval);
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Preapprove {
+                    jid: bare(BOB),
+                    reply,
+                },
+            )
+        });
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Unsupported(_)))
+        ));
+        assert!(
+            !h.take_sent()
+                .iter()
+                .any(|s| matches!(s, Stanza::Presence(_))),
+            "no subscribed presence goes out"
+        );
+        h.with_ctx(|ctx| on_connected(ctx, &[NS_PRE_APPROVAL.to_owned()]));
+        assert!(h.state.roster.pre_approval);
     }
 
     #[test]

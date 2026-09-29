@@ -158,10 +158,24 @@ pub enum SessionEvent {
     ///
     /// If `resumed` is false, the server lost the session state.
     /// Features must then sync again (MAM catch-up, rejoin MUCs).
-    Connected { bound_jid: Jid, resumed: bool },
+    ///
+    /// `features` lists the namespaces of the stream features that tokio-xmpp does not
+    /// parse itself, for example `urn:xmpp:features:pre-approval`. A resumed stream keeps
+    /// the features of its first connection.
+    Connected {
+        bound_jid: Jid,
+        resumed: bool,
+        features: Vec<String>,
+    },
     /// The stream is down.
     Disconnected(DisconnectReason),
+    /// A clock tick, about every `TICK`, while the session runs. The actor uses it for
+    /// time limits, so that the features need no timers.
+    Tick,
 }
+
+/// The time between two `SessionEvent::Tick` events.
+pub const TICK: core::time::Duration = core::time::Duration::from_secs(15);
 
 /// An error from `send`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,12 +267,14 @@ mod tests {
             SessionEvent::Connected {
                 bound_jid: bound.clone(),
                 resumed: false,
+                features: Vec::new(),
             },
             SessionEvent::Stanza(Box::new(incoming.into())),
             SessionEvent::Disconnected(DisconnectReason::Suspended),
             SessionEvent::Connected {
                 bound_jid: bound.clone(),
                 resumed: true,
+                features: Vec::new(),
             },
         ]);
         let mut events = session.events().expect("first call returns the stream");
@@ -267,7 +283,7 @@ mod tests {
         block_on(async {
             assert!(matches!(
                 next(&mut events).await,
-                Some(SessionEvent::Connected { ref bound_jid, resumed: false }) if *bound_jid == bound
+                Some(SessionEvent::Connected { ref bound_jid, resumed: false, .. }) if *bound_jid == bound
             ));
             match next(&mut events).await.map(|e| match e {
                 SessionEvent::Stanza(stanza) => Ok(*stanza),

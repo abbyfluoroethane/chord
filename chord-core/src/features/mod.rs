@@ -84,6 +84,8 @@ pub(crate) struct PendingIq {
     /// The `to` of the request. The answer must come from it (RFC 6120, 8.1.2.1).
     pub to: Option<Jid>,
     pub then: Pending,
+    /// The session ticks since the request went out. See `actor::IQ_TIMEOUT_TICKS`.
+    pub ticks: u8,
 }
 
 impl PendingIq {
@@ -162,6 +164,7 @@ impl Ctx<'_> {
             PendingIq {
                 to: iq.to().cloned(),
                 then,
+                ticks: 0,
             },
         );
         self.send(iq);
@@ -203,7 +206,8 @@ pub(crate) enum IqResponse {
 }
 
 /// A new session is up. `resumed` is true when stream management restored it.
-pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool) {
+/// `stream_features` lists the namespaces of the other stream features.
+pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[String]) {
     if resumed {
         // The server kept the presence, the carbons state, and the room joins.
         return;
@@ -221,7 +225,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool) {
     presence::on_connected(ctx);
     carbons::on_connected(ctx);
     disco::on_connected(ctx);
-    roster::on_connected(ctx);
+    roster::on_connected(ctx, stream_features);
     bookmarks::on_connected(ctx);
     mam::on_connected(ctx);
     muc::on_connected(ctx);
