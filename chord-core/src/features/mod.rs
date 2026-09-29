@@ -370,6 +370,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Spaces(_)
             | FeatureCommand::Upload(_)
             | FeatureCommand::Push(push::Command::Enable { .. })
+            | FeatureCommand::Muc(muc::Command::RoomService { .. })
             | FeatureCommand::Blocking(
                 blocking::Command::Block { .. }
                     | blocking::Command::Unblock { .. }

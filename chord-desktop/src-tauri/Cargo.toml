@@ -19,6 +19,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 # Desktop notifications for ClientEvent::Notification (src/notify.rs).
 tauri-plugin-notification = "2"
+# The system file dialog for the upload button. It gives the bridge a real file path.
+tauri-plugin-dialog = "2"
 # The Chord core with its JSON output (Serialize on the views and events).
 chord-core = { workspace = true, features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

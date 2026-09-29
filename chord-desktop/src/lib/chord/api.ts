@@ -193,6 +193,8 @@ export const joinRoom = (room: string, nick: string, password?: string) =>
 export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
 export const changeNick = (room: string, nick: string) =>
   invoke<void>('change_nick', { room, nick });
+/** The room service of the server (for example conference.example.org), or null. */
+export const roomService = () => invoke<string | null>('room_service');
 export const sendPrivate = (room: string, nick: string, body: string) =>
   invoke<string>('send_private', { room, nick, body });
 export const setRoomAffiliation = (
@@ -260,6 +262,10 @@ export const preapproveSubscription = (jid: string) =>
 
 /** Ask the server for the avatar of `owner` and store it. `avatarUrl` then shows it. */
 export const refreshAvatar = (owner: string) => invoke<void>('refresh_avatar', { owner });
+/** Publish our avatar. `width` and `height` are the image size in pixels. */
+export const setAvatar = (mime: string, data: Uint8Array, width: number, height: number) =>
+  invoke<void>('set_avatar', { mime, data: Array.from(data), width, height });
+export const removeAvatar = () => invoke<void>('remove_avatar');
 /** `muteUntil` is a Unix time in ms. */
 export const setNotificationLevel = (peer: string, level: NotificationLevel, muteUntil?: number) =>
   invoke<void>('set_notification_level', { peer, level, muteUntil: muteUntil ?? null });

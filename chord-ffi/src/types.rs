@@ -454,6 +454,10 @@ pub enum ClientEvent {
     },
     /// The blocklist changed (XEP-0191). Read it again with `blocked_contacts`.
     BlockListChanged,
+    /// The roster entry or the presence of a contact changed.
+    ContactChanged {
+        jid: String,
+    },
     /// An event that this binding version does not know.
     Unknown,
 }
@@ -604,6 +608,9 @@ impl From<core_actor::ClientEvent> for ClientEvent {
             },
             E::Typing { peer, typers } => Self::Typing { peer, typers },
             E::BlockListChanged => Self::BlockListChanged,
+            E::ContactChanged(jid) => Self::ContactChanged {
+                jid: jid.to_string(),
+            },
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,
         }
@@ -645,6 +652,12 @@ pub struct Contact {
     pub approved: bool,
     /// The blocklist (XEP-0191) holds this contact.
     pub blocked: bool,
+    /// At least one resource of the contact is available.
+    pub online: bool,
+    /// The show value of the best resource: away, chat, dnd or xa.
+    pub show: Option<String>,
+    /// The status text of the best resource.
+    pub status: Option<String>,
 }
 
 impl From<CoreContact> for Contact {
@@ -657,6 +670,9 @@ impl From<CoreContact> for Contact {
             groups: c.groups,
             approved: c.approved,
             blocked: c.blocked,
+            online: c.online,
+            show: c.show,
+            status: c.status,
         }
     }
 }
@@ -911,10 +927,15 @@ mod tests {
             groups: vec!["g".into()],
             approved: true,
             blocked: true,
+            online: true,
+            show: Some("away".into()),
+            status: Some("out".into()),
         }
         .into();
         assert_eq!(c.jid, "a@b");
         assert_eq!(c.subscription, SubscriptionState::Both);
         assert!(c.blocked);
+        assert!(c.online);
+        assert_eq!(c.show.as_deref(), Some("away"));
     }
 }

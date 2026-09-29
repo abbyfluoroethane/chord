@@ -145,6 +145,10 @@ pub(crate) enum Pending {
 
 /// A command from the public API.
 pub(crate) enum Command {
+    /// The room service of our server. It waits for service discovery.
+    RoomService {
+        reply: oneshot::Sender<Result<Option<BareJid>, ClientError>>,
+    },
     Join {
         room: BareJid,
         nick: String,
@@ -270,6 +274,15 @@ impl ClientHandle {
     pub async fn remove_bookmark(&self, room: BareJid) -> Result<(), ClientError> {
         self.room_command(|reply| Command::RemoveBookmark { room, reply })
             .await
+    }
+
+    /// The room service of our server (the disco item with the XEP-0045 identity
+    /// conference/text), for example `conference.example.org`. A new room goes there.
+    /// `None` when the server has no room service. Waits for service discovery.
+    pub async fn room_service(&self) -> Result<Option<BareJid>, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(super::FeatureCommand::Muc(Command::RoomService { reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
     /// Send a private message to one occupant of a room (XEP-0045, section 7.5) and store
@@ -572,6 +585,15 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             reply,
         } => bookmarks::add(ctx, room, name, autojoin, nick, reply),
         Command::RemoveBookmark { room, reply } => bookmarks::remove(ctx, room, reply),
+        Command::RoomService { reply } => {
+            let service = ctx.state.disco.services.iter().find_map(|(jid, info)| {
+                info.identities
+                    .iter()
+                    .any(|i| i.category == "conference" && i.type_ == "text")
+                    .then(|| jid.to_bare())
+            });
+            let _ = reply.send(Ok(service));
+        }
         Command::SendPrivate {
             room,
             nick,
@@ -805,6 +827,10 @@ fn on_invitation(ctx: &mut Ctx<'_>, message: &Message) -> bool {
 
 /// A command while no session is up. Answer each reply channel with an error.
 pub(crate) fn offline(command: Command) {
+    if let Command::RoomService { reply } = command {
+        let _ = reply.send(Err(ClientError::NotConnected));
+        return;
+    }
     if let Command::SendPrivate { reply, .. } = command {
         let _ = reply.send(Err(ClientError::NotConnected));
         return;

@@ -228,15 +228,19 @@ export function mapDiff<A, B>(diff: ListDiff<A>, f: (a: A) => B): ListDiff<B> {
 
 // --- contacts --------------------------------------------------------
 
-export function toContactItem(jid: string, name: string | null, since: number | null = null): ContactItem {
+export function toContactItem(
+  jid: string,
+  name: string | null,
+  since: number | null = null,
+  presence: { online: boolean; show: string | null; status: string | null } | null = null
+): ContactItem {
   return {
     address: jid,
     name: name || localPart(jid),
     avatar: avatarUrl(jid),
-    // The bridge has no roster presence.
-    show: null,
-    online: false,
-    status: null,
+    show: presence?.online ? toShow(presence.show) : null,
+    online: presence?.online ?? false,
+    status: presence?.status ?? null,
     since
   };
 }
@@ -251,7 +255,7 @@ export function splitRoster(list: BContact[]): ContactLists {
   const out: ContactLists = { contacts: [], outgoing: [] };
   for (const c of list) {
     if (c.blocked) continue;
-    const item = toContactItem(c.jid, c.name);
+    const item = toContactItem(c.jid, c.name, null, c);
     if (c.ask && (c.subscription === 'none' || c.subscription === 'from')) out.outgoing.push(item);
     else out.contacts.push(item);
   }

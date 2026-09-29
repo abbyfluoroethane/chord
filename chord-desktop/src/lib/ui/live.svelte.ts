@@ -57,6 +57,7 @@ class LiveController {
 
   private root: (() => void) | null = null;
   private eventsAttached = false;
+  private contactsTimer: ReturnType<typeof setTimeout> | undefined;
   private subs = new Set<ViewSubscription>();
   private spaceSubs = new Map<string, ViewSubscription | null>();
   private wanted = new Set<string>();
@@ -380,6 +381,11 @@ class LiveController {
         break;
       case 'blockListChanged':
         void contactsStore.refresh();
+        break;
+      case 'contactChanged':
+        // Presence comes in bursts at login: read the list once per burst.
+        clearTimeout(this.contactsTimer);
+        this.contactsTimer = setTimeout(() => void contactsStore.refresh(), 300);
         break;
       case 'messageReceived':
         // The views already show it.

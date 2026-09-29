@@ -135,6 +135,13 @@ pub struct Contact {
     pub approved: bool,
     /// The blocklist of the account (XEP-0191) holds this contact.
     pub blocked: bool,
+    /// At least one resource of the contact is available.
+    pub online: bool,
+    /// The show value of the resource with the highest priority: away, chat, dnd or xa.
+    /// `None` when that resource is plainly available, or when the contact is offline.
+    pub show: Option<String>,
+    /// The status text of the resource with the highest priority.
+    pub status: Option<String>,
 }
 
 impl ClientHandle {
@@ -509,7 +516,9 @@ fn remove_presence(ctx: &mut Ctx<'_>, from: &Jid) {
 fn mark(ctx: &mut Ctx<'_>, peer: BareJid) {
     ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
     ctx.changed(ViewKey::MemberList(peer.clone()));
-    ctx.changed(ViewKey::Timeline(peer));
+    ctx.changed(ViewKey::Timeline(peer.clone()));
+    // The contact list is a call, not a view: tell the frontends to read it again.
+    ctx.emit(ClientEvent::ContactChanged(peer));
 }
 
 /// An IQ get or set to us. Returns true if it is a roster push. A push from anybody but
@@ -676,7 +685,15 @@ fn delete_contact(conn: &Connection, account_id: i64, jid: &BareJid) -> rusqlite
 
 const CONTACT_COLUMNS: &str = "jid, name, subscription, ask, groups,
      EXISTS(SELECT 1 FROM blocked_jids b
-            WHERE b.account_id = contacts.account_id AND b.jid = contacts.jid)";
+            WHERE b.account_id = contacts.account_id AND b.jid = contacts.jid),
+     EXISTS(SELECT 1 FROM presences p
+            WHERE p.account_id = contacts.account_id AND p.bare = contacts.jid),
+     (SELECT p.show FROM presences p
+      WHERE p.account_id = contacts.account_id AND p.bare = contacts.jid
+      ORDER BY p.priority DESC LIMIT 1),
+     (SELECT p.status FROM presences p
+      WHERE p.account_id = contacts.account_id AND p.bare = contacts.jid
+      ORDER BY p.priority DESC LIMIT 1)";
 
 fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>> {
     let jid: String = row.get(0)?;
@@ -691,6 +708,9 @@ fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>
         groups: groups_from_json(&groups),
         approved: flags & APPROVED_BIT != 0,
         blocked: row.get::<_, i64>(5).unwrap_or(0) != 0,
+        online: row.get::<_, i64>(6).unwrap_or(0) != 0,
+        show: row.get(7).ok().flatten(),
+        status: row.get(8).ok().flatten(),
     }))
 }
 
@@ -1036,6 +1056,47 @@ mod tests {
             },
         );
         assert!(!h.with_ctx(|ctx| on_iq(ctx, &get)));
+    }
+
+    #[test]
+    fn contacts_carry_the_presence_of_the_best_resource() {
+        let mut h = Harness::new();
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO contacts (account_id, jid, subscription, ask, groups)
+                 VALUES (?1, ?2, 'both', 0, '[]')",
+                params![h.account_id, BOB],
+            )
+            .unwrap();
+        let bob = |h: &Harness| {
+            list_contacts(h.store.conn(), h.account_id)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        assert!(!bob(&h).online);
+
+        let mut phone = presence("bob@chord.localhost/phone", Type::None).with_show(Show::Away);
+        phone.set_status("", "Out");
+        let laptop = presence("bob@chord.localhost/laptop", Type::None)
+            .with_show(Show::Dnd)
+            .with_priority(10);
+        h.with_ctx(|ctx| on_presence(ctx, &phone));
+        h.with_ctx(|ctx| on_presence(ctx, &laptop));
+        let c = bob(&h);
+        assert!(c.online);
+        assert_eq!(c.show.as_deref(), Some("dnd"), "the higher priority wins");
+        assert!(h.effects.iter().any(|e| matches!(
+            e,
+            super::super::Effect::Emit(ClientEvent::ContactChanged(j)) if j.as_str() == BOB
+        )));
+
+        h.with_ctx(|ctx| on_presence(ctx, &presence(BOB, Type::Unavailable)));
+        let c = bob(&h);
+        assert!(!c.online);
+        assert_eq!(c.show, None);
     }
 
     #[test]

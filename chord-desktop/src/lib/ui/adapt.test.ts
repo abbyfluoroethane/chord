@@ -159,13 +159,23 @@ describe('members', () => {
 
 describe('contacts and levels', () => {
   it('splits the roster', () => {
-    const c = { name: null, groups: [], approved: false, blocked: false };
+    const c = {
+      name: null,
+      groups: [],
+      approved: false,
+      blocked: false,
+      online: false,
+      show: null,
+      status: null
+    };
     const r = splitRoster([
-      { ...c, jid: 'a@x.y', name: 'A', subscription: 'both', ask: false },
+      { ...c, jid: 'a@x.y', name: 'A', subscription: 'both', ask: false, online: true, show: 'dnd' },
       { ...c, jid: 'b@x.y', subscription: 'none', ask: true },
       { ...c, jid: 'c@x.y', subscription: 'both', ask: false, blocked: true }
     ]);
     expect(r.contacts.map((x) => x.address)).toEqual(['a@x.y']);
+    expect(r.contacts[0].online).toBe(true);
+    expect(r.contacts[0].show).toBe('dnd');
     expect(r.outgoing.map((x) => x.name)).toEqual(['b']);
   });
 

@@ -194,7 +194,8 @@ export type ClientEvent =
   /** `typers` holds bare JIDs in a chat and nicks in a room. Empty: nobody types. */
   | { type: 'typing'; data: { peer: string; typers: string[] } }
   /** The blocklist changed. Read it again with `blockedContacts`. */
-  | { type: 'blockListChanged' };
+  | { type: 'blockListChanged' }
+  | { type: 'contactChanged'; data: Jid };
 
 // ---------------------------------------------------------------- values
 
@@ -245,6 +246,12 @@ export interface Contact {
   approved: boolean;
   /** The blocklist (XEP-0191) holds this contact. */
   blocked: boolean;
+  /** At least one resource of the contact is available. */
+  online: boolean;
+  /** The show value of the best resource: away, chat, dnd or xa. */
+  show: string | null;
+  /** The status text of the best resource. */
+  status: string | null;
 }
 
 export interface PushRegistration {

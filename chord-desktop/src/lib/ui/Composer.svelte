@@ -72,11 +72,17 @@
     }
   }
 
-  // The bridge uploads from a file path, and a browser file input has none. Inside the app a
-  // file dropped on the window has one. A file dialog needs the Tauri dialog plugin.
-  function upload() {
-    if (live) ui.say('Drag the file into the window to send it.');
-    else files?.click();
+  // The bridge uploads from a file path. Inside the app the system file dialog gives one
+  // (a file dropped on the window works too). In a browser, the file input stays.
+  async function upload() {
+    if (!live) {
+      files?.click();
+      return;
+    }
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const picked = await open({ multiple: true, directory: false, title: 'Send a file' });
+    const paths = picked === null ? [] : Array.isArray(picked) ? picked : [picked];
+    for (const path of paths) void app.uploadPath(path);
   }
 
   function picked() {

@@ -18,6 +18,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default());
     avatars::register(builder)
         .invoke_handler(tauri::generate_handler![
@@ -50,6 +51,9 @@ pub fn run() {
             commands::leave_room,
             commands::change_nick,
             commands::send_private,
+            commands::room_service,
+            commands::set_avatar,
+            commands::remove_avatar,
             commands::set_room_affiliation,
             commands::room_affiliations,
             commands::invite_to_room,

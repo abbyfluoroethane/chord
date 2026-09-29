@@ -138,6 +138,9 @@ pub enum ClientEvent {
     /// The blocklist changed (XEP-0191): a fetch, a push, or an answer to a block or
     /// unblock command. Read the list again with `blocked_contacts`, or the contact list.
     BlockListChanged,
+    /// The roster entry or the presence of a contact changed. Read the contact list
+    /// again with `contacts`.
+    ContactChanged(BareJid),
 }
 
 /// An error from a `ClientHandle` call.

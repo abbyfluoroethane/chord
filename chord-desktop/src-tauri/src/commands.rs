@@ -424,6 +424,17 @@ pub async fn change_nick(state: State<'_, AppState>, room: String, nick: String)
     Ok(state.handle()?.change_nick(bare(&room)?, nick).await?)
 }
 
+/// The room service of the server, for example conference.example.org. New channels go
+/// there. `None` when the server has none.
+#[tauri::command]
+pub async fn room_service(state: State<'_, AppState>) -> Res<Option<String>> {
+    Ok(state
+        .handle()?
+        .room_service()
+        .await?
+        .map(|jid| jid.to_string()))
+}
+
 /// Send a private message to one occupant of a room. Returns its id.
 #[tauri::command]
 pub async fn send_private(
@@ -678,6 +689,34 @@ pub async fn blocked_contacts(state: State<'_, AppState>) -> Res<Vec<BareJid>> {
 }
 
 // ---------------------------------------------------------------- avatars, levels, push
+
+/// The largest avatar image that the UI may send, in bytes.
+const MAX_AVATAR_BYTES: usize = 1024 * 1024;
+
+/// Publish our avatar (XEP-0084, and the vCard photo for XEP-0153). The UI reads the
+/// image and its size in pixels.
+#[tauri::command]
+pub async fn set_avatar(
+    state: State<'_, AppState>,
+    mime: String,
+    data: Vec<u8>,
+    width: u16,
+    height: u16,
+) -> Res<()> {
+    if data.is_empty() || data.len() > MAX_AVATAR_BYTES || !mime.starts_with("image/") {
+        return Err(ChordError::invalid("use an image under 1 MB"));
+    }
+    Ok(state
+        .handle()?
+        .set_avatar(mime, data, width, height)
+        .await?)
+}
+
+/// Remove our avatar.
+#[tauri::command]
+pub async fn remove_avatar(state: State<'_, AppState>) -> Res<()> {
+    Ok(state.handle()?.remove_avatar().await?)
+}
 
 /// Ask the server for the avatar of `owner`, and store it. The `chord-avatar` scheme then
 /// shows it. Use it for a user that is not a contact.

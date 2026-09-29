@@ -721,15 +721,19 @@ class AppState {
   }
 
   /**
-   * Make a room in a circle. Maps to api.joinRoom (which makes it), api.configureRoom
-   * (its name), and api.addRoomToSpace. The room lives on the service of the circle.
+   * Make a room in a circle. Maps to api.roomService (where rooms live), api.joinRoom
+   * (which makes it), api.configureRoom (its name), and api.addRoomToSpace.
    */
   private async makeRoom(space: string, name: string): Promise<boolean> {
     const clean = slug(name);
     if (!clean) return false;
     const { service, node } = splitSpaceKey(space);
-    const room = `${node}-${clean}@${service}`;
+    let room = '';
     const r = await this.call(async (b) => {
+      // The circle service holds the circle. Rooms live on the room service.
+      const rooms = await b.roomService();
+      if (!rooms) throw { code: 'unsupported', message: 'This server has no channel service.' };
+      room = `${node}-${clean}@${rooms}`;
       await b.joinRoom(room, this.myNick(space));
       try {
         await b.configureRoom(room, { name: clean });

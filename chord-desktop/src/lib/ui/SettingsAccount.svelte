@@ -3,7 +3,8 @@
   import { onMount } from 'svelte';
   import Avatar from './Avatar.svelte';
   import { app } from './app.svelte';
-  import { live } from './bridge';
+  import { api, live } from './bridge';
+  import { plainError } from './adapt';
   import { presenceKind } from './types';
   import { ui } from './ui.svelte';
 
@@ -27,9 +28,42 @@
       error = 'The image is too big. Use one under 1 MB.';
       return;
     }
-    // The bridge has no set_avatar command yet. Inside the app the button is off.
-    app.me.avatar = URL.createObjectURL(f);
     if (file) file.value = '';
+    if (!live) {
+      app.me.avatar = URL.createObjectURL(f);
+      return;
+    }
+    void publish(f);
+  }
+
+  // Maps to api.setAvatar(mime, bytes, width, height).
+  async function publish(f: File) {
+    try {
+      const bitmap = await createImageBitmap(f);
+      const size = { w: bitmap.width, h: bitmap.height };
+      bitmap.close();
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      await (await api()).setAvatar(f.type, bytes, size.w, size.h);
+      app.me.avatar = URL.createObjectURL(f);
+      ui.say('Avatar changed.');
+    } catch (e) {
+      error = plainError(e);
+    }
+  }
+
+  // Maps to api.removeAvatar().
+  async function removeAvatar() {
+    if (!live) {
+      app.me.avatar = null;
+      return;
+    }
+    try {
+      await (await api()).removeAvatar();
+      app.me.avatar = null;
+      ui.say('Avatar removed.');
+    } catch (e) {
+      error = plainError(e);
+    }
   }
 
   function save() {
@@ -61,11 +95,9 @@
           tabindex="-1"
           onchange={pick}
         />
-        <button class="btn" disabled={live} onclick={() => file?.click()}>Change avatar</button>
-        {#if live}
-          <span class="meta">Changing your avatar comes later.</span>
-        {:else if app.me.avatar}
-          <button class="btn btn-ghost" onclick={() => (app.me.avatar = null)}>Remove</button>
+        <button class="btn" onclick={() => file?.click()}>Change avatar</button>
+        {#if app.me.avatar}
+          <button class="btn btn-ghost" onclick={removeAvatar}>Remove</button>
         {/if}
       </div>
       {#if error}<span class="err" role="alert">{error}</span>{/if}
