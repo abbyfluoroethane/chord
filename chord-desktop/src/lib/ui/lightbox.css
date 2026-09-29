@@ -1,0 +1,14 @@
+/* PhotoSwipe in Chord colours and style guide motion. */
+.pswp {
+  --pswp-bg: var(--surface-100);
+  --pswp-placeholder-bg: var(--surface-200);
+  --pswp-icon-color: var(--ink);
+  --pswp-icon-color-secondary: var(--surface-100);
+  --pswp-icon-stroke-color: var(--surface-100);
+  --pswp-transition-duration: 240ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pswp {
+    --pswp-transition-duration: 0ms;
+  }
+}
