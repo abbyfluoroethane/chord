@@ -61,7 +61,8 @@
     place-items: center;
     width: 40px;
     height: 40px;
-    border-radius: var(--radius-circle-icon);
+    /* Round at rest. Hover and selection turn the tile into a squircle. */
+    border-radius: 50%;
     border: 2px solid transparent;
     background: var(--surface-200);
     color: var(--ink);
@@ -69,9 +70,15 @@
     font-size: 14px;
     overflow: hidden;
     transition:
+      border-radius var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast),
       background var(--dur-fast),
       color var(--dur-fast);
+  }
+  .tile:hover,
+  .tile:focus-visible,
+  .tile.selected {
+    border-radius: var(--radius-circle-icon);
   }
   .tile:hover {
     border-color: var(--ink-muted);
@@ -98,16 +105,18 @@
   }
   .tile.folder {
     padding: 3px;
+    /* A closed folder shows a 2x2 grid, so it stays a squircle. */
+    border-radius: var(--radius-circle-icon);
   }
 
   .pill {
     position: absolute;
     left: 0;
     top: 50%;
-    width: 8px;
+    width: 4px;
     height: 0;
     transform: translateY(-50%);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    border-radius: 0 2px 2px 0;
     background: var(--ink);
     transition: height var(--dur-fast) var(--ease-out);
   }
