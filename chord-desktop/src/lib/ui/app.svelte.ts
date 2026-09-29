@@ -2,7 +2,12 @@
 // controller (live.svelte.ts) fills the lists from the bridge, and the actions
 // below call the bridge. Each action names its bridge call.
 import * as fx from '$lib/fixtures/data';
-import type { NotificationSetting, SpaceAccess, TimelineSubscription } from '$lib/chord';
+import type {
+  Availability,
+  NotificationSetting,
+  SpaceAccess,
+  TimelineSubscription
+} from '$lib/chord';
 import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle } from './adapt';
 import { api, live } from './bridge';
 import { linkPreviews } from './linkpreviews.svelte';
@@ -42,7 +47,11 @@ const slug = (s: string) =>
     .replace(/^-|-$/g, '');
 
 class AppState {
-  me = $state(live ? { address: '', name: '', avatar: null, show: 'chat' as Show } : clone(fx.me));
+  me = $state(
+    live
+      ? { address: '', name: '', avatar: null, show: 'chat' as Show, status: null as string | null }
+      : clone(fx.me)
+  );
   spaces = $state<SpaceItem[]>(live ? [] : clone(fx.spaces));
   channels = $state<ChannelItem[]>(live ? [] : clone(fx.channels));
   timelines = $state<Record<string, TimelineItem[]>>(live ? {} : clone(fx.timelines));
@@ -740,9 +749,34 @@ class AppState {
 
   // --- circles -----------------------------------------------------
 
+  /** Maps to api.setPresence(availability, status). Offline, the core only stores it. */
   setShow(show: Show) {
-    // The bridge has no command for our own presence yet. The choice stays local.
     this.me.show = show;
+    void this.pushPresence();
+  }
+
+  /** Our status text. An empty text clears it. Maps to api.setPresence. */
+  setStatus(text: string | null) {
+    const clean = text?.trim() ?? '';
+    this.me.status = clean ? clean.slice(0, 128) : null;
+    void this.pushPresence();
+  }
+
+  /** Read our stored availability and status text. Maps to api.ownPresence. */
+  async loadPresence() {
+    if (!live) return;
+    try {
+      const own = await (await api()).ownPresence();
+      this.me.show = fromAvailability(own.availability);
+      this.me.status = own.status;
+    } catch {
+      /* keep the defaults */
+    }
+  }
+
+  private async pushPresence() {
+    if (!live) return;
+    await this.call((b) => b.setPresence(toAvailability(this.me.show), this.me.status));
   }
 
   /** Sample data only. */
@@ -980,3 +1014,18 @@ class AppState {
 }
 
 export const app = new AppState();
+
+/** Our show value in the UI, as the core availability. */
+function toAvailability(show: Show): Availability {
+  if (show === 'dnd') return 'dnd';
+  if (show === 'away') return 'away';
+  if (show === 'xa') return 'extendedAway';
+  return 'available';
+}
+
+function fromAvailability(a: Availability): Show {
+  if (a === 'dnd') return 'dnd';
+  if (a === 'away') return 'away';
+  if (a === 'extendedAway') return 'xa';
+  return 'chat';
+}

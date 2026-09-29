@@ -3,9 +3,11 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
+  Availability,
   ChannelItem,
   ChannelScope,
   ChordError,
+  OwnPresence,
   ClientEvent,
   Contact,
   JoinOutcome,
@@ -196,6 +198,11 @@ export const joinRoom = (room: string, nick: string, password?: string) =>
 export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
 export const changeNick = (room: string, nick: string) =>
   invoke<void>('change_nick', { room, nick });
+/** Set our availability and status text. Offline, Chord only stores them. */
+export const setPresence = (availability: Availability, status: string | null) =>
+  invoke<void>('set_presence', { availability, status });
+/** Our stored availability and status text. */
+export const ownPresence = () => invoke<OwnPresence>('own_presence');
 /** The room service of the server (for example conference.example.org), or null. */
 export const roomService = () => invoke<string | null>('room_service');
 export const sendPrivate = (room: string, nick: string, body: string) =>

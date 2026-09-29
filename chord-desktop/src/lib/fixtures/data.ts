@@ -16,7 +16,8 @@ export const me: Me = {
   address: 'abby@foid.space',
   name: 'Abby',
   avatar: null,
-  show: 'chat'
+  show: 'chat',
+  status: 'Prepping the static fire'
 };
 
 const SVC = 'chat.foid.space';

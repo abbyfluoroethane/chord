@@ -477,7 +477,10 @@ pub async fn save_image(url: String, path: String) -> Res<()> {
         return Err(ChordError::invalid("the link is not an image"));
     }
     let too_big = || ChordError::invalid("the image is larger than 50 MB");
-    if response.content_length().is_some_and(|n| n > MAX_IMAGE_BYTES) {
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_IMAGE_BYTES)
+    {
         return Err(too_big());
     }
     let mut body: Vec<u8> = Vec::new();

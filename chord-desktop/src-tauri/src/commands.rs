@@ -431,6 +431,24 @@ pub async fn change_nick(state: State<'_, AppState>, room: String, nick: String)
     Ok(state.handle()?.change_nick(bare(&room)?, nick).await?)
 }
 
+/// Set our availability and status text. Offline, Chord only stores them.
+#[tauri::command]
+pub async fn set_presence(
+    state: State<'_, AppState>,
+    availability: chord_core::features::presence::Availability,
+    status: Option<String>,
+) -> Res<()> {
+    Ok(state.handle()?.set_presence(availability, status).await?)
+}
+
+/// Our stored availability and status text.
+#[tauri::command]
+pub async fn own_presence(
+    state: State<'_, AppState>,
+) -> Res<chord_core::features::presence::OwnPresence> {
+    Ok(state.handle()?.own_presence().await?)
+}
+
 /// The room service of the server, for example conference.example.org. New channels go
 /// there. `None` when the server has none.
 #[tauri::command]

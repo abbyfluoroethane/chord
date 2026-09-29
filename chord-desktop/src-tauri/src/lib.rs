@@ -54,6 +54,8 @@ pub fn run() {
             commands::change_nick,
             commands::send_private,
             commands::room_service,
+            commands::set_presence,
+            commands::own_presence,
             commands::set_avatar,
             commands::remove_avatar,
             commands::set_room_affiliation,

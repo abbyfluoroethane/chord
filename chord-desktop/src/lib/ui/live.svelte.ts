@@ -92,6 +92,7 @@ class LiveController {
     await this.stopViews();
     const gen = ++this.generation;
     this.root = $effect.root(() => this.effects());
+    void app.loadPresence();
     const track = async <T extends ViewSubscription>(p: Promise<T>): Promise<T> => {
       const sub = await p;
       if (gen !== this.generation) {

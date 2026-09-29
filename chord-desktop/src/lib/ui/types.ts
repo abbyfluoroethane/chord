@@ -93,6 +93,8 @@ export interface Me {
   name: string;
   avatar: string | null;
   show: Show;
+  /** Our status text, or null. */
+  status: string | null;
 }
 
 export interface PublicCircle {

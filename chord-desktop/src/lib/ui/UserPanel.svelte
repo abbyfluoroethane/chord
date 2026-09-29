@@ -3,9 +3,9 @@
   import Settings from 'lucide-svelte/icons/settings';
   import Avatar from './Avatar.svelte';
   import Icon from './Icon.svelte';
-  import Menu, { type MenuItem } from './Menu.svelte';
+  import StatusMenu from './StatusMenu.svelte';
   import { app } from './app.svelte';
-  import { presenceKind, presenceLabel, type Show } from './types';
+  import { presenceKind, presenceLabel } from './types';
   import { tooltip } from './tooltip';
   import { ui } from './ui.svelte';
 
@@ -14,17 +14,6 @@
 
   const kind = $derived(presenceKind(true, app.me.show));
 
-  const status = (label: string, show: Show): MenuItem => ({
-    label,
-    checked: app.me.show === show,
-    onselect: () => app.setShow(show)
-  });
-
-  const items = $derived<MenuItem[]>([
-    status('Available', 'chat'),
-    status('Away', 'away'),
-    status('Do not disturb', 'dnd')
-  ]);
 </script>
 
 <div class="panel">
@@ -39,7 +28,11 @@
     <Avatar name={app.me.name} src={app.me.avatar} size={32} presence={kind} cut="var(--surface-300)" />
     <span class="text">
       <span class="name">{app.me.name}</span>
-      <span class="addr mono" title={presenceLabel[kind]}>{app.me.address}</span>
+      {#if app.me.status}
+        <span class="addr" title={app.me.status}>{app.me.status}</span>
+      {:else}
+        <span class="addr mono" title={presenceLabel[kind]}>{app.me.address}</span>
+      {/if}
     </span>
   </button>
   <button
@@ -53,7 +46,7 @@
 </div>
 
 {#if open && who}
-  <Menu anchor={who} {items} placement="top-end" label="Your status" onclose={() => (open = false)} />
+  <StatusMenu anchor={who} onclose={() => (open = false)} />
 {/if}
 
 <style>

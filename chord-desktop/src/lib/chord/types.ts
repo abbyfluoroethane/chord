@@ -254,6 +254,14 @@ export interface Contact {
   status: string | null;
 }
 
+/** Our availability. Matches chord-core presence::Availability. */
+export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway';
+
+export interface OwnPresence {
+  availability: Availability;
+  status: string | null;
+}
+
 export interface PushRegistration {
   service: string;
   node: string;

@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Presence always pairs colour with a shape:
-  // online = filled dot, away = half-filled amber dot, dnd = bar, offline = ring.
+  // Presence pairs colour with a shape, as on the website (style guide, .pres):
+  // online = filled dot, away = half-filled amber dot with an amber ring,
+  // dnd = a red bar, offline = a grey ring.
   import type { PresenceKind } from './types';
   import { presenceLabel } from './types';
 
@@ -18,15 +19,14 @@
   aria-hidden={label ? undefined : 'true'}
 >
   {#if kind === 'online'}
-    <circle cx="5" cy="5" r="4.5" fill="var(--online)" />
+    <circle cx="5" cy="5" r="5" fill="var(--online)" />
   {:else if kind === 'away'}
-    <circle cx="5" cy="5" r="4" fill="none" stroke="var(--brand)" stroke-width="1.5" />
-    <path d="M5 1a4 4 0 0 0 0 8z" fill="var(--brand)" />
+    <path d="M5 0a5 5 0 0 0 0 10z" fill="var(--brand)" />
+    <circle cx="5" cy="5" r="4" fill="none" stroke="var(--brand)" stroke-width="2" />
   {:else if kind === 'dnd'}
-    <circle cx="5" cy="5" r="4.5" fill="var(--danger)" />
-    <rect x="2.5" y="4.1" width="5" height="1.8" rx="0.9" fill="var(--cut, var(--surface-200))" />
+    <rect x="0" y="3" width="10" height="4" rx="2" fill="var(--danger)" />
   {:else}
-    <circle cx="5" cy="5" r="3.6" fill="none" stroke="var(--ink-muted)" stroke-width="1.6" />
+    <circle cx="5" cy="5" r="4" fill="none" stroke="var(--ink-muted)" stroke-width="2" />
   {/if}
 </svg>
 
