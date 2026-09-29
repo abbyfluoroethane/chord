@@ -10,9 +10,6 @@
 //! The actor runs the queued effects after the function returns. So feature code is
 //! synchronous, has no `Send` bound, and a test can call it with no session.
 
-// TODO: remove when the feature modules use every framework slot.
-#![allow(dead_code)]
-
 pub mod avatars;
 pub mod bookmarks;
 pub mod carbons;
@@ -68,7 +65,6 @@ pub(crate) enum Pending {
     Mam(mam::Pending),
     Muc(muc::Pending),
     Bookmarks(bookmarks::Pending),
-    Pubsub(pubsub::Pending),
     Spaces(spaces::Pending),
     Upload(upload::Pending),
     Avatars(avatars::Pending),
@@ -127,8 +123,6 @@ pub(crate) struct Ctx<'a> {
     pub account: &'a BareJid,
     /// Row id in `accounts`.
     pub account_id: i64,
-    /// The bound JID of the current session, if the session is up.
-    pub bound_jid: Option<&'a Jid>,
     pub state: &'a mut FeatureState,
     pub(crate) effects: &'a mut Vec<Effect>,
     pub(crate) pending: &'a mut HashMap<String, PendingIq>,
@@ -313,7 +307,6 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Mam(p) => mam::on_response(ctx, p, response),
         Pending::Muc(p) => muc::on_response(ctx, p, response),
         Pending::Bookmarks(p) => bookmarks::on_response(ctx, p, response),
-        Pending::Pubsub(p) => pubsub::on_response(ctx, p, response),
         Pending::Spaces(p) => spaces::on_response(ctx, p, response),
         Pending::Upload(p) => upload::on_response(ctx, p, response),
         Pending::Avatars(p) => avatars::on_response(ctx, p, response),

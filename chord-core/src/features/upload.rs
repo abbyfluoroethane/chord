@@ -86,8 +86,6 @@ impl ClientHandle {
     }
 }
 
-pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
-
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     match pending {
         Pending::Slot(id) => on_slot(ctx, id, response),

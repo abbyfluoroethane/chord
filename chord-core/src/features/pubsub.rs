@@ -9,14 +9,10 @@ use jid::Jid;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::pubsub::event::{Event, Payload};
 
-use super::{Ctx, IqResponse, avatars, bookmarks, spaces};
+use super::{Ctx, avatars, bookmarks, spaces};
 
 pub const NODE_BOOKMARKS: &str = "urn:xmpp:bookmarks:1";
 pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
-
-/// What to do with the answer to an IQ that this feature sent.
-#[derive(Debug)]
-pub(crate) enum Pending {}
 
 /// A message that carries a pubsub event (also PEP). Returns true if it is one.
 pub(crate) fn on_event(ctx: &mut Ctx<'_>, message: &Message) -> bool {
@@ -56,8 +52,4 @@ pub fn node_of(payload: &Payload) -> &str {
         | Payload::Purge { node }
         | Payload::Subscription { node, .. } => &node.0,
     }
-}
-
-pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
-    match pending {}
 }

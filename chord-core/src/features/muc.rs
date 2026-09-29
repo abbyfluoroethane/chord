@@ -225,7 +225,6 @@ pub(crate) fn offline(command: Command) {
 struct RoomRow {
     nick: Option<String>,
     password: Option<String>,
-    autojoin: bool,
     joined: bool,
 }
 
@@ -236,7 +235,7 @@ fn room_row(ctx: &Ctx<'_>, room: &BareJid) -> Option<RoomRow> {
         ctx.store
             .conn()
             .prepare_cached(
-                "SELECT nick, password, autojoin, joined FROM rooms
+                "SELECT nick, password, joined FROM rooms
                  WHERE account_id = ?1 AND jid = ?2",
             )
             .and_then(|mut stmt| {
@@ -244,8 +243,7 @@ fn room_row(ctx: &Ctx<'_>, room: &BareJid) -> Option<RoomRow> {
                     Ok(RoomRow {
                         nick: row.get(0)?,
                         password: row.get(1)?,
-                        autojoin: row.get::<_, i64>(2)? != 0,
-                        joined: row.get::<_, i64>(3)? != 0,
+                        joined: row.get::<_, i64>(2)? != 0,
                     })
                 })
                 .optional()

@@ -9,9 +9,6 @@
 //! 2. runs the effects that they queued (stanzas, events, uploads),
 //! 3. runs the queries of the changed views and sends the diffs.
 
-// TODO: remove when the feature modules use every framework slot.
-#![allow(dead_code)]
-
 use core::fmt;
 use core::pin::Pin;
 use core::task::{Context, Poll};
@@ -365,12 +362,10 @@ impl<S: Session> Actor<S> {
 
     /// Call a feature function with a `Ctx`.
     fn with_ctx<R>(&mut self, f: impl FnOnce(&mut Ctx<'_>) -> R) -> R {
-        let bound_jid = self.online.as_ref().and_then(|o| o.bound_jid.as_ref());
         let mut ctx = Ctx {
             store: &self.store,
             account: &self.account,
             account_id: self.account_id,
-            bound_jid,
             state: &mut self.state,
             effects: &mut self.effects,
             pending: &mut self.pending,

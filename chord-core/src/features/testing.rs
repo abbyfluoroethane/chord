@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use jid::{BareJid, Jid};
+use jid::BareJid;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::stanza::Stanza;
@@ -12,13 +12,11 @@ use crate::store::{Store, queries};
 use crate::views::ViewKey;
 
 pub(crate) const ACCOUNT: &str = "alice@chord.localhost";
-pub(crate) const BOUND: &str = "alice@chord.localhost/chord";
 
 pub(crate) struct Harness {
     pub store: Store,
     pub account: BareJid,
     pub account_id: i64,
-    pub bound: Jid,
     pub state: FeatureState,
     pub effects: Vec<Effect>,
     pub pending: HashMap<String, PendingIq>,
@@ -33,7 +31,6 @@ impl Harness {
             store,
             account: BareJid::new(ACCOUNT).unwrap(),
             account_id,
-            bound: Jid::new(BOUND).unwrap(),
             state: FeatureState::default(),
             effects: Vec::new(),
             pending: HashMap::new(),
@@ -47,7 +44,6 @@ impl Harness {
             store: &self.store,
             account: &self.account,
             account_id: self.account_id,
-            bound_jid: Some(&self.bound),
             state: &mut self.state,
             effects: &mut self.effects,
             pending: &mut self.pending,
