@@ -1,6 +1,7 @@
 <script lang="ts">
-  // One slot on the circle rail: the left pill, a 48px tile, a mention badge.
-  // The rail stays 64px wide, so the tile has 8px on each side.
+  // One slot on the circle rail: the left pill, a tile, a mention badge.
+  // The rail stays 64px wide. A round tile is 48px. A squircle tile is 44px, because a
+  // squircle of the same width looks larger than a circle. The two have about the same area.
   import type { Snippet } from 'svelte';
   import type { HTMLAttributes } from 'svelte/elements';
   import { tooltip } from './tooltip';
@@ -51,9 +52,10 @@
   .slot {
     position: relative;
     display: flex;
+    align-items: center;
     justify-content: center;
     width: var(--rail-width);
-    padding: 4px 0;
+    height: 56px;
     flex: none;
   }
   .tile {
@@ -71,6 +73,8 @@
     font-size: 16px;
     overflow: hidden;
     transition:
+      width var(--dur-fast) var(--ease-out),
+      height var(--dur-fast) var(--ease-out),
       border-radius var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast),
       background var(--dur-fast),
@@ -78,7 +82,11 @@
   }
   .tile:hover,
   .tile:focus-visible,
-  .tile.selected {
+  .tile.selected,
+  .tile.home,
+  .tile.folder {
+    width: 44px;
+    height: 44px;
     border-radius: var(--radius-circle-icon);
   }
   .tile:hover {
