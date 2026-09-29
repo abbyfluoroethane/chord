@@ -1,5 +1,6 @@
 <script lang="ts">
   // Scrolling timeline: date dividers, the "new" line, grouping, jump-to-present.
+  import { untrack } from 'svelte';
   import ArrowDown from 'lucide-svelte/icons/arrow-down';
   import Message from './Message.svelte';
   import Icon from './Icon.svelte';
@@ -87,20 +88,29 @@
     }
   });
 
+  // The id of the last message that this list followed. Only a new last message moves the
+  // view: a scroll, or an update of the last message (a status, a reaction), must not.
+  let lastSeen: string | undefined;
+
   // A new channel opens at the bottom.
   $effect(() => {
     void app.selectedJid;
+    lastSeen = undefined;
     queueMicrotask(() => {
       toBottom();
       onscroll();
     });
   });
 
-  // New messages follow along when the reader is at the bottom or wrote them.
+  // A new message follows along when the reader is at the bottom, or wrote it.
+  // atBottom is read untracked: a change of the scroll position must not run this again.
   $effect(() => {
     const last = app.items[app.items.length - 1];
-    void app.items.length;
-    if (last && (atBottom || last.outgoing)) queueMicrotask(() => toBottom(true));
+    if (!last || last.id === lastSeen) return;
+    const first = lastSeen === undefined;
+    lastSeen = last.id;
+    const follow = untrack(() => atBottom) || (!first && last.outgoing);
+    if (follow) queueMicrotask(() => toBottom(!first));
   });
 
   function jump(id: string) {
