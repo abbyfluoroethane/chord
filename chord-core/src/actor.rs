@@ -99,6 +99,15 @@ pub enum ClientEvent {
     SubscriptionRequest(BareJid),
     /// A live incoming message that the notification policy says should notify the user.
     Notification(crate::features::notify::Notification),
+    /// Someone invites us to a room, with a mediated (XEP-0045) or a direct (XEP-0249)
+    /// invitation. Chord does not join: call `join_room` to accept or
+    /// `decline_room_invite` to decline.
+    RoomInvite {
+        room: BareJid,
+        from: Jid,
+        reason: Option<String>,
+        password: Option<String>,
+    },
 }
 
 /// An error from a `ClientHandle` call.

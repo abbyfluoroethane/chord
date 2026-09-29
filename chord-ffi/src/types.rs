@@ -4,6 +4,7 @@
 
 use chord_core::actor as core_actor;
 use chord_core::features::avatars::Avatar as CoreAvatar;
+use chord_core::features::muc as core_muc;
 use chord_core::features::notify as core_notify;
 use chord_core::features::push::PushRegistration as CorePushRegistration;
 use chord_core::features::roster::{Contact as CoreContact, Subscription as CoreSubscription};
@@ -434,8 +435,62 @@ pub enum ClientEvent {
     Notification {
         notification: Notification,
     },
+    /// Someone invites us to a room. Call `join_room` to accept or `decline_room_invite`.
+    RoomInvite {
+        room: String,
+        from: String,
+        reason: Option<String>,
+        password: Option<String>,
+    },
     /// An event that this binding version does not know.
     Unknown,
+}
+
+/// The affiliation of a JID with a room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum RoomAffiliation {
+    Owner,
+    Admin,
+    Member,
+    None,
+    Outcast,
+}
+
+impl From<RoomAffiliation> for core_muc::RoomAffiliation {
+    fn from(a: RoomAffiliation) -> Self {
+        match a {
+            RoomAffiliation::Owner => Self::Owner,
+            RoomAffiliation::Admin => Self::Admin,
+            RoomAffiliation::Member => Self::Member,
+            RoomAffiliation::None => Self::None,
+            RoomAffiliation::Outcast => Self::Outcast,
+        }
+    }
+}
+
+/// Room settings for `configure_room`. A field that is `None` stays as it is.
+#[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
+pub struct RoomSettings {
+    pub name: Option<String>,
+    pub public: Option<bool>,
+    pub members_only: Option<bool>,
+}
+
+impl From<RoomSettings> for core_muc::RoomSettings {
+    fn from(s: RoomSettings) -> Self {
+        Self {
+            name: s.name,
+            public: s.public,
+            members_only: s.members_only,
+        }
+    }
+}
+
+/// A JID with an affiliation in a room, and its nick when the room has one.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct RoomMember {
+    pub jid: String,
+    pub nick: Option<String>,
 }
 
 /// How much a chat, room, or private chat may notify.
@@ -523,6 +578,17 @@ impl From<core_actor::ClientEvent> for ClientEvent {
             },
             E::Notification(n) => Self::Notification {
                 notification: n.into(),
+            },
+            E::RoomInvite {
+                room,
+                from,
+                reason,
+                password,
+            } => Self::RoomInvite {
+                room: room.to_string(),
+                from: from.to_string(),
+                reason,
+                password,
             },
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,

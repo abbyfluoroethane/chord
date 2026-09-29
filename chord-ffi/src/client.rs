@@ -542,6 +542,79 @@ impl ChordClient {
             .await
     }
 
+    /// Set the affiliation of a JID with a room. We need the right to do it.
+    pub async fn set_room_affiliation(
+        &self,
+        room: String,
+        jid: String,
+        affiliation: RoomAffiliation,
+        reason: Option<String>,
+    ) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move {
+            h.set_room_affiliation(room, jid, affiliation.into(), reason)
+                .await
+        })
+        .await
+    }
+
+    /// List the JIDs with one affiliation in a room.
+    pub async fn room_affiliations(
+        &self,
+        room: String,
+        affiliation: RoomAffiliation,
+    ) -> Result<Vec<RoomMember>, ChordError> {
+        let room = parse_bare(&room)?;
+        let list = self
+            .call(move |h| async move { h.room_affiliations(room, affiliation.into()).await })
+            .await?;
+        Ok(list
+            .into_iter()
+            .map(|(jid, nick)| RoomMember {
+                jid: jid.to_string(),
+                nick,
+            })
+            .collect())
+    }
+
+    /// Invite a JID to a room. An owner or admin makes the JID a member first.
+    pub async fn invite_to_room(
+        &self,
+        room: String,
+        jid: String,
+        reason: Option<String>,
+    ) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.invite_to_room(room, jid, reason).await })
+            .await
+    }
+
+    /// Decline an invitation that a `RoomInvite` event reported.
+    pub async fn decline_room_invite(
+        &self,
+        room: String,
+        from: String,
+        reason: Option<String>,
+    ) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        let from = parse_bare(&from)?;
+        self.call(move |h| async move { h.decline_room_invite(room, from, reason).await })
+            .await
+    }
+
+    /// Change the settings of a room that we own.
+    pub async fn configure_room(
+        &self,
+        room: String,
+        settings: RoomSettings,
+    ) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        self.call(move |h| async move { h.configure_room(room, settings.into()).await })
+            .await
+    }
+
     /// Leave a room.
     pub async fn leave_room(&self, room: String) -> Result<(), ChordError> {
         let room = parse_bare(&room)?;

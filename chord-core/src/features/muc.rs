@@ -12,6 +12,7 @@ use xmpp_parsers::data_forms::DataForm;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
+use xmpp_parsers::minidom::rxml::NcName;
 use xmpp_parsers::muc::Muc;
 use xmpp_parsers::muc::muc::History;
 use xmpp_parsers::muc::user::{Affiliation, MucUser, Role, Status};
@@ -30,9 +31,51 @@ const NS_MUC_OWNER: &str = "http://jabber.org/protocol/muc#owner";
 pub(crate) const NS_MUC_USER: &str = "http://jabber.org/protocol/muc#user";
 /// XEP-0421 occupant identifiers.
 const NS_OCCUPANT_ID: &str = "urn:xmpp:occupant-id:0";
+const NS_MUC_ADMIN: &str = "http://jabber.org/protocol/muc#admin";
+/// XEP-0249 direct invitations.
+const NS_CONFERENCE: &str = "jabber:x:conference";
+const NS_DATA: &str = "jabber:x:data";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
+fn nc(name: &str) -> NcName {
+    NcName::try_from(name.to_owned()).expect("a valid attribute name")
+}
+
+type MembersReply = oneshot::Sender<Result<Vec<(BareJid, Option<String>)>, ClientError>>;
+
+/// The affiliation of a JID with a room (XEP-0045, section 5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoomAffiliation {
+    Owner,
+    Admin,
+    Member,
+    None,
+    Outcast,
+}
+
+impl RoomAffiliation {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Admin => "admin",
+            Self::Member => "member",
+            Self::None => "none",
+            Self::Outcast => "outcast",
+        }
+    }
+}
+
+/// Room settings that `configure_room` changes. A `None` field stays as it is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoomSettings {
+    /// The name of the room (`muc#roomconfig_roomname`).
+    pub name: Option<String>,
+    /// True lists the room in the room directory (`muc#roomconfig_publicroom`).
+    pub public: Option<bool>,
+    /// True lets only members enter (`muc#roomconfig_membersonly`).
+    pub members_only: Option<bool>,
+}
 
 /// A join that waits for the self-presence or an error.
 #[derive(Debug)]
@@ -70,6 +113,19 @@ pub(crate) enum Pending {
     InstantRoom(BareJid, Vec<Reply>),
     /// The answer to a XEP-0425 moderation request.
     Moderate(Reply),
+    /// The answer to an IQ that needs only a success or an error.
+    Simple(Reply),
+    /// The list of JIDs with one affiliation.
+    Affiliations(MembersReply),
+    /// The membership grant of an invitation. The invitation goes out after the answer.
+    InviteGrant {
+        room: BareJid,
+        jid: BareJid,
+        reason: Option<String>,
+        reply: Reply,
+    },
+    /// The configuration form of a room, for `configure_room`.
+    SettingsForm(BareJid, RoomSettings, Reply),
 }
 
 /// A command from the public API.
@@ -104,6 +160,35 @@ pub(crate) enum Command {
     ChangeNick {
         room: BareJid,
         nick: String,
+        reply: Reply,
+    },
+    SetAffiliation {
+        room: BareJid,
+        jid: BareJid,
+        affiliation: RoomAffiliation,
+        reason: Option<String>,
+        reply: Reply,
+    },
+    ListAffiliations {
+        room: BareJid,
+        affiliation: RoomAffiliation,
+        reply: MembersReply,
+    },
+    Invite {
+        room: BareJid,
+        jid: BareJid,
+        reason: Option<String>,
+        reply: Reply,
+    },
+    DeclineInvite {
+        room: BareJid,
+        from: BareJid,
+        reason: Option<String>,
+        reply: Reply,
+    },
+    Configure {
+        room: BareJid,
+        settings: RoomSettings,
         reply: Reply,
     },
 }
@@ -191,6 +276,93 @@ impl ClientHandle {
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
+    /// Set the affiliation of a JID with a room (XEP-0045, sections 9.3, 9.5 and 10.3).
+    /// We need the right to do it: an admin sets member and outcast, an owner sets all.
+    /// Fails with `ClientError::Server` when the room refuses (`forbidden`, `not-allowed`).
+    pub async fn set_room_affiliation(
+        &self,
+        room: BareJid,
+        jid: BareJid,
+        affiliation: RoomAffiliation,
+        reason: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::SetAffiliation {
+            room,
+            jid,
+            affiliation,
+            reason,
+            reply,
+        })
+        .await
+    }
+
+    /// List the JIDs with one affiliation in a room, with their nick when the room has
+    /// one (XEP-0045, section 9.4).
+    pub async fn room_affiliations(
+        &self,
+        room: BareJid,
+        affiliation: RoomAffiliation,
+    ) -> Result<Vec<(BareJid, Option<String>)>, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(super::FeatureCommand::Muc(Command::ListAffiliations {
+            room,
+            affiliation,
+            reply,
+        }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Invite a JID to a room with a mediated invitation (XEP-0045, section 7.8.2).
+    /// When we are owner or admin of the room, Chord makes the JID a member first, so that
+    /// it can enter a members-only room. Chord does not know if the room is members-only,
+    /// so it grants membership in every room where we have the right. Without the right,
+    /// Chord only sends the invitation.
+    pub async fn invite_to_room(
+        &self,
+        room: BareJid,
+        jid: BareJid,
+        reason: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::Invite {
+            room,
+            jid,
+            reason,
+            reply,
+        })
+        .await
+    }
+
+    /// Decline a mediated invitation that a `ClientEvent::RoomInvite` reported.
+    pub async fn decline_room_invite(
+        &self,
+        room: BareJid,
+        from: BareJid,
+        reason: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::DeclineInvite {
+            room,
+            from,
+            reason,
+            reply,
+        })
+        .await
+    }
+
+    /// Change settings of a room that we own. Chord fetches the configuration form and
+    /// submits only the fields that the form has and that `settings` sets.
+    pub async fn configure_room(
+        &self,
+        room: BareJid,
+        settings: RoomSettings,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::Configure {
+            room,
+            settings,
+            reply,
+        })
+        .await
+    }
+
     async fn room_command(
         &self,
         command: impl FnOnce(Reply) -> Command,
@@ -271,12 +443,82 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(result.clone());
             }
         }
-        Pending::Moderate(reply) => {
+        Pending::Moderate(reply) | Pending::Simple(reply) => {
             let _ = reply.send(match response {
                 IqResponse::Result(_) => Ok(()),
                 IqResponse::Error(e) => Err(ClientError::Server(error_text(&e))),
                 IqResponse::Lost => Err(ClientError::NotConnected),
             });
+        }
+        Pending::Affiliations(reply) => {
+            let _ = reply.send(match response {
+                IqResponse::Result(query) => Ok(query
+                    .map(|q| {
+                        q.children()
+                            .filter(|c| c.is("item", NS_MUC_ADMIN))
+                            .filter_map(|item| {
+                                let jid = BareJid::new(item.attr("jid")?).ok()?;
+                                Some((jid, item.attr("nick").map(str::to_owned)))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()),
+                IqResponse::Error(e) => Err(ClientError::Server(error_text(&e))),
+                IqResponse::Lost => Err(ClientError::NotConnected),
+            });
+        }
+        Pending::InviteGrant {
+            room,
+            jid,
+            reason,
+            reply,
+        } => {
+            match response {
+                IqResponse::Result(_) => {}
+                IqResponse::Error(e) => {
+                    // The invitation still helps in an open room.
+                    ctx.emit(ClientEvent::Notice(format!(
+                        "Cannot make {jid} a member of {room}: {}",
+                        error_text(&e)
+                    )));
+                }
+                IqResponse::Lost => {
+                    let _ = reply.send(Err(ClientError::NotConnected));
+                    return;
+                }
+            }
+            send_invitation(ctx, &room, &jid, reason);
+            let _ = reply.send(Ok(()));
+        }
+        Pending::SettingsForm(room, settings, reply) => {
+            let form = match response {
+                IqResponse::Result(Some(query)) => query
+                    .get_child("x", NS_DATA)
+                    .and_then(|x| DataForm::try_from(x.clone()).ok()),
+                IqResponse::Result(None) => None,
+                IqResponse::Error(e) => {
+                    let _ = reply.send(Err(ClientError::Server(error_text(&e))));
+                    return;
+                }
+                IqResponse::Lost => {
+                    let _ = reply.send(Err(ClientError::NotConnected));
+                    return;
+                }
+            };
+            let Some(form) = form else {
+                let _ = reply.send(Err(ClientError::Server(
+                    "the room has no configuration form".to_owned(),
+                )));
+                return;
+            };
+            let payload = settings_submit(&form, &settings);
+            let iq = Iq::Set {
+                from: None,
+                to: Some(Jid::from(room)),
+                id: String::new(),
+                payload,
+            };
+            ctx.request(iq, super::Pending::Muc(Pending::Simple(reply)));
         }
     }
 }
@@ -315,7 +557,227 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
         } => {
             let _ = reply.send(send_private(ctx, &room, &nick, body));
         }
+        Command::SetAffiliation {
+            room,
+            jid,
+            affiliation,
+            reason,
+            reply,
+        } => {
+            let iq = affiliation_iq(&room, &jid, affiliation, reason.as_deref());
+            ctx.request(iq, super::Pending::Muc(Pending::Simple(reply)));
+        }
+        Command::ListAffiliations {
+            room,
+            affiliation,
+            reply,
+        } => {
+            let payload: Element = format!(
+                "<query xmlns='{NS_MUC_ADMIN}'><item affiliation='{}'/></query>",
+                affiliation.as_str()
+            )
+            .parse()
+            .expect("static XML");
+            let iq = Iq::Get {
+                from: None,
+                to: Some(Jid::from(room)),
+                id: String::new(),
+                payload,
+            };
+            ctx.request(iq, super::Pending::Muc(Pending::Affiliations(reply)));
+        }
+        Command::Invite {
+            room,
+            jid,
+            reason,
+            reply,
+        } => {
+            if can_grant(ctx, &room) {
+                let iq = affiliation_iq(&room, &jid, RoomAffiliation::Member, None);
+                let pending = Pending::InviteGrant {
+                    room,
+                    jid,
+                    reason,
+                    reply,
+                };
+                ctx.request(iq, super::Pending::Muc(pending));
+            } else {
+                send_invitation(ctx, &room, &jid, reason);
+                let _ = reply.send(Ok(()));
+            }
+        }
+        Command::DeclineInvite {
+            room,
+            from,
+            reason,
+            reply,
+        } => {
+            let mut decline =
+                Element::builder("decline", NS_MUC_USER).attr(nc("to"), from.to_string());
+            if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+                decline = decline.append(Element::builder("reason", NS_MUC_USER).append(reason));
+            }
+            let x = Element::builder("x", NS_MUC_USER).append(decline).build();
+            let mut message = Message::new(Some(Jid::from(room)));
+            message.id = Some(Id(new_id()));
+            message.payloads.push(x);
+            ctx.send(message);
+            let _ = reply.send(Ok(()));
+        }
+        Command::Configure {
+            room,
+            settings,
+            reply,
+        } => {
+            let iq = Iq::Get {
+                from: None,
+                to: Some(Jid::from(room.clone())),
+                id: String::new(),
+                payload: format!("<query xmlns='{NS_MUC_OWNER}'/>")
+                    .parse()
+                    .expect("static XML"),
+            };
+            ctx.request(
+                iq,
+                super::Pending::Muc(Pending::SettingsForm(room, settings, reply)),
+            );
+        }
     }
+}
+
+/// True when we are owner or admin of a room that we are in.
+fn can_grant(ctx: &Ctx<'_>, room: &BareJid) -> bool {
+    let Some(nick) = ctx.state.muc.nicks.get(room) else {
+        return false;
+    };
+    let affiliation: Option<String> = ctx
+        .store
+        .conn()
+        .query_row(
+            "SELECT affiliation FROM occupants WHERE account_id = ?1 AND room = ?2 AND nick = ?3",
+            params![ctx.account_id, room.as_str(), nick],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    matches!(affiliation.as_deref(), Some("owner" | "admin"))
+}
+
+/// The IQ that sets one affiliation (XEP-0045, sections 9.3, 9.5 and 10.3).
+fn affiliation_iq(
+    room: &BareJid,
+    jid: &BareJid,
+    affiliation: RoomAffiliation,
+    reason: Option<&str>,
+) -> Iq {
+    let mut item = Element::builder("item", NS_MUC_ADMIN)
+        .attr(nc("affiliation"), affiliation.as_str())
+        .attr(nc("jid"), jid.to_string());
+    if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+        item = item.append(Element::builder("reason", NS_MUC_ADMIN).append(reason));
+    }
+    Iq::Set {
+        from: None,
+        to: Some(Jid::from(room.clone())),
+        id: String::new(),
+        payload: Element::builder("query", NS_MUC_ADMIN).append(item).build(),
+    }
+}
+
+/// Send a mediated invitation (XEP-0045, section 7.8.2).
+fn send_invitation(ctx: &mut Ctx<'_>, room: &BareJid, jid: &BareJid, reason: Option<String>) {
+    let mut invite = Element::builder("invite", NS_MUC_USER).attr(nc("to"), jid.to_string());
+    if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+        invite = invite.append(Element::builder("reason", NS_MUC_USER).append(reason));
+    }
+    let x = Element::builder("x", NS_MUC_USER).append(invite).build();
+    let mut message = Message::new(Some(Jid::from(room.clone())));
+    message.id = Some(Id(new_id()));
+    message.payloads.push(x);
+    ctx.send(message);
+}
+
+/// The submit form of `configure_room`: only fields that the form has and that the
+/// settings set.
+fn settings_submit(form: &DataForm, settings: &RoomSettings) -> Element {
+    let has = |var: &str| form.fields.iter().any(|f| f.var.as_deref() == Some(var));
+    let flag = |value: bool| if value { "1" } else { "0" };
+    let field = |var: &str, value: &str| {
+        Element::builder("field", NS_DATA)
+            .attr(nc("var"), var)
+            .append(Element::builder("value", NS_DATA).append(value))
+    };
+    let mut x = Element::builder("x", NS_DATA)
+        .attr(nc("type"), "submit")
+        .append(field(
+            "FORM_TYPE",
+            "http://jabber.org/protocol/muc#roomconfig",
+        ));
+    if let Some(name) = &settings.name
+        && has("muc#roomconfig_roomname")
+    {
+        x = x.append(field("muc#roomconfig_roomname", name));
+    }
+    if let Some(public) = settings.public
+        && has("muc#roomconfig_publicroom")
+    {
+        x = x.append(field("muc#roomconfig_publicroom", flag(public)));
+    }
+    if let Some(members_only) = settings.members_only
+        && has("muc#roomconfig_membersonly")
+    {
+        x = x.append(field("muc#roomconfig_membersonly", flag(members_only)));
+    }
+    Element::builder("query", NS_MUC_OWNER)
+        .append(x.build())
+        .build()
+}
+
+/// An invitation to a room: mediated (XEP-0045, 7.8.2) or direct (XEP-0249). Emits
+/// `ClientEvent::RoomInvite` and returns true. Chord never joins on its own.
+fn on_invitation(ctx: &mut Ctx<'_>, message: &Message) -> bool {
+    let Some(from) = &message.from else {
+        return false;
+    };
+    for x in &message.payloads {
+        if x.is("x", NS_MUC_USER)
+            && let Some(invite) = x.get_child("invite", NS_MUC_USER)
+        {
+            let inviter = invite
+                .attr("from")
+                .and_then(|f| f.parse::<Jid>().ok())
+                .unwrap_or_else(|| from.clone());
+            let reason = invite
+                .get_child("reason", NS_MUC_USER)
+                .map(Element::text)
+                .filter(|r| !r.is_empty());
+            let password = x
+                .get_child("password", NS_MUC_USER)
+                .map(Element::text)
+                .filter(|p| !p.is_empty());
+            ctx.emit(ClientEvent::RoomInvite {
+                room: from.to_bare(),
+                from: inviter,
+                reason,
+                password,
+            });
+            return true;
+        }
+        if x.is("x", NS_CONFERENCE)
+            && let Some(room) = x.attr("jid").and_then(|j| j.parse::<Jid>().ok())
+        {
+            let non_empty = |name: &str| x.attr(name).filter(|v| !v.is_empty()).map(str::to_owned);
+            ctx.emit(ClientEvent::RoomInvite {
+                room: room.to_bare(),
+                from: from.clone(),
+                reason: non_empty("reason"),
+                password: non_empty("password"),
+            });
+            return true;
+        }
+    }
+    false
 }
 
 /// A command while no session is up. Answer each reply channel with an error.
@@ -324,7 +786,15 @@ pub(crate) fn offline(command: Command) {
         let _ = reply.send(Err(ClientError::NotConnected));
         return;
     }
+    if let Command::ListAffiliations { reply, .. } = command {
+        let _ = reply.send(Err(ClientError::NotConnected));
+        return;
+    }
     let (Command::Join { reply, .. }
+    | Command::SetAffiliation { reply, .. }
+    | Command::Invite { reply, .. }
+    | Command::DeclineInvite { reply, .. }
+    | Command::Configure { reply, .. }
     | Command::Leave { reply, .. }
     | Command::ChangeNick { reply, .. }
     | Command::AddBookmark { reply, .. }
@@ -940,6 +1410,9 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
     let Some(from) = &message.from else {
         return false;
     };
+    if message.type_ != MessageType::Error && on_invitation(ctx, message) {
+        return true;
+    }
     let room = from.to_bare();
     if !is_room(ctx, &room) {
         return false;
@@ -2469,5 +2942,322 @@ mod tests {
             ],
         );
         assert_eq!(directions, [Direction::Out, Direction::In, Direction::In]);
+    }
+
+    fn joined_as(h: &mut Harness, nick: &str, affiliation: Affiliation) {
+        let mut answer = join(h, nick);
+        h.with_ctx(|ctx| {
+            on_presence(
+                ctx,
+                &occupant_presence(
+                    nick,
+                    vec![Status::SelfPresence],
+                    Item::new(affiliation, Role::Participant),
+                ),
+            )
+        });
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        h.take_sent();
+        h.take_dirty();
+    }
+
+    fn command<T>(
+        h: &mut Harness,
+        make: impl FnOnce(oneshot::Sender<Result<T, ClientError>>) -> Command,
+    ) -> oneshot::Receiver<Result<T, ClientError>> {
+        let (reply, answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, make(reply)));
+        answer
+    }
+
+    fn is_muc(p: &super::super::Pending) -> bool {
+        matches!(p, super::super::Pending::Muc(_))
+    }
+
+    fn sent_messages(h: &mut Harness) -> Vec<Message> {
+        h.take_sent()
+            .into_iter()
+            .filter_map(|s| match s {
+                Stanza::Message(m) => Some(m),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn forbidden() -> IqResponse {
+        IqResponse::Error(StanzaError::new(
+            ErrorType::Auth,
+            DefinedCondition::Forbidden,
+            "en",
+            "",
+        ))
+    }
+
+    #[test]
+    fn set_affiliation_sends_an_admin_item_and_maps_errors() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::SetAffiliation {
+            room: room(),
+            jid: BareJid::new("bob@example.org").unwrap(),
+            affiliation: RoomAffiliation::Member,
+            reason: Some("welcome".into()),
+            reply,
+        });
+        let iqs = h.sent_iqs();
+        let Some(Iq::Set { to, payload, .. }) = iqs.first() else {
+            panic!("{iqs:?}")
+        };
+        assert_eq!(to.as_ref(), Some(&jid(ROOM)));
+        assert!(payload.is("query", NS_MUC_ADMIN));
+        let item = payload.get_child("item", NS_MUC_ADMIN).expect("item");
+        assert_eq!(item.attr("affiliation"), Some("member"));
+        assert_eq!(item.attr("jid"), Some("bob@example.org"));
+        assert_eq!(
+            item.get_child("reason", NS_MUC_ADMIN).unwrap().text(),
+            "welcome"
+        );
+        h.answer(is_muc, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+
+        let mut answer = command(&mut h, |reply| Command::SetAffiliation {
+            room: room(),
+            jid: BareJid::new("bob@example.org").unwrap(),
+            affiliation: RoomAffiliation::Outcast,
+            reason: None,
+            reply,
+        });
+        h.respond(is_muc, forbidden());
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
+    }
+
+    #[test]
+    fn room_affiliations_asks_for_one_affiliation_and_reads_the_items() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::ListAffiliations {
+            room: room(),
+            affiliation: RoomAffiliation::Member,
+            reply,
+        });
+        let iqs = h.sent_iqs();
+        let Some(Iq::Get { payload, .. }) = iqs.first() else {
+            panic!("{iqs:?}")
+        };
+        let item = payload.get_child("item", NS_MUC_ADMIN).expect("item");
+        assert_eq!(item.attr("affiliation"), Some("member"));
+        let result: Element = format!(
+            "<query xmlns='{NS_MUC_ADMIN}'>\
+             <item affiliation='member' jid='bob@example.org' nick='bob'/>\
+             <item affiliation='member' jid='carol@example.org'/></query>"
+        )
+        .parse()
+        .unwrap();
+        h.answer(is_muc, Some(result));
+        assert_eq!(
+            answer.try_recv().unwrap(),
+            Some(Ok(vec![
+                (BareJid::new("bob@example.org").unwrap(), Some("bob".into())),
+                (BareJid::new("carol@example.org").unwrap(), None),
+            ]))
+        );
+    }
+
+    fn invite(h: &mut Harness) -> oneshot::Receiver<Result<(), ClientError>> {
+        command(h, |reply| Command::Invite {
+            room: room(),
+            jid: BareJid::new("bob@example.org").unwrap(),
+            reason: Some("join us".into()),
+            reply,
+        })
+    }
+
+    fn check_invitation(message: &Message) {
+        assert_eq!(message.to.as_ref(), Some(&jid(ROOM)));
+        let x = message
+            .payloads
+            .iter()
+            .find(|p| p.is("x", NS_MUC_USER))
+            .expect("x");
+        let invite = x.get_child("invite", NS_MUC_USER).expect("invite");
+        assert_eq!(invite.attr("to"), Some("bob@example.org"));
+        assert_eq!(
+            invite.get_child("reason", NS_MUC_USER).unwrap().text(),
+            "join us"
+        );
+    }
+
+    #[test]
+    fn an_owner_grants_membership_before_the_invitation() {
+        let mut h = Harness::new();
+        joined_as(&mut h, "alice", Affiliation::Owner);
+        let mut answer = invite(&mut h);
+        // Only the grant goes out at first.
+        let sent = h.take_sent();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        let Stanza::Iq(Iq::Set { payload, .. }) = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        let item = payload.get_child("item", NS_MUC_ADMIN).unwrap();
+        assert_eq!(item.attr("affiliation"), Some("member"));
+        assert_eq!(item.attr("jid"), Some("bob@example.org"));
+        assert_eq!(answer.try_recv().unwrap(), None);
+        h.answer(is_muc, None);
+        let messages = sent_messages(&mut h);
+        assert_eq!(messages.len(), 1);
+        check_invitation(&messages[0]);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn a_failed_grant_still_sends_the_invitation() {
+        let mut h = Harness::new();
+        joined_as(&mut h, "alice", Affiliation::Admin);
+        let mut answer = invite(&mut h);
+        h.take_sent();
+        h.respond(is_muc, forbidden());
+        assert_eq!(sent_messages(&mut h).len(), 1);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn without_the_right_the_invitation_goes_out_alone() {
+        let mut h = Harness::new();
+        joined_as(&mut h, "alice", Affiliation::Member);
+        let mut answer = invite(&mut h);
+        let sent = h.take_sent();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        let Stanza::Message(message) = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        check_invitation(message);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        // A room that we are not in: the same.
+        let mut h = Harness::new();
+        let mut answer = invite(&mut h);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert_eq!(sent_messages(&mut h).len(), 1);
+    }
+
+    fn from_sender(from: &str, payload: &str) -> Message {
+        let mut message = Message::new(Some(jid(ACCOUNT)));
+        message.from = Some(jid(from));
+        message.payloads.push(payload.parse().unwrap());
+        message
+    }
+
+    fn invites(h: &Harness) -> Vec<ClientEvent> {
+        h.effects
+            .iter()
+            .filter_map(|e| match e {
+                super::super::Effect::Emit(e @ ClientEvent::RoomInvite { .. }) => Some(e.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_mediated_invitation_emits_an_event_and_does_not_join() {
+        let mut h = Harness::new();
+        let message = from_sender(
+            ROOM,
+            "<x xmlns='http://jabber.org/protocol/muc#user'>\
+             <invite from='alice@example.org/phone'><reason>Come</reason></invite>\
+             <password>secret</password></x>",
+        );
+        h.with_ctx(|ctx| assert!(on_message(ctx, &message)));
+        assert_eq!(
+            invites(&h),
+            [ClientEvent::RoomInvite {
+                room: room(),
+                from: jid("alice@example.org/phone"),
+                reason: Some("Come".into()),
+                password: Some("secret".into()),
+            }]
+        );
+        assert!(h.take_sent().is_empty());
+        assert!(!h.with_ctx(|ctx| is_room(ctx, &room())));
+    }
+
+    #[test]
+    fn a_direct_invitation_emits_an_event() {
+        let mut h = Harness::new();
+        let message = from_sender(
+            "alice@example.org/phone",
+            &format!("<x xmlns='jabber:x:conference' jid='{ROOM}' password='pw' reason='Hi'/>"),
+        );
+        h.with_ctx(|ctx| assert!(on_message(ctx, &message)));
+        assert_eq!(
+            invites(&h),
+            [ClientEvent::RoomInvite {
+                room: room(),
+                from: jid("alice@example.org/phone"),
+                reason: Some("Hi".into()),
+                password: Some("pw".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn decline_sends_a_decline_to_the_room() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::DeclineInvite {
+            room: room(),
+            from: BareJid::new("alice@example.org").unwrap(),
+            reason: Some("no".into()),
+            reply,
+        });
+        let messages = sent_messages(&mut h);
+        let decline = messages[0].payloads[0]
+            .get_child("decline", NS_MUC_USER)
+            .unwrap();
+        assert_eq!(decline.attr("to"), Some("alice@example.org"));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn configure_room_submits_only_the_fields_that_the_form_has() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::Configure {
+            room: room(),
+            settings: RoomSettings {
+                name: Some("General".into()),
+                public: Some(true),
+                members_only: Some(false),
+            },
+            reply,
+        });
+        let iqs = h.sent_iqs();
+        assert!(matches!(&iqs[0], Iq::Get { payload, .. } if payload.is("query", NS_MUC_OWNER)));
+        // The form has no public room field.
+        let form: Element = format!(
+            "<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='form'>\
+             <field var='FORM_TYPE' type='hidden'>\
+             <value>http://jabber.org/protocol/muc#roomconfig</value></field>\
+             <field var='muc#roomconfig_roomname' type='text-single'/>\
+             <field var='muc#roomconfig_membersonly' type='boolean'/></x></query>"
+        )
+        .parse()
+        .unwrap();
+        h.answer(is_muc, Some(form));
+        let iqs = h.sent_iqs();
+        let Some(Iq::Set { to, payload, .. }) = iqs.first() else {
+            panic!("{iqs:?}")
+        };
+        assert_eq!(to.as_ref(), Some(&jid(ROOM)));
+        let x = payload.get_child("x", NS_DATA).unwrap();
+        assert_eq!(x.attr("type"), Some("submit"));
+        let value = |var: &str| {
+            x.children()
+                .find(|f| f.attr("var") == Some(var))
+                .map(|f| f.get_child("value", NS_DATA).unwrap().text())
+        };
+        assert_eq!(value("muc#roomconfig_roomname").as_deref(), Some("General"));
+        assert_eq!(value("muc#roomconfig_membersonly").as_deref(), Some("0"));
+        assert_eq!(value("muc#roomconfig_publicroom"), None);
+        assert!(value("FORM_TYPE").is_some());
+        h.answer(is_muc, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
     }
 }

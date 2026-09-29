@@ -23,6 +23,9 @@
 //!   pm <room> <nick> <text>         private message to a room occupant
 //!   read-private <room> <nick>      mark a private chat as read (also with --offline)
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
+//!   room-member <room> <jid> [member|admin|owner|none|outcast]   set an affiliation
+//!   room-members <room> [affiliation] | invite <room> <jid> [reason]
+//!   room-config <room> [--name N] [--public|--private] [--members-only|--open]
 //!   notify <jid> [all|mentions|none [--until <unix-ms>]]   also with --offline
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
@@ -77,6 +80,8 @@ space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | conta
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | moderate <item-id> [reason] | \
+room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
+invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
 notify <jid> [all|mentions|none [--until <unix-ms>]]";
 
@@ -234,6 +239,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "pm",
         "read-private",
         "moderate",
+        "room-member",
+        "room-members",
+        "invite",
+        "room-config",
         "push-enable",
         "push-disable",
         "push-list",
@@ -306,6 +315,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("pm", [room, nick, text]) => actions::pm(&client, room, nick, text).await,
         ("read-private", [room, nick]) => actions::read_private(&client, room, nick).await,
         ("moderate", args) => actions::moderate(&client, args).await,
+        ("room-member", args) => actions::room_member(&client, args).await,
+        ("room-members", args) => actions::room_members(&client, args).await,
+        ("invite", args) => actions::invite(&client, args).await,
+        ("room-config", args) => actions::room_config(&client, args).await,
         ("push-enable", [service, node]) => actions::push_enable(&client, service, node).await,
         ("push-disable", args) => actions::push_disable(&client, args).await,
         ("notify", args) => actions::notify(&client, args).await,
@@ -475,6 +488,20 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
             ),
             ClientEvent::Notice(notice) => println!("notice: {notice}"),
             ClientEvent::SubscriptionRequest(jid) => println!("{jid} asks to see your presence"),
+            ClientEvent::RoomInvite {
+                room,
+                from,
+                reason,
+                password,
+            } => println!(
+                "invite: {from} invites you to {room}{}{}",
+                reason.map_or(String::new(), |r| format!(": {r}")),
+                if password.is_some() {
+                    " (password)"
+                } else {
+                    ""
+                }
+            ),
             other => log::debug!("event: {other:?}"),
         }
     }

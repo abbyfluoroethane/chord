@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use chord_core::features::muc::{RoomAffiliation, RoomSettings};
 use chord_core::features::roster::Subscription;
 use chord_core::features::spaces::{JoinOutcome, SpaceAccess};
 use chord_core::jid::{BareJid, Jid};
@@ -357,6 +358,115 @@ pub async fn moderate(client: &Client, args: &[&str]) -> Result<(), CliError> {
         .await
         .map_err(err)?;
     println!("asked the room to retract {item}");
+    Ok(())
+}
+
+fn affiliation(word: &str) -> Result<RoomAffiliation, CliError> {
+    Ok(match word {
+        "owner" => RoomAffiliation::Owner,
+        "admin" => RoomAffiliation::Admin,
+        "member" => RoomAffiliation::Member,
+        "none" => RoomAffiliation::None,
+        "outcast" => RoomAffiliation::Outcast,
+        _ => return Err(format!("unknown affiliation {word}").into()),
+    })
+}
+
+/// `room-member <room> <jid> [member|admin|owner|none|outcast]`: set an affiliation.
+/// The default is member.
+pub async fn room_member(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (room, jid, word) = match args {
+        [room, jid] => (*room, *jid, "member"),
+        [room, jid, word] => (*room, *jid, *word),
+        _ => {
+            return Err(
+                "usage: room-member <room> <jid> [member|admin|owner|none|outcast]"
+                    .to_owned()
+                    .into(),
+            );
+        }
+    };
+    client
+        .handle
+        .set_room_affiliation(bare(room)?, bare(jid)?, affiliation(word)?, None)
+        .await
+        .map_err(err)?;
+    println!("{jid} is now {word} of {room}");
+    Ok(())
+}
+
+/// `room-members <room> [affiliation]`: list the JIDs with one affiliation (member).
+pub async fn room_members(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (room, word) = match args {
+        [room] => (*room, "member"),
+        [room, word] => (*room, *word),
+        _ => return Err("usage: room-members <room> [affiliation]".to_owned().into()),
+    };
+    let list = client
+        .handle
+        .room_affiliations(bare(room)?, affiliation(word)?)
+        .await
+        .map_err(err)?;
+    for (jid, nick) in list {
+        match nick {
+            Some(nick) => println!("{jid} ({nick})"),
+            None => println!("{jid}"),
+        }
+    }
+    Ok(())
+}
+
+/// `invite <room> <jid> [reason]`: invite a JID. An owner or admin adds it as a member.
+pub async fn invite(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (room, jid, reason) = match args {
+        [room, jid] => (*room, *jid, None),
+        [room, jid, reason] => (*room, *jid, Some((*reason).to_owned())),
+        _ => return Err("usage: invite <room> <jid> [reason]".to_owned().into()),
+    };
+    client
+        .handle
+        .invite_to_room(bare(room)?, bare(jid)?, reason)
+        .await
+        .map_err(err)?;
+    println!("invited {jid} to {room}");
+    Ok(())
+}
+
+/// `room-config <room> [--name N] [--public|--private] [--members-only|--open]`.
+pub async fn room_config(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || {
+        CliError::from(
+            "usage: room-config <room> [--name N] [--public|--private] [--members-only|--open]"
+                .to_owned(),
+        )
+    };
+    let Some((room, mut rest)) = args.split_first() else {
+        return Err(usage());
+    };
+    let mut settings = RoomSettings::default();
+    while let Some((flag, tail)) = rest.split_first() {
+        rest = tail;
+        match *flag {
+            "--name" => {
+                let Some((name, tail)) = rest.split_first() else {
+                    return Err(usage());
+                };
+                settings.name = Some((*name).to_owned());
+                rest = tail;
+            }
+            "--public" => settings.public = Some(true),
+            "--private" => settings.public = Some(false),
+            "--members-only" => settings.members_only = Some(true),
+            "--open" => settings.members_only = Some(false),
+            _ => return Err(usage()),
+        }
+    }
+    client
+        .handle
+        .configure_room(bare(room)?, settings)
+        .await
+        .map_err(err)?;
+    println!("configured {room}");
     Ok(())
 }
 
