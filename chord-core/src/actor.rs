@@ -18,6 +18,7 @@ use xmpp_parsers::ping::Ping;
 use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
+use crate::features::presence;
 use crate::session::{
     AuthFailure, ConnectError, DisconnectReason, Session, SessionConfig, SessionError, SessionEvent,
 };
@@ -362,6 +363,12 @@ impl<S: Session> Actor<S> {
     async fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::Connected { bound_jid, resumed } => {
+                if presence::needs_initial(resumed)
+                    && let Some(online) = &self.online
+                    && let Err(e) = online.session.send(presence::initial().into()).await
+                {
+                    log::warn!("cannot send initial presence: {e}");
+                }
                 self.emit_state(ConnectionState::Connected { bound_jid, resumed });
             }
             SessionEvent::Disconnected(DisconnectReason::Suspended) => {
@@ -390,7 +397,8 @@ impl<S: Session> Actor<S> {
         }
     }
 
-    /// Store an incoming chat message and report it, once per key.
+    /// Store a chat message and report it, once per key. A message from our own account
+    /// (for example a copy of a message sent from another client) is outgoing.
     fn handle_message(&mut self, message: Message) {
         let Some(online) = &self.online else { return };
         let Some(account_id) = online.account_id else {
@@ -402,7 +410,28 @@ impl<S: Session> Actor<S> {
         let (Some(from), Some((_, body))) = (&message.from, message.get_best_body(vec![])) else {
             return;
         };
-        let Some((key_kind, key)) = message_key(&message, &online.account) else {
+        let (direction, peer) = if from.to_bare() == online.account {
+            match &message.to {
+                Some(to) => (Direction::Out, to.to_bare().to_string()),
+                None => return,
+            }
+        } else {
+            (Direction::In, from.to_bare().to_string())
+        };
+        let ids = MessageIds::of(&message, &online.account);
+        let conn = self.store.conn();
+
+        // A message that is stored under its origin-id gets its stanza-id now.
+        if let (Some(stanza_id), Some(origin_id)) = (&ids.stanza_id, &ids.origin_id) {
+            match queries::upgrade_to_stanza_id(
+                conn, account_id, origin_id, direction, &peer, stanza_id,
+            ) {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(e) => log::error!("cannot update the key of message {origin_id}: {e}"),
+            }
+        }
+        let Some((key_kind, key)) = ids.key() else {
             log::debug!("chat message from {from} has no stanza-id or origin-id. Not stored.");
             return;
         };
@@ -411,18 +440,17 @@ impl<S: Session> Actor<S> {
             .iter()
             .find_map(|p| Delay::try_from(p.clone()).ok())
             .map(|delay| delay.stamp.0.timestamp_millis());
-        let peer = from.to_bare().to_string();
         let sender = from.to_string();
         let new = NewMessage {
             key_kind,
             key: &key,
-            direction: Direction::In,
+            direction,
             peer: &peer,
             sender: &sender,
             body,
             timestamp,
         };
-        match queries::insert_message(self.store.conn(), account_id, &new) {
+        match queries::insert_message(conn, account_id, &new) {
             Ok(Some(stored)) => self.emit(ClientEvent::MessageReceived(stored)),
             Ok(None) => log::debug!("message {key} is stored already"),
             Err(e) => log::error!("cannot store the message {key}: {e}"),
@@ -430,23 +458,42 @@ impl<S: Session> Actor<S> {
     }
 }
 
-/// The key of a message: the stanza-id from our own server, otherwise the origin-id.
-/// A stanza-id from any other entity can be forged, so it does not count (XEP-0359, 7).
-fn message_key(message: &Message, account: &BareJid) -> Option<(KeyKind, String)> {
-    let own = Jid::from(account.clone());
-    let stanza_id = message
-        .payloads
-        .iter()
-        .filter_map(|p| StanzaId::try_from(p.clone()).ok())
-        .find(|id| id.by == own);
-    if let Some(stanza_id) = stanza_id {
-        return Some((KeyKind::StanzaId, stanza_id.id));
+/// The XEP-0359 ids of a message.
+struct MessageIds {
+    /// The stanza-id from our own server. A stanza-id from any other entity can be
+    /// forged, so it does not count (XEP-0359, section 7).
+    stanza_id: Option<String>,
+    origin_id: Option<String>,
+}
+
+impl MessageIds {
+    fn of(message: &Message, account: &BareJid) -> Self {
+        let own = Jid::from(account.clone());
+        let stanza_id = message
+            .payloads
+            .iter()
+            .filter_map(|p| StanzaId::try_from(p.clone()).ok())
+            .find(|id| id.by == own)
+            .map(|id| id.id);
+        let origin_id = message
+            .payloads
+            .iter()
+            .find_map(|p| OriginId::try_from(p.clone()).ok())
+            .map(|origin| origin.id);
+        Self {
+            stanza_id,
+            origin_id,
+        }
     }
-    message
-        .payloads
-        .iter()
-        .find_map(|p| OriginId::try_from(p.clone()).ok())
-        .map(|origin| (KeyKind::OriginId, origin.id))
+
+    /// The key: the stanza-id, otherwise the origin-id.
+    fn key(self) -> Option<(KeyKind, String)> {
+        match (self.stanza_id, self.origin_id) {
+            (Some(id), _) => Some((KeyKind::StanzaId, id)),
+            (None, Some(id)) => Some((KeyKind::OriginId, id)),
+            (None, None) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -641,7 +688,11 @@ mod tests {
         });
 
         let sent = sent.borrow();
-        let Stanza::Message(message) = &sent[0] else {
+        assert!(
+            matches!(&sent[0], Stanza::Presence(_)),
+            "initial presence after Connected: {sent:?}"
+        );
+        let Stanza::Message(message) = &sent[1] else {
             panic!("expected a message: {sent:?}")
         };
         assert_eq!(message.id, Some(Id(origin_id.clone())));
@@ -656,7 +707,7 @@ mod tests {
             })
         );
         assert!(
-            matches!(&sent[1], Stanza::Iq(Iq::Get { .. })),
+            matches!(&sent[2], Stanza::Iq(Iq::Get { .. })),
             "logout sends a ping"
         );
 
@@ -666,6 +717,79 @@ mod tests {
         assert_eq!(stored[0].key, origin_id);
         assert_eq!(stored[0].direction, Direction::Out);
         assert_eq!(stored[0].body, "hello bob");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn echo_of_a_sent_message_gets_its_stanza_id() {
+        let path = temp_db();
+        FakeSession::prepare_connect(vec![connected()]);
+        let (handle, mut events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+
+        let seen = run_with(actor.run(), async {
+            handle.login(config()).await.unwrap();
+            let origin_id = handle
+                .send_chat(jid("bob@chord.localhost"), "hello bob".into())
+                .await
+                .unwrap();
+            // The server sends our own message back (as a carbon or a MAM result) with
+            // the origin-id and the stanza-id that it gave the message.
+            let mut echo = Message::chat(jid("bob@chord.localhost"))
+                .with_body("".into(), "hello bob".into())
+                .with_payload(OriginId { id: origin_id })
+                .with_payload(StanzaId {
+                    id: "s-9".into(),
+                    by: jid(ALICE),
+                });
+            echo.from = Some(jid("alice@chord.localhost/other-device"));
+            FakeSession::push_event(SessionEvent::Stanza(Box::new(echo.into())));
+            handle.logout().await;
+            drop(handle);
+            drain(&mut events)
+        });
+
+        assert!(
+            !seen
+                .iter()
+                .any(|e| matches!(e, ClientEvent::MessageReceived(_))),
+            "the echo is not a new message: {seen:?}"
+        );
+        let stored = stored_with_bob(&path);
+        assert_eq!(stored.len(), 1);
+        assert_eq!(
+            (stored[0].key_kind, stored[0].key.as_str()),
+            (KeyKind::StanzaId, "s-9")
+        );
+        assert_eq!(stored[0].direction, Direction::Out);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn message_from_another_own_client_is_outgoing() {
+        let path = temp_db();
+        let mut carbon = Message::chat(jid("bob@chord.localhost"))
+            .with_body("".into(), "sent from my phone".into())
+            .with_payload(StanzaId {
+                id: "s-10".into(),
+                by: jid(ALICE),
+            });
+        carbon.from = Some(jid("alice@chord.localhost/phone"));
+        FakeSession::prepare_connect(vec![
+            connected(),
+            SessionEvent::Stanza(Box::new(carbon.into())),
+        ]);
+        let (handle, mut events, actor) = new::<FakeSession>(Store::open(&path).unwrap());
+
+        let received = run_with(actor.run(), async {
+            handle.login(config()).await.unwrap();
+            loop {
+                if let ClientEvent::MessageReceived(m) = next(&mut events).await.unwrap() {
+                    return m;
+                }
+            }
+        });
+        assert_eq!(received.direction, Direction::Out);
+        assert_eq!(received.peer, "bob@chord.localhost");
         let _ = std::fs::remove_file(&path);
     }
 

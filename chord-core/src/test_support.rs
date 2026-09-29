@@ -53,6 +53,8 @@ struct Prepared {
 
 thread_local! {
     static NEXT_CONNECT: RefCell<Option<Prepared>> = const { RefCell::new(None) };
+    /// The event queue of the last session that `connect` returned on this thread.
+    static LIVE_QUEUE: RefCell<Option<Queue>> = const { RefCell::new(None) };
 }
 
 impl FakeSession {
@@ -99,6 +101,15 @@ impl FakeSession {
         NEXT_CONNECT.with(|next| *next.borrow_mut() = Some(prepared));
     }
 
+    /// Add an event to the live session that the last `connect` on this thread returned.
+    pub fn push_event(event: SessionEvent) {
+        LIVE_QUEUE.with(|live| {
+            let live = live.borrow();
+            let queue = live.as_ref().expect("no live FakeSession on this thread");
+            queue.borrow_mut().push_back(event);
+        });
+    }
+
     /// A handle to the stanzas that `send` got. It stays valid after `disconnect`.
     pub fn sent(&self) -> Rc<RefCell<Vec<Stanza>>> {
         Rc::clone(&self.sent)
@@ -118,7 +129,11 @@ impl Session for FakeSession {
             Some(Prepared {
                 result: Ok(events),
                 sent,
-            }) => Ok(Self::new(events, sent, false)),
+            }) => {
+                let session = Self::new(events, sent, false);
+                LIVE_QUEUE.with(|live| *live.borrow_mut() = Some(Rc::clone(&session.queue)));
+                Ok(session)
+            }
             Some(Prepared {
                 result: Err(error), ..
             }) => Err(error),

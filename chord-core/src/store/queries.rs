@@ -142,6 +142,29 @@ pub fn insert_message(
     }))
 }
 
+/// Change the key of a stored message from its origin-id to the stanza-id that our
+/// server gave it later (for example through carbons or MAM). Returns false if no
+/// message matches, or if a message with that stanza-id exists already.
+///
+/// The match includes the direction and the peer, so a forged origin-id from another
+/// JID cannot change a message of a different conversation.
+pub fn upgrade_to_stanza_id(
+    conn: &Connection,
+    account_id: i64,
+    origin_id: &str,
+    direction: Direction,
+    peer: &str,
+    stanza_id: &str,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE OR IGNORE messages SET key_kind = 'stanza-id', key = ?1
+         WHERE account_id = ?2 AND key_kind = 'origin-id' AND key = ?3
+           AND direction = ?4 AND peer = ?5",
+        params![stanza_id, account_id, origin_id, direction.as_str(), peer],
+    )?;
+    Ok(changed == 1)
+}
+
 /// All messages with `peer`, oldest first.
 pub fn messages_with(
     conn: &Connection,
@@ -209,5 +232,38 @@ mod tests {
         );
         let stored = messages_with(store.conn(), account, "bob@chord.localhost").unwrap();
         assert_eq!(stored.len(), 2);
+    }
+
+    #[test]
+    fn origin_id_key_upgrades_to_stanza_id_once() {
+        let store = Store::open_in_memory().unwrap();
+        let account = ensure_account(store.conn(), "alice@chord.localhost").unwrap();
+        let sent = NewMessage {
+            key_kind: KeyKind::OriginId,
+            key: "o-1",
+            direction: Direction::Out,
+            peer: "bob@chord.localhost",
+            sender: "alice@chord.localhost",
+            body: "hello",
+            timestamp: None,
+        };
+        insert_message(store.conn(), account, &sent)
+            .unwrap()
+            .unwrap();
+        let conn = store.conn();
+        let peer = "bob@chord.localhost";
+        // Another direction or peer does not match.
+        assert!(!upgrade_to_stanza_id(conn, account, "o-1", Direction::In, peer, "s-1").unwrap());
+        assert!(
+            !upgrade_to_stanza_id(conn, account, "o-1", Direction::Out, "eve@x", "s-1").unwrap()
+        );
+        assert!(upgrade_to_stanza_id(conn, account, "o-1", Direction::Out, peer, "s-1").unwrap());
+        assert!(!upgrade_to_stanza_id(conn, account, "o-1", Direction::Out, peer, "s-1").unwrap());
+        let stored = messages_with(conn, account, peer).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(
+            (stored[0].key_kind, stored[0].key.as_str()),
+            (KeyKind::StanzaId, "s-1")
+        );
     }
 }

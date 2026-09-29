@@ -31,12 +31,8 @@ use chord_core::actor::{
 };
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::native::NativeSession;
-use chord_core::session::{
-    ConnectError, DisconnectReason, ServerAddr, Session, SessionConfig, SessionEvent, Stream,
-};
+use chord_core::session::{ConnectError, ServerAddr, SessionConfig, Stream};
 use chord_core::store::Store;
-use chord_core::xmpp_parsers::presence::Presence;
-use chord_core::xmpp_parsers::stanza::Stanza;
 use tokio::task::JoinHandle;
 
 /// `connect` returns after the login, so `Connected` must arrive at once. This is a safety limit.
@@ -111,8 +107,6 @@ fn init_logger() {
         _ => eprintln!("warning: CHORD_LOG must be error, warn, info, debug, or trace"),
     }
 }
-
-type Events = <NativeSession as Session>::Events;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -238,61 +232,31 @@ async fn send(to: &str, text: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `listen` uses the session directly: it needs initial presence, and the actor has no
-/// presence feature yet.
-async fn connect() -> Result<(NativeSession, Events, Jid), CliError> {
-    let config = config()?;
-    let mut session = NativeSession::connect(config).await?;
-    let mut events = session.events().ok_or("no event stream".to_owned())?;
-    let wait = async {
-        while let Some(event) = next(&mut events).await {
-            if let SessionEvent::Connected { bound_jid, .. } = event {
-                return Some(bound_jid);
-            }
-        }
-        None
-    };
-    match tokio::time::timeout(CONNECT_TIMEOUT, wait).await {
-        Ok(Some(bound_jid)) => Ok((session, events, bound_jid)),
-        Ok(None) => Err("session closed before login".to_owned().into()),
-        Err(_) => {
-            session.disconnect().await;
-            Err(ConnectError::Timeout.into())
-        }
-    }
-}
-
 async fn listen(once: bool) -> Result<(), CliError> {
-    let (session, mut events, bound_jid) = connect().await?;
-    // Initial presence, so that the server routes chat messages to this resource.
-    session
-        .send(Presence::available().into())
-        .await
-        .map_err(|e| e.to_string())?;
+    let (handle, mut events, task, bound_jid) = start_client().await?;
     println!("listening as {bound_jid}");
+    let mut result = Ok(());
     while let Some(event) = next(&mut events).await {
         match event {
-            SessionEvent::Stanza(stanza) => {
-                if let Stanza::Message(m) = *stanza
-                    && let Some((_, body)) = m.get_best_body(vec![])
-                {
-                    let from = m.from.as_ref().map(|j| j.to_string()).unwrap_or_default();
-                    println!("{from}: {body}");
-                    if once {
-                        break;
-                    }
+            ClientEvent::MessageReceived(message) => {
+                println!("{}: {}", message.sender, message.body);
+                if once {
+                    break;
                 }
             }
-            SessionEvent::Connected { resumed, .. } => println!("reconnected (resumed: {resumed})"),
-            SessionEvent::Disconnected(DisconnectReason::AuthFailed(failure)) => {
-                session.disconnect().await;
-                return Err(ConnectError::AuthFailed(failure).into());
+            ClientEvent::ConnectionState(ConnectionState::AuthFailed(failure)) => {
+                result = Err(ConnectError::AuthFailed(failure).into());
+                break;
             }
-            SessionEvent::Disconnected(reason) => println!("disconnected: {reason:?}"),
+            ClientEvent::ConnectionState(ConnectionState::Connected { resumed, .. }) => {
+                println!("reconnected (resumed: {resumed})");
+            }
+            ClientEvent::ConnectionState(ConnectionState::Disconnected) => break,
+            ClientEvent::ConnectionState(state) => println!("connection: {state:?}"),
         }
     }
-    session.disconnect().await;
-    Ok(())
+    let stopped = stop_client(handle, task).await;
+    result.and(stopped)
 }
 
 async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
