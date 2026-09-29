@@ -326,6 +326,35 @@ pub async fn read(client: &Client, peer: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// `read-private <room> <nick>`: mark a private chat with a room occupant as read.
+pub async fn read_private(client: &Client, room: &str, nick: &str) -> Result<(), CliError> {
+    let room = bare(room)?;
+    client
+        .handle
+        .mark_read_private(room.clone(), nick.to_owned())
+        .await
+        .map_err(err)?;
+    println!("marked {room}/{nick} as read");
+    Ok(())
+}
+
+/// `moderate <item-id> [reason]`: ask the room to retract a message (XEP-0425). We must
+/// be a moderator of the room.
+pub async fn moderate(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (item, reason) = match args {
+        [item] => (*item, None),
+        [item, reason] => (*item, Some((*reason).to_owned())),
+        _ => return Err("usage: moderate <item-id> [reason]".to_owned().into()),
+    };
+    client
+        .handle
+        .moderate_message(item.to_owned(), reason)
+        .await
+        .map_err(err)?;
+    println!("asked the room to retract {item}");
+    Ok(())
+}
+
 /// `pm <room> <nick> <text>`: send a private message to a room occupant.
 pub async fn pm(client: &Client, room: &str, nick: &str, text: &str) -> Result<(), CliError> {
     let room = bare(room)?;

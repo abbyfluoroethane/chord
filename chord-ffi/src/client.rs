@@ -484,6 +484,24 @@ impl ChordClient {
             .await
     }
 
+    /// Mark a private chat with a room occupant as read.
+    pub async fn mark_read_private(&self, room: String, nick: String) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        self.call(move |h| async move { h.mark_read_private(room, nick).await })
+            .await
+    }
+
+    /// Ask the room to retract a message of another occupant (XEP-0425). We must be a
+    /// room moderator. The row changes when the room announces the retraction.
+    pub async fn moderate_message(
+        &self,
+        item_id: String,
+        reason: Option<String>,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.moderate_message(item_id, reason).await })
+            .await
+    }
+
     // ---- Rooms and bookmarks ----
 
     /// Join a room.
@@ -706,6 +724,18 @@ impl ChordClient {
         height: u16,
     ) -> Result<(), ChordError> {
         self.call(move |h| async move { h.set_avatar(mime, data, width, height).await })
+            .await
+    }
+
+    /// Set the photo of our vCard (XEP-0054, XEP-0153) only.
+    pub async fn set_vcard_photo(&self, mime: String, data: Vec<u8>) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.set_vcard_photo(mime, data).await })
+            .await
+    }
+
+    /// Remove the photo of our vCard only.
+    pub async fn remove_vcard_photo(&self) -> Result<(), ChordError> {
+        self.call(|h| async move { h.remove_vcard_photo().await })
             .await
     }
 

@@ -20,6 +20,8 @@
 //!   reply <item-id> <text>          <item-id> is the id in `timeline --json`
 //!   read <jid>                      mark as read (also with --offline)
 //!   pm <room> <nick> <text>         private message to a room occupant
+//!   read-private <room> <nick>      mark a private chat as read (also with --offline)
+//!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!
@@ -71,6 +73,7 @@ space-create <name> [--private] | space-add-room <service> <node> <room> [name] 
 space-add-member <service> <node> <jid> | space-delete <service> <node> | contacts | \
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
+read-private <room> <nick> | moderate <item-id> [reason] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list";
 
 /// Global options.
@@ -221,6 +224,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "reply",
         "read",
         "pm",
+        "read-private",
+        "moderate",
         "push-enable",
         "push-disable",
         "push-list",
@@ -230,7 +235,14 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
     }
     let needs_session = !matches!(
         *command,
-        "spaces" | "channels" | "members" | "timeline" | "state" | "read" | "push-list"
+        "spaces"
+            | "channels"
+            | "members"
+            | "timeline"
+            | "state"
+            | "read"
+            | "read-private"
+            | "push-list"
     );
     if needs_session && opts.offline {
         return Err(format!("{command} needs a session, not --offline").into());
@@ -271,6 +283,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("reply", [item, text]) => actions::reply(&client, item, text).await,
         ("read", [peer]) => actions::read(&client, peer).await,
         ("pm", [room, nick, text]) => actions::pm(&client, room, nick, text).await,
+        ("read-private", [room, nick]) => actions::read_private(&client, room, nick).await,
+        ("moderate", args) => actions::moderate(&client, args).await,
         ("push-enable", [service, node]) => actions::push_enable(&client, service, node).await,
         ("push-disable", args) => actions::push_disable(&client, args).await,
         ("push-list", []) => actions::push_list(opts, &client).await,
