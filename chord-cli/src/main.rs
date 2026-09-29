@@ -14,7 +14,7 @@
 //!   upload <jid> <file>             XEP-0363 upload, then send the URL
 //!   space-browse | space-join <service> <node> | space-create <name> [--private | --authorize]
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
-//!   space-delete <service> <node> | space-pending
+//!   space-delete <service> <node> | space-leave <service> <node> | space-pending
 //!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
 //!   contacts | contact-add <jid> [name]
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
@@ -76,7 +76,7 @@ listen [--once] | spaces | channels [home | <service> <node>] | members <room> |
 timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
 upload <jid> <file> | space-browse | space-join <service> <node> | \
 space-create <name> [--private | --authorize] | space-add-room <service> <node> <room> [name] | \
-space-add-member <service> <node> <jid> | space-delete <service> <node> | space-pending | space-requests <service> <node> | \
+space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
@@ -226,6 +226,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "space-add-room",
         "space-add-member",
         "space-delete",
+        "space-leave",
         "space-pending",
         "space-requests",
         "space-approve",
@@ -297,6 +298,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             actions::space_add_member(&client, service, node, jid).await
         }
         ("space-delete", [service, node]) => actions::space_delete(&client, service, node).await,
+        ("space-leave", [service, node]) => actions::space_leave(&client, service, node).await,
         ("space-pending", []) => actions::space_pending(opts, &client).await,
         ("space-requests", [service, node]) => {
             actions::space_requests(opts, &client, service, node).await

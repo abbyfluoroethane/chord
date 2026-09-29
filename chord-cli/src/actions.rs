@@ -220,6 +220,17 @@ pub async fn space_add_member(
     Ok(())
 }
 
+/// `space-leave <service> <node>`: leave a space, or cancel a join that waits for approval.
+pub async fn space_leave(client: &Client, service: &str, node: &str) -> Result<(), CliError> {
+    client
+        .handle
+        .leave_space(service, node)
+        .await
+        .map_err(err)?;
+    println!("left space {service} {node}");
+    Ok(())
+}
+
 /// `space-delete <service> <node>`: delete a space that we own.
 pub async fn space_delete(client: &Client, service: &str, node: &str) -> Result<(), CliError> {
     client
