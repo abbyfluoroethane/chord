@@ -85,6 +85,7 @@ pub(crate) enum Pending {
     Avatars(avatars::Pending),
     Push(push::Pending),
     Blocking(blocking::Pending),
+    Presence(presence::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -360,6 +361,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Avatars(p) => avatars::on_response(ctx, p, response),
         Pending::Push(p) => push::on_response(ctx, p, response),
         Pending::Blocking(p) => blocking::on_response(ctx, p, response),
+        Pending::Presence(p) => presence::on_response(ctx, p, response),
     }
 }
 

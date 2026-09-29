@@ -5,7 +5,7 @@
   import Icon from './Icon.svelte';
   import StatusMenu from './StatusMenu.svelte';
   import { app } from './app.svelte';
-  import { presenceKind, presenceLabel } from './types';
+  import { ownLabel, presenceKind } from './types';
   import { tooltip } from './tooltip';
   import { ui } from './ui.svelte';
 
@@ -19,7 +19,7 @@
 <div class="panel" bind:this={panel}>
   <button
     class="who"
-    aria-label="Your status: {presenceLabel[kind]}"
+    aria-label="Your status: {ownLabel(app.me.show)}"
     aria-haspopup="menu"
     aria-expanded={open}
     onclick={() => (open = !open)}
@@ -30,7 +30,7 @@
       {#if app.me.status}
         <span class="addr" title={app.me.status}>{app.me.status}</span>
       {:else}
-        <span class="addr mono" title={presenceLabel[kind]}>{app.me.address}</span>
+        <span class="addr mono" title={ownLabel(app.me.show)}>{app.me.address}</span>
       {/if}
     </span>
   </button>

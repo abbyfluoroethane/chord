@@ -7,7 +7,7 @@
   import Popover from './Popover.svelte';
   import Presence from './Presence.svelte';
   import { app } from './app.svelte';
-  import { presenceKind, presenceLabel, type Show } from './types';
+  import { ownLabel, presenceKind, type Show } from './types';
 
   let { anchor, onclose }: { anchor: HTMLElement; onclose: () => void } = $props();
 
@@ -15,7 +15,7 @@
   const width = $derived(anchor.getBoundingClientRect().width - 2);
   let text = $state(app.me.status ?? '');
 
-  const choices: Show[] = ['chat', 'away', 'dnd'];
+  const choices: Show[] = ['chat', 'away', 'dnd', 'invisible'];
 
   function pick(show: Show) {
     app.setShow(show);
@@ -71,7 +71,12 @@
             onclick={() => pick(show)}
           >
             <Presence {kind} size={10} label={false} />
-            <span class="label">{presenceLabel[kind]}</span>
+            <span class="label">
+              {ownLabel(show)}
+              {#if show === 'invisible'}
+                <span class="note">Contacts see you as offline.</span>
+              {/if}
+            </span>
             {#if app.me.show === show || (show === 'chat' && !app.me.show)}
               <span class="check"><Icon icon={Check} size={16} /></span>
             {/if}
@@ -139,6 +144,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .row:has(.note) {
+    height: auto;
+    min-height: 32px;
+    padding-top: var(--space-1);
+    padding-bottom: var(--space-1);
+  }
+  .note {
+    display: block;
+    color: var(--ink-muted);
+    font-size: 12px;
+    line-height: 16px;
+    white-space: normal;
   }
   .check {
     display: grid;

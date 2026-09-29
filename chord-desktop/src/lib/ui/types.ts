@@ -1,7 +1,8 @@
 // Local view types. They mirror the core view items and get swapped for the
 // bridge types later. Fields marked "UI" are extra and the bridge may derive them.
 
-export type Show = 'chat' | 'away' | 'xa' | 'dnd' | null;
+/** 'invisible' is only ours: contacts see us as offline. */
+export type Show = 'chat' | 'away' | 'xa' | 'dnd' | 'invisible' | null;
 export type PresenceKind = 'online' | 'away' | 'dnd' | 'offline';
 export type Affiliation = 'owner' | 'admin' | 'member' | 'none';
 export type MessageStatus = 'sending' | 'sent' | 'failed';
@@ -113,7 +114,7 @@ export function spaceKey(s: Pick<SpaceItem, 'service' | 'node'>): string {
 }
 
 export function presenceKind(online: boolean, show: Show): PresenceKind {
-  if (!online) return 'offline';
+  if (!online || show === 'invisible') return 'offline';
   if (show === 'dnd') return 'dnd';
   if (show === 'away' || show === 'xa') return 'away';
   return 'online';
@@ -125,6 +126,11 @@ export const presenceLabel: Record<PresenceKind, string> = {
   dnd: 'Do not disturb',
   offline: 'Offline'
 };
+
+/** The label of our own availability. Invisible shows as offline, with its own name. */
+export function ownLabel(show: Show): string {
+  return show === 'invisible' ? 'Invisible' : presenceLabel[presenceKind(true, show)];
+}
 
 export interface FolderCircle {
   id: string;

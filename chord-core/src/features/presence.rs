@@ -3,13 +3,20 @@
 //!
 //! Our show value (away, dnd, xa) and status text live in the `own_presence` table, so
 //! every presence and room join carries them, also after a restart.
+//!
+//! Invisible (XEP-0126): Chord stays available to the server, so messages arrive. An
+//! active privacy list (XEP-0016) stops our presence to the contacts that see it. Rooms
+//! still get our presence: a room occupant must send presence.
 
 use futures_channel::oneshot;
 use rusqlite::{OptionalExtension, params};
-use xmpp_parsers::presence::{Presence, Show};
+use xmpp_parsers::iq::Iq;
+use xmpp_parsers::minidom::Element;
+use xmpp_parsers::presence::{Presence, Show, Type as PresenceType};
 
-use super::{Ctx, FeatureCommand, avatars, disco};
-use crate::actor::{ClientError, ClientHandle};
+use super::roster::Subscription;
+use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, avatars, disco};
+use crate::actor::{ClientError, ClientEvent, ClientHandle};
 use crate::store::Store;
 
 /// Our availability, as the frontends choose it.
@@ -24,12 +31,14 @@ pub enum Availability {
     Dnd,
     /// Away for a longer time.
     ExtendedAway,
+    /// Contacts see us as offline. Needs privacy lists (XEP-0016) on the server.
+    Invisible,
 }
 
 impl Availability {
     fn show(self) -> Option<Show> {
         match self {
-            Self::Available => None,
+            Self::Available | Self::Invisible => None,
             Self::Away => Some(Show::Away),
             Self::Dnd => Some(Show::Dnd),
             Self::ExtendedAway => Some(Show::Xa),
@@ -42,6 +51,7 @@ impl Availability {
             Self::Away => Some("away"),
             Self::Dnd => Some("dnd"),
             Self::ExtendedAway => Some("xa"),
+            Self::Invisible => Some("invisible"),
         }
     }
 
@@ -50,6 +60,7 @@ impl Availability {
             Some("away") => Self::Away,
             Some("dnd") => Self::Dnd,
             Some("xa") => Self::ExtendedAway,
+            Some("invisible") => Self::Invisible,
             _ => Self::Available,
         }
     }
@@ -67,7 +78,27 @@ pub struct OwnPresence {
 /// The longest status text that Chord sends.
 const MAX_STATUS_CHARS: usize = 128;
 
+/// The namespace of privacy lists (XEP-0016).
+const NS_PRIVACY: &str = "jabber:iq:privacy";
+
+/// The name of the privacy list that makes us invisible.
+const INVISIBLE_LIST: &str = "chord-invisible";
+
 type Reply<T> = oneshot::Sender<Result<T, ClientError>>;
+
+/// What to do with the answer to an IQ that this feature sent.
+#[derive(Debug)]
+pub(crate) enum Pending {
+    /// The store of the invisible list. Only an error needs an action.
+    StoreList,
+    /// The activation of the invisible list. `reply` is `None` at connect.
+    Hide { reply: Option<Reply<()>> },
+    /// The deactivation of the invisible list.
+    Show {
+        previous: Availability,
+        reply: Reply<()>,
+    },
+}
 
 /// A command from the public API.
 pub(crate) enum Command {
@@ -112,9 +143,148 @@ impl ClientHandle {
 ///
 /// It also carries our show value and status text, and, if the store has our avatar,
 /// its hash (XEP-0153), so that vCard clients see it.
+///
+/// Invisible, it first activates the invisible list, and sends the presence after the
+/// answer. The server handles our stanzas in order, so no presence goes out before it.
 pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
+    if own(ctx).availability == Availability::Invisible {
+        hide(ctx, None);
+        return;
+    }
     let presence = current(ctx);
     ctx.send(presence);
+}
+
+fn own(ctx: &mut Ctx<'_>) -> OwnPresence {
+    load(ctx.store, ctx.account_id).unwrap_or_else(|e| {
+        ctx.store_error("read our presence", e);
+        OwnPresence::default()
+    })
+}
+
+/// Store the invisible list and make it active. The list stops presence to every contact
+/// that has a subscription to it.
+fn hide(ctx: &mut Ctx<'_>, reply: Option<Reply<()>>) {
+    let store = format!(
+        "<query xmlns='{NS_PRIVACY}'><list name='{INVISIBLE_LIST}'>\
+         <item type='subscription' value='both' action='deny' order='1'><presence-out/></item>\
+         <item type='subscription' value='from' action='deny' order='2'><presence-out/></item>\
+         </list></query>"
+    );
+    ctx.request(set(&store), FeaturePending::Presence(Pending::StoreList));
+    let activate = format!("<query xmlns='{NS_PRIVACY}'><active name='{INVISIBLE_LIST}'/></query>");
+    ctx.request(
+        set(&activate),
+        FeaturePending::Presence(Pending::Hide { reply }),
+    );
+}
+
+/// Make no privacy list active, so that the contacts see our presence again.
+fn unhide(ctx: &mut Ctx<'_>, previous: Availability, reply: Reply<()>) {
+    let decline = format!("<query xmlns='{NS_PRIVACY}'><active/></query>");
+    ctx.request(
+        set(&decline),
+        FeaturePending::Presence(Pending::Show { previous, reply }),
+    );
+}
+
+/// A privacy list IQ to our own account. xmpp-parsers 0.23 has no XEP-0016 types.
+fn set(payload: &str) -> Iq {
+    Iq::Set {
+        from: None,
+        to: None,
+        id: String::new(),
+        payload: payload.parse::<Element>().expect("a valid privacy query"),
+    }
+}
+
+/// Send our presence to the server, which sends it to the contacts, and to the rooms.
+fn broadcast(ctx: &mut Ctx<'_>) {
+    let presence = current(ctx);
+    ctx.send(presence.clone());
+    super::muc::send_presence_to_rooms(ctx, &presence);
+}
+
+/// Tell each contact that sees our presence that we went offline. After this, the
+/// invisible list stops our presence to them.
+fn send_unavailable_to_contacts(ctx: &mut Ctx<'_>) {
+    let contacts = match super::roster::list_contacts(ctx.store.conn(), ctx.account_id) {
+        Ok(contacts) => contacts,
+        Err(e) => {
+            ctx.store_error("read the contacts", e);
+            return;
+        }
+    };
+    for contact in contacts {
+        if matches!(
+            contact.subscription,
+            Subscription::From | Subscription::Both
+        ) {
+            let presence = Presence::new(PresenceType::Unavailable).with_to(contact.jid);
+            ctx.send(presence);
+        }
+    }
+}
+
+fn set_availability(ctx: &mut Ctx<'_>, availability: Availability) {
+    let mut presence = own(ctx);
+    presence.availability = availability;
+    if let Err(e) = save(ctx.store, ctx.account_id, &presence) {
+        ctx.store_error("store our presence", e);
+    }
+}
+
+fn describe(response: &IqResponse) -> String {
+    match response {
+        IqResponse::Error(error) => {
+            let text = error.texts.values().next().cloned();
+            text.unwrap_or_else(|| format!("{:?}", error.defined_condition))
+        }
+        _ => "the session closed".to_owned(),
+    }
+}
+
+pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
+    let ok = matches!(response, IqResponse::Result(_));
+    match pending {
+        // The activation after it fails too, and reports the error.
+        Pending::StoreList => {}
+        Pending::Hide { reply } => {
+            if !ok && !matches!(response, IqResponse::Lost) {
+                // The server cannot hide us. Show us as available, and say why.
+                set_availability(ctx, Availability::Available);
+                ctx.emit(ClientEvent::Notice(
+                    "This server cannot make you invisible. You appear available.".to_owned(),
+                ));
+            }
+            if !matches!(response, IqResponse::Lost) {
+                broadcast(ctx);
+            }
+            if let Some(reply) = reply {
+                let result = if ok {
+                    Ok(())
+                } else {
+                    Err(ClientError::Invalid(format!(
+                        "invisible: {}",
+                        describe(&response)
+                    )))
+                };
+                let _ = reply.send(result);
+            }
+        }
+        Pending::Show { previous, reply } => {
+            if ok {
+                broadcast(ctx);
+                let _ = reply.send(Ok(()));
+            } else {
+                set_availability(ctx, previous);
+                let _ = reply.send(Err(ClientError::Invalid(format!(
+                    "visible: {}",
+                    describe(&response)
+                ))));
+            }
+        }
+    }
 }
 
 /// Available presence with our caps.
@@ -133,10 +303,7 @@ pub(crate) fn current(ctx: &mut Ctx<'_>) -> Presence {
             initial()
         }
     };
-    let own = load(ctx.store, ctx.account_id).unwrap_or_else(|e| {
-        ctx.store_error("read our presence", e);
-        OwnPresence::default()
-    });
+    let own = own(ctx);
     presence.show = own.availability.show();
     if let Some(status) = own.status.filter(|s| !s.is_empty()) {
         presence.set_status("", status);
@@ -147,14 +314,23 @@ pub(crate) fn current(ctx: &mut Ctx<'_>) -> Presence {
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
         Command::Set { presence, reply } => {
+            let previous = own(ctx).availability;
             if let Err(e) = save(ctx.store, ctx.account_id, &presence) {
                 let _ = reply.send(Err(ClientError::Invalid(format!("store: {e}"))));
                 return;
             }
-            let broadcast = current(ctx);
-            ctx.send(broadcast.clone());
-            super::muc::send_presence_to_rooms(ctx, &broadcast);
-            let _ = reply.send(Ok(()));
+            let invisible = Availability::Invisible;
+            match (previous == invisible, presence.availability == invisible) {
+                (false, true) => {
+                    send_unavailable_to_contacts(ctx);
+                    hide(ctx, Some(reply));
+                }
+                (true, false) => unhide(ctx, previous, reply),
+                _ => {
+                    broadcast(ctx);
+                    let _ = reply.send(Ok(()));
+                }
+            }
         }
         Command::Get { reply } => {
             let _ = reply.send(
@@ -328,5 +504,153 @@ mod tests {
             load(&h.store, h.account_id).unwrap(),
             OwnPresence::default()
         );
+    }
+
+    fn set_command(
+        h: &mut Harness,
+        availability: Availability,
+    ) -> oneshot::Receiver<Result<(), ClientError>> {
+        use crate::features::{FeatureCommand, on_command};
+        let (reply, answer) = oneshot::channel();
+        let presence = OwnPresence {
+            availability,
+            status: None,
+        };
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                FeatureCommand::Presence(Command::Set { presence, reply }),
+            )
+        });
+        answer
+    }
+
+    fn presences(sent: &[Stanza]) -> Vec<&Presence> {
+        sent.iter()
+            .filter_map(|s| match s {
+                Stanza::Presence(p) => Some(p),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn privacy_queries(sent: &[Stanza]) -> Vec<Element> {
+        sent.iter()
+            .filter_map(|s| match s {
+                Stanza::Iq(Iq::Set { payload, .. }) if payload.is("query", NS_PRIVACY) => {
+                    Some(payload.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn is_hide(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Presence(Pending::Hide { .. }))
+    }
+
+    #[test]
+    fn going_invisible_hides_us_from_the_contacts_that_see_us() {
+        let mut h = Harness::new();
+        for (jid, subscription) in [
+            ("both@example.org", "both"),
+            ("to@example.org", "to"),
+            ("from@example.org", "from"),
+        ] {
+            h.store
+                .conn()
+                .execute(
+                    "INSERT INTO contacts (account_id, jid, subscription) VALUES (?1, ?2, ?3)",
+                    params![h.account_id, jid, subscription],
+                )
+                .unwrap();
+        }
+        let mut answer = set_command(&mut h, Availability::Invisible);
+        let sent = h.take_sent();
+        let gone: Vec<String> = presences(&sent)
+            .iter()
+            .map(|p| {
+                assert_eq!(p.type_, PresenceType::Unavailable);
+                p.to.as_ref().unwrap().to_string()
+            })
+            .collect();
+        assert_eq!(gone, ["both@example.org", "from@example.org"]);
+        let queries = privacy_queries(&sent);
+        assert_eq!(queries.len(), 2, "store the list, then make it active");
+        let list = queries[0].get_child("list", NS_PRIVACY).unwrap();
+        assert_eq!(list.children().count(), 2);
+        let active = queries[1].get_child("active", NS_PRIVACY).unwrap();
+        assert_eq!(active.attr("name"), Some(INVISIBLE_LIST));
+        assert_eq!(answer.try_recv().unwrap(), None, "waits for the server");
+
+        h.respond(is_hide, IqResponse::Result(None));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let sent = h.take_sent();
+        let out = presences(&sent);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].type_, PresenceType::None);
+        assert_eq!(out[0].to, None);
+        assert_eq!(out[0].show, None);
+    }
+
+    #[test]
+    fn an_invisible_session_starts_hidden_or_says_why_not() {
+        let mut h = Harness::new();
+        let invisible = OwnPresence {
+            availability: Availability::Invisible,
+            status: None,
+        };
+        save(&h.store, h.account_id, &invisible).unwrap();
+        h.with_ctx(on_connected);
+        let sent = h.take_sent();
+        assert!(
+            presences(&sent).is_empty(),
+            "no presence before the list is active"
+        );
+        assert_eq!(privacy_queries(&sent).len(), 2);
+
+        // A server without privacy lists: Chord shows us as available and says why.
+        let error = xmpp_parsers::stanza_error::StanzaError::new(
+            xmpp_parsers::stanza_error::ErrorType::Cancel,
+            xmpp_parsers::stanza_error::DefinedCondition::ServiceUnavailable,
+            "en",
+            "",
+        );
+        h.respond(is_hide, IqResponse::Error(error));
+        assert_eq!(presences(&h.take_sent()).len(), 1);
+        assert_eq!(
+            load(&h.store, h.account_id).unwrap().availability,
+            Availability::Available
+        );
+        assert!(
+            h.effects
+                .iter()
+                .any(|e| matches!(e, crate::features::Effect::Emit(ClientEvent::Notice(_))))
+        );
+    }
+
+    #[test]
+    fn leaving_invisible_deactivates_the_list_first() {
+        let mut h = Harness::new();
+        let invisible = OwnPresence {
+            availability: Availability::Invisible,
+            status: None,
+        };
+        save(&h.store, h.account_id, &invisible).unwrap();
+        let mut answer = set_command(&mut h, Availability::Away);
+        let sent = h.take_sent();
+        assert!(presences(&sent).is_empty());
+        let queries = privacy_queries(&sent);
+        assert_eq!(queries.len(), 1);
+        let active = queries[0].get_child("active", NS_PRIVACY).unwrap();
+        assert_eq!(active.attr("name"), None, "no list is active");
+
+        h.respond(
+            |p| matches!(p, FeaturePending::Presence(Pending::Show { .. })),
+            IqResponse::Result(None),
+        );
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let sent = h.take_sent();
+        assert_eq!(presences(&sent)[0].show, Some(Show::Away));
     }
 }

@@ -255,7 +255,7 @@ export interface Contact {
 }
 
 /** Our availability. Matches chord-core presence::Availability. */
-export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway';
+export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway' | 'invisible';
 
 export interface OwnPresence {
   availability: Availability;

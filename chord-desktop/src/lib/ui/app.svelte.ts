@@ -776,7 +776,9 @@ class AppState {
 
   private async pushPresence() {
     if (!live) return;
-    await this.call((b) => b.setPresence(toAvailability(this.me.show), this.me.status));
+    const done = await this.call((b) => b.setPresence(toAvailability(this.me.show), this.me.status));
+    // The core can refuse invisible and keep another availability. Show what it keeps.
+    if (!done.ok) await this.loadPresence();
   }
 
   /** Sample data only. */
@@ -1020,6 +1022,7 @@ function toAvailability(show: Show): Availability {
   if (show === 'dnd') return 'dnd';
   if (show === 'away') return 'away';
   if (show === 'xa') return 'extendedAway';
+  if (show === 'invisible') return 'invisible';
   return 'available';
 }
 
@@ -1027,5 +1030,6 @@ function fromAvailability(a: Availability): Show {
   if (a === 'dnd') return 'dnd';
   if (a === 'away') return 'away';
   if (a === 'extendedAway') return 'xa';
+  if (a === 'invisible') return 'invisible';
   return 'chat';
 }
