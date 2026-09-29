@@ -2,3 +2,4 @@
 dev/prosody/.env
 dev/prosody/certs/
 .claude/worktrees/
+dev/foid/.env

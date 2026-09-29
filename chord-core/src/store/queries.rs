@@ -309,11 +309,23 @@ pub fn find_by_timeline_id(
     let Some((kind, key)) = timeline_id.split_once(':') else {
         return Ok(None);
     };
+    let found = conn
+        .prepare_cached(&format!(
+            "SELECT {ROW_COLUMNS} FROM messages
+             WHERE account_id = ?1 AND key_kind = ?2 AND key = ?3"
+        ))?
+        .query_row(params![account_id, kind, key], message_row)
+        .optional()?;
+    if found.is_some() || kind != "origin-id" {
+        return Ok(found);
+    }
+    // The key of a sent message changes to its stanza-id when the server echo or the
+    // archive gives one. A UI can still hold the old id. The row keeps its origin-id.
     conn.prepare_cached(&format!(
         "SELECT {ROW_COLUMNS} FROM messages
-         WHERE account_id = ?1 AND key_kind = ?2 AND key = ?3"
+         WHERE account_id = ?1 AND origin_id = ?2 ORDER BY id DESC LIMIT 1"
     ))?
-    .query_row(params![account_id, kind, key], message_row)
+    .query_row(params![account_id, key], message_row)
     .optional()
 }
 
@@ -461,6 +473,16 @@ mod tests {
         );
         assert!(upgrade_to_stanza_id(conn, account, "o-1", Direction::Out, peer, "s-1").unwrap());
         assert!(!upgrade_to_stanza_id(conn, account, "o-1", Direction::Out, peer, "s-1").unwrap());
+        // The old timeline id still finds the row.
+        let row = find_by_timeline_id(conn, account, "origin-id:o-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.stanza_id.as_deref(), Some("s-1"));
+        assert!(
+            find_by_timeline_id(conn, account, "origin-id:o-2")
+                .unwrap()
+                .is_none()
+        );
         let stored = messages_with(conn, account, peer).unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(
