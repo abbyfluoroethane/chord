@@ -359,6 +359,7 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
             ClientEvent::ConnectionState(ConnectionState::Disconnected) => break,
             ClientEvent::ConnectionState(state) => println!("connection: {state:?}"),
             ClientEvent::Notice(notice) => println!("notice: {notice}"),
+            ClientEvent::SubscriptionRequest(jid) => println!("{jid} asks to see your presence"),
             other => log::debug!("event: {other:?}"),
         }
     }

@@ -88,6 +88,8 @@ pub enum ClientEvent {
     MessageReceived(StoredMessage),
     /// A feature has a notice for the user, for example a failed room join.
     Notice(String),
+    /// A contact asks to see our presence. Call `approve_subscription` or `deny_subscription`.
+    SubscriptionRequest(BareJid),
 }
 
 /// An error from a `ClientHandle` call.
