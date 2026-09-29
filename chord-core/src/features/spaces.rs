@@ -433,7 +433,7 @@ pub(crate) fn on_disco_complete(ctx: &mut Ctx<'_>) {
     if ctx.state.spaces.started {
         return;
     }
-    let Some((jid, info)) = ctx.state.disco.find_identity("pubsub", "service") else {
+    let Some((jid, info)) = spaces_service(&ctx.state.disco) else {
         log::info!("the server has no pubsub service. Spaces are off.");
         return;
     };
@@ -459,13 +459,36 @@ pub(crate) fn on_disco_complete(ctx: &mut Ctx<'_>) {
     }
 }
 
+/// The pubsub service for spaces. A server can have more than one pubsub service. For
+/// example, ejabberd for Movim has `pubsub.`, `spaces.` and `comments.`, and Movim keeps
+/// its spaces on `spaces.`. So prefer `spaces.`, then `pubsub.`, then the first other one.
+fn spaces_service(disco: &super::disco::State) -> Option<&(Jid, DiscoInfoResult)> {
+    let rank = |jid: &Jid| {
+        let domain = jid.domain().as_str();
+        if domain.starts_with("spaces.") {
+            0
+        } else if domain.starts_with("pubsub.") {
+            1
+        } else {
+            2
+        }
+    };
+    disco
+        .services
+        .iter()
+        .filter(|(_, info)| {
+            info.identities
+                .iter()
+                .any(|i| i.category == "pubsub" && i.type_ == "service")
+        })
+        .min_by_key(|(jid, _)| rank(jid))
+}
+
 fn service_of(ctx: &Ctx<'_>) -> Result<BareJid, ClientError> {
     if let Some(service) = &ctx.state.spaces.service {
         return Ok(service.clone());
     }
-    ctx.state
-        .disco
-        .find_identity("pubsub", "service")
+    spaces_service(&ctx.state.disco)
         .map(|(jid, _)| jid.to_bare())
         .ok_or_else(|| ClientError::Unsupported("the server has no pubsub service".into()))
 }

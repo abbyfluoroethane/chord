@@ -84,15 +84,6 @@ impl State {
             .flatten()
             .any(|info| info.features.contains(feature))
     }
-
-    /// The first service with this identity, for example ("pubsub", "service").
-    pub fn find_identity(&self, category: &str, type_: &str) -> Option<&(Jid, DiscoInfoResult)> {
-        self.services.iter().find(|(_, info)| {
-            info.identities
-                .iter()
-                .any(|i| i.category == category && i.type_ == type_)
-        })
-    }
 }
 
 #[derive(Debug)]

@@ -1489,3 +1489,40 @@ fn download_with_the_wrong_hash_or_an_error_keeps_the_hash_only() {
         assert!(h.state.spaces.avatar_fetching.is_empty());
     }
 }
+
+#[test]
+fn spaces_prefer_the_spaces_service() {
+    let mut h = Harness::new();
+    let pubsub = DiscoInfoResult {
+        node: None,
+        identities: vec![Identity::new("pubsub", "service", "en", "Pubsub")],
+        features: Default::default(),
+        extensions: vec![],
+    };
+    // ejabberd for Movim: the answers can come in any order.
+    for jid in [
+        "comments.chat.foid.space",
+        "pubsub.chat.foid.space",
+        "spaces.chat.foid.space",
+    ] {
+        h.state
+            .disco
+            .services
+            .push((Jid::new(jid).unwrap(), pubsub.clone()));
+    }
+    h.state.disco.complete = true;
+    h.with_ctx(on_disco_complete);
+    assert_eq!(
+        h.state.spaces.service.as_ref().map(|s| s.as_str()),
+        Some("spaces.chat.foid.space")
+    );
+
+    // Without a spaces. service, pubsub. comes before the others.
+    h.state.disco.services.pop();
+    h.state.spaces = Default::default();
+    h.with_ctx(on_disco_complete);
+    assert_eq!(
+        h.state.spaces.service.as_ref().map(|s| s.as_str()),
+        Some("pubsub.chat.foid.space")
+    );
+}
