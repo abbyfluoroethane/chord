@@ -22,6 +22,8 @@ jobs:
       - run: cargo build --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Generate the Kotlin bindings
+        run: ./dev/ffi-bindgen-check.sh
 
   wasm:
     runs-on: ubuntu-latest

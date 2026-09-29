@@ -12,6 +12,7 @@ cargo clippy -p chord-cli --all-targets --features dev-insecure -- -D warnings
 cargo test --workspace
 cargo build -p chord-core --target wasm32-unknown-unknown --no-default-features
 ./dev/check-features.sh
+./dev/ffi-bindgen-check.sh
 
 if [[ "${1:-}" == "--live" ]]; then
   cargo test --workspace -- --ignored
