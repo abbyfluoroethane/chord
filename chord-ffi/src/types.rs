@@ -7,7 +7,10 @@ use chord_core::features::avatars::Avatar as CoreAvatar;
 use chord_core::features::notify as core_notify;
 use chord_core::features::push::PushRegistration as CorePushRegistration;
 use chord_core::features::roster::{Contact as CoreContact, Subscription as CoreSubscription};
-use chord_core::features::spaces::{JoinOutcome as CoreJoinOutcome, SpaceInfo as CoreSpaceInfo};
+use chord_core::features::spaces::{
+    JoinOutcome as CoreJoinOutcome, JoinRequest as CoreJoinRequest, SpaceAccess as CoreSpaceAccess,
+    SpaceInfo as CoreSpaceInfo,
+};
 use chord_core::session::ConnectError;
 use chord_core::store::queries as core_queries;
 use chord_core::views as core_views;
@@ -612,6 +615,49 @@ impl From<CoreJoinOutcome> for JoinOutcome {
             CoreJoinOutcome::Pending => Self::Pending,
         }
     }
+}
+
+/// The access model of a new space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum SpaceAccess {
+    Open,
+    /// The owner approves each join. The service must support it.
+    Authorize,
+    Whitelist,
+}
+
+impl From<SpaceAccess> for CoreSpaceAccess {
+    fn from(a: SpaceAccess) -> Self {
+        match a {
+            SpaceAccess::Open => Self::Open,
+            SpaceAccess::Authorize => Self::Authorize,
+            SpaceAccess::Whitelist => Self::Whitelist,
+        }
+    }
+}
+
+/// A join request that waits for the owner of a space.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct JoinRequest {
+    pub jid: String,
+    pub subid: Option<String>,
+}
+
+impl From<CoreJoinRequest> for JoinRequest {
+    fn from(r: CoreJoinRequest) -> Self {
+        Self {
+            jid: r.jid,
+            subid: r.subid,
+        }
+    }
+}
+
+/// A space that we asked to join, and that waits for the owner.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct PendingSpaceJoin {
+    pub service: String,
+    pub node: String,
+    pub name: String,
 }
 
 /// The address of a space: its pubsub service and node.

@@ -3,6 +3,7 @@
 //! Routing of `<event/>` messages:
 //! - node `urn:xmpp:bookmarks:1` from our own account: `bookmarks::on_event`,
 //! - node `urn:xmpp:avatar:metadata` (PEP of any contact): `avatars::on_metadata_event`,
+//! - a data form `subscribe_authorization` from the pubsub service: `spaces::on_authorization`,
 //! - anything else (a pubsub service, for example a space node): `spaces::on_event`.
 
 use jid::Jid;
@@ -16,6 +17,10 @@ pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
 
 /// A message that carries a pubsub event (also PEP). Returns true if it is one.
 pub(crate) fn on_event(ctx: &mut Ctx<'_>, message: &Message) -> bool {
+    // A join request for a space that we own is a data form, not an event.
+    if spaces::on_authorization(ctx, message) {
+        return true;
+    }
     let Some(event) = message
         .payloads
         .iter()

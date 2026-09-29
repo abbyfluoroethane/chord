@@ -12,9 +12,10 @@
 //!   join <room> [--nick N]          join and bookmark a room (password: CHORD_ROOM_PASSWORD)
 //!   leave <room>
 //!   upload <jid> <file>             XEP-0363 upload, then send the URL
-//!   space-browse | space-join <service> <node> | space-create <name> [--private]
+//!   space-browse | space-join <service> <node> | space-create <name> [--private | --authorize]
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
-//!   space-delete <service> <node>
+//!   space-delete <service> <node> | space-pending
+//!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
 //!   contacts | contact-add <jid> [name]
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
 //!   reply <item-id> <text>          <item-id> is the id in `timeline --json`
@@ -70,8 +71,9 @@ const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <t
 listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
 timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
 upload <jid> <file> | space-browse | space-join <service> <node> | \
-space-create <name> [--private] | space-add-room <service> <node> <room> [name] | \
-space-add-member <service> <node> <jid> | space-delete <service> <node> | contacts | \
+space-create <name> [--private | --authorize] | space-add-room <service> <node> <room> [name] | \
+space-add-member <service> <node> <jid> | space-delete <service> <node> | space-pending | space-requests <service> <node> | \
+space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | moderate <item-id> [reason] | \
@@ -218,6 +220,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "space-add-room",
         "space-add-member",
         "space-delete",
+        "space-pending",
+        "space-requests",
+        "space-approve",
+        "space-deny",
         "contacts",
         "contact-add",
         "edit",
@@ -247,6 +253,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "read-private"
             | "push-list"
             | "notify"
+            | "space-pending"
     );
     if needs_session && opts.offline {
         return Err(format!("{command} needs a session, not --offline").into());
@@ -279,6 +286,16 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             actions::space_add_member(&client, service, node, jid).await
         }
         ("space-delete", [service, node]) => actions::space_delete(&client, service, node).await,
+        ("space-pending", []) => actions::space_pending(opts, &client).await,
+        ("space-requests", [service, node]) => {
+            actions::space_requests(opts, &client, service, node).await
+        }
+        ("space-approve", [service, node, jid]) => {
+            actions::space_answer(&client, service, node, jid, true).await
+        }
+        ("space-deny", [service, node, jid]) => {
+            actions::space_answer(&client, service, node, jid, false).await
+        }
         ("contacts", []) => actions::contacts(opts, &client).await,
         ("contact-add", args) => actions::contact_add(&client, args).await,
         ("edit", [item, text]) => actions::edit(&client, item, text).await,

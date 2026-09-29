@@ -662,6 +662,67 @@ impl ChordClient {
         Ok(SpaceRef { service, node })
     }
 
+    /// Create a space with an access model. `Authorize` needs service support.
+    pub async fn create_space_with(
+        &self,
+        name: String,
+        access: SpaceAccess,
+    ) -> Result<SpaceRef, ChordError> {
+        let (service, node) = self
+            .call(move |h| async move { h.create_space_with(&name, access.into()).await })
+            .await?;
+        Ok(SpaceRef { service, node })
+    }
+
+    /// The spaces that we asked to join and that wait for the owner. Works offline.
+    pub async fn pending_space_joins(&self) -> Result<Vec<PendingSpaceJoin>, ChordError> {
+        let list = self
+            .call(|h| async move { h.pending_space_joins().await })
+            .await?;
+        Ok(list
+            .into_iter()
+            .map(|(service, node, name)| PendingSpaceJoin {
+                service,
+                node,
+                name,
+            })
+            .collect())
+    }
+
+    /// The join requests that wait for us, the owner of a space.
+    pub async fn space_join_requests(
+        &self,
+        service: String,
+        node: String,
+    ) -> Result<Vec<JoinRequest>, ChordError> {
+        let list = self
+            .call(move |h| async move { h.space_join_requests(&service, &node).await })
+            .await?;
+        Ok(list.into_iter().map(Into::into).collect())
+    }
+
+    /// Approve a join request (owner only).
+    pub async fn approve_space_join(
+        &self,
+        service: String,
+        node: String,
+        jid: String,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.approve_space_join(&service, &node, &jid).await })
+            .await
+    }
+
+    /// Deny a join request (owner only).
+    pub async fn deny_space_join(
+        &self,
+        service: String,
+        node: String,
+        jid: String,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.deny_space_join(&service, &node, &jid).await })
+            .await
+    }
+
     /// Add a room to a space.
     pub async fn add_room_to_space(
         &self,

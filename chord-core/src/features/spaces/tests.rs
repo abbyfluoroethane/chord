@@ -437,7 +437,11 @@ fn join_pending_error_and_lost() {
     let mut rx = join(&mut h);
     h.answer(is_subscribe, Some(subscription("pending")));
     assert_eq!(rx.try_recv(), Ok(Some(Ok(JoinOutcome::Pending))));
-    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+    assert_eq!(state_of(&h), ["2"], "kept as a pending join");
+    h.answer(
+        is_info,
+        Some(node_info("dev", NS_SPACES, "Dev", "authorize")),
+    );
 
     let mut rx = join(&mut h);
     h.respond(is_subscribe, forbidden());
@@ -524,13 +528,26 @@ fn create(
     name: &str,
     private: bool,
 ) -> oneshot::Receiver<Result<(String, String), ClientError>> {
+    let access = if private {
+        SpaceAccess::Whitelist
+    } else {
+        SpaceAccess::Open
+    };
+    create_with(h, name, access)
+}
+
+fn create_with(
+    h: &mut Harness,
+    name: &str,
+    access: SpaceAccess,
+) -> oneshot::Receiver<Result<(String, String), ClientError>> {
     let (reply, rx) = oneshot::channel();
     h.with_ctx(|ctx| {
         on_command(
             ctx,
             Command::Create {
                 name: name.into(),
-                private,
+                access,
                 reply,
             },
         )
@@ -808,7 +825,7 @@ fn offline_answers_every_command_with_not_connected() {
     let (a, mut ra) = oneshot::channel();
     offline(Command::Create {
         name: "n".into(),
-        private: false,
+        access: SpaceAccess::Open,
         reply: a,
     });
     assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
@@ -1527,4 +1544,381 @@ fn spaces_prefer_the_spaces_service() {
         h.state.spaces.service.as_ref().map(|s| s.as_str()),
         Some("pubsub.chat.foid.space")
     );
+}
+
+// --- Join approval ---
+
+fn notices(h: &mut Harness) -> Vec<String> {
+    let effects = std::mem::take(&mut h.effects);
+    let mut out = Vec::new();
+    for e in effects {
+        match e {
+            crate::features::Effect::Emit(ClientEvent::Notice(text)) => out.push(text),
+            other => h.effects.push(other),
+        }
+    }
+    out
+}
+
+/// A harness where our join of `dev` is pending.
+fn pending_join() -> Harness {
+    let mut h = harness();
+    let mut rx = join(&mut h);
+    h.answer(is_subscribe, Some(subscription("pending")));
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(JoinOutcome::Pending))));
+    h.answer(
+        is_info,
+        Some(node_info("dev", NS_SPACES, "Dev", "authorize")),
+    );
+    h.take_dirty();
+    h.take_sent();
+    h
+}
+
+fn state_of(h: &Harness) -> Vec<String> {
+    column(h, "SELECT CAST(subscribed AS TEXT) FROM spaces")
+}
+
+#[test]
+fn a_pending_join_is_stored_with_its_name_and_is_not_followed() {
+    let h = pending_join();
+    assert_eq!(state_of(&h), ["2"]);
+    assert_eq!(column(&h, "SELECT name FROM spaces"), ["Dev"]);
+    assert_eq!(column(&h, "SELECT access_model FROM spaces"), ["authorize"]);
+    let pending = pending_joins(&h.store, h.account_id).unwrap();
+    assert_eq!(pending, [(SERVICE.into(), "dev".into(), "Dev".into())]);
+    // The space list query reads `subscribed = 1` only.
+    assert!(!db::is_followed(h.store.conn(), h.account_id, SERVICE, "dev").unwrap());
+}
+
+#[test]
+fn an_approval_notification_loads_the_space_and_emits_a_notice() {
+    let mut h = pending_join();
+    let payload =
+        event("<subscription node='dev' jid='alice@chord.localhost' subscription='subscribed'/>");
+    h.with_ctx(|ctx| on_event(ctx, &service_jid(), payload));
+    assert_eq!(notices(&mut h), ["Your request to join Dev was approved"]);
+    h.answer(
+        is_info,
+        Some(node_info("dev", NS_SPACES, "Dev", "authorize")),
+    );
+    h.answer(
+        is_items,
+        Some(items_result(
+            "dev",
+            "<item id='r@rooms.chord.localhost'>
+               <conference xmlns='urn:xmpp:bookmarks:1' name='R'/></item>",
+        )),
+    );
+    assert_eq!(state_of(&h), ["1"]);
+    assert_eq!(column(&h, "SELECT name FROM space_items"), ["R"]);
+    assert!(h.take_dirty().contains(&ViewKey::SpaceList));
+    assert!(pending_joins(&h.store, h.account_id).unwrap().is_empty());
+}
+
+#[test]
+fn a_denial_notification_drops_the_pending_join_and_emits_a_notice() {
+    let mut h = pending_join();
+    let payload =
+        event("<subscription node='dev' jid='alice@chord.localhost' subscription='none'/>");
+    h.with_ctx(|ctx| on_event(ctx, &service_jid(), payload));
+    assert_eq!(notices(&mut h), ["Your request to join Dev was denied"]);
+    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+    assert!(h.take_dirty().contains(&ViewKey::SpaceList));
+}
+
+#[test]
+fn a_subscription_notification_that_we_did_not_ask_for_is_dropped() {
+    let mut h = pending_join();
+    let ours = "<subscription node='dev' jid='alice@chord.localhost' subscription='subscribed'/>";
+    // No pending join for this node.
+    let other =
+        event("<subscription node='other' jid='alice@chord.localhost' subscription='subscribed'/>");
+    h.with_ctx(|ctx| on_event(ctx, &service_jid(), other));
+    // A user of the service.
+    let user = Jid::new("pubsub.chord.localhost/x").unwrap();
+    h.with_ctx(|ctx| on_event(ctx, &user, event(ours)));
+    // Another subscriber.
+    let bob =
+        event("<subscription node='dev' jid='bob@chord.localhost' subscription='subscribed'/>");
+    h.with_ctx(|ctx| on_event(ctx, &service_jid(), bob));
+    // A foreign service.
+    let evil = Jid::new("evil.example.org").unwrap();
+    h.with_ctx(|ctx| on_event(ctx, &evil, event(ours)));
+    // The pending state changes nothing.
+    let still =
+        event("<subscription node='dev' jid='alice@chord.localhost' subscription='pending'/>");
+    h.with_ctx(|ctx| on_event(ctx, &service_jid(), still));
+    assert!(notices(&mut h).is_empty());
+    assert!(h.sent_iqs().is_empty());
+    assert_eq!(state_of(&h), ["2"]);
+}
+
+fn start_with_subscriptions(h: &mut Harness, list: &str) {
+    h.state.spaces = State::default();
+    h.with_ctx(on_connected);
+    h.answer(
+        is_subscriptions,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions>{list}</subscriptions></pubsub>",
+            ns::PUBSUB
+        ))),
+    );
+}
+
+#[test]
+fn a_pending_join_survives_a_restart_and_becomes_a_space_when_approved() {
+    let mut h = pending_join();
+    // Restart: the service still lists the join as pending.
+    start_with_subscriptions(
+        &mut h,
+        "<subscription node='dev' jid='alice@chord.localhost' subscription='pending'/>",
+    );
+    assert!(h.pending.is_empty(), "no request for a pending space");
+    assert_eq!(state_of(&h), ["2"]);
+    // Another restart, and the list omits it: it stays.
+    start_with_subscriptions(&mut h, "");
+    assert_eq!(state_of(&h), ["2"]);
+    // The owner approved while we were away.
+    start_with_subscriptions(
+        &mut h,
+        "<subscription node='dev' jid='alice@chord.localhost' subscription='subscribed'/>",
+    );
+    h.answer(
+        is_info,
+        Some(node_info("dev", NS_SPACES, "Dev", "authorize")),
+    );
+    h.answer(is_items, Some(items_result("dev", "")));
+    assert_eq!(state_of(&h), ["1"]);
+}
+
+#[test]
+fn a_pending_join_that_the_list_shows_as_none_is_dropped_with_a_notice() {
+    let mut h = pending_join();
+    start_with_subscriptions(
+        &mut h,
+        "<subscription node='dev' jid='alice@chord.localhost' subscription='none'/>",
+    );
+    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+    assert_eq!(notices(&mut h), ["Your request to join dev was denied"]);
+}
+
+#[test]
+fn leave_cancels_a_pending_join() {
+    let mut h = pending_join();
+    let mut rx = leave(&mut h);
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+}
+
+fn authorization(from: &str, node: &str, who: &str) -> Message {
+    let mut m = Message::new(None);
+    m.from = Some(Jid::new(from).unwrap());
+    m.payloads.push(xml(&format!(
+        "<x xmlns='jabber:x:data' type='form'>
+           <title>PubSub subscriber request</title>
+           <field var='FORM_TYPE' type='hidden'>
+             <value>{FORM_SUBSCRIBE_AUTHORIZATION}</value></field>
+           <field var='pubsub#node' type='text-single'><value>{node}</value></field>
+           <field var='pubsub#subscriber_jid' type='jid-single'><value>{who}</value></field>
+           <field var='pubsub#allow' type='boolean'><value>false</value></field>
+         </x>"
+    )));
+    m
+}
+
+#[test]
+fn an_authorization_form_from_the_service_emits_a_notice() {
+    let mut h = followed();
+    h.with_ctx(on_connected);
+    let m = authorization(SERVICE, "dev", "bob@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    assert_eq!(
+        notices(&mut h),
+        ["bob@chord.localhost asks to join the space The dev corner"]
+    );
+    // The pubsub router takes it too.
+    assert!(h.with_ctx(|ctx| pubsub::on_event(ctx, &m)));
+    assert_eq!(notices(&mut h).len(), 1);
+}
+
+#[test]
+fn an_authorization_form_from_another_sender_or_without_fields_is_dropped() {
+    let mut h = followed();
+    let m = authorization("evil.example.org", "dev", "bob@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    let mut empty = Message::new(None);
+    empty.from = Some(service_jid());
+    empty.payloads.push(xml(&format!(
+        "<x xmlns='jabber:x:data' type='form'><field var='FORM_TYPE' type='hidden'>
+           <value>{FORM_SUBSCRIBE_AUTHORIZATION}</value></field></x>"
+    )));
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &empty)));
+    assert!(notices(&mut h).is_empty());
+    // A message without the form is not ours.
+    let plain = Message::new(Some(Jid::new("alice@chord.localhost").unwrap()));
+    assert!(!h.with_ctx(|ctx| on_authorization(ctx, &plain)));
+}
+
+fn owner_call<T>(
+    h: &mut Harness,
+    make: impl FnOnce(Reply<T>) -> Command,
+) -> oneshot::Receiver<Result<T, ClientError>> {
+    let (reply, rx) = oneshot::channel();
+    h.with_ctx(|ctx| on_command(ctx, make(reply)));
+    rx
+}
+
+fn is_requests(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::JoinRequests { .. }))
+}
+
+fn requests(h: &mut Harness) -> oneshot::Receiver<Result<Vec<JoinRequest>, ClientError>> {
+    owner_call(h, |reply| Command::JoinRequests {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    })
+}
+
+#[test]
+fn the_join_requests_are_the_pending_owner_subscriptions() {
+    let mut h = followed();
+    let mut rx = requests(&mut h);
+    let sent = h.sent_iqs();
+    assert!(matches!(&sent[0], Iq::Get { .. }));
+    let text = payload_of(&sent[0]);
+    assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+    assert!(
+        text.contains("<subscriptions") && text.contains("dev"),
+        "{text}"
+    );
+    h.answer(
+        is_requests,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions node='dev'>
+               <subscription jid='alice@chord.localhost' subscription='subscribed'/>
+               <subscription jid='bob@chord.localhost' subscription='pending' subid='s1'/>
+               <subscription jid='carol@chord.localhost' subscription='pending'/>
+             </subscriptions></pubsub>",
+            ns::PUBSUB_OWNER
+        ))),
+    );
+    let Ok(Some(Ok(list))) = rx.try_recv() else {
+        panic!("expected requests")
+    };
+    assert_eq!(
+        list,
+        [
+            JoinRequest {
+                jid: "bob@chord.localhost".into(),
+                subid: Some("s1".into())
+            },
+            JoinRequest {
+                jid: "carol@chord.localhost".into(),
+                subid: None
+            },
+        ]
+    );
+    // An error, and an empty answer.
+    let mut rx = requests(&mut h);
+    h.respond(is_requests, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    let mut rx = requests(&mut h);
+    h.answer(is_requests, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(vec![]))));
+}
+
+#[test]
+fn approve_and_deny_send_an_owner_subscription_set() {
+    for state in ["subscribed", "none"] {
+        let mut h = followed();
+        let mut rx = owner_call(&mut h, |reply| Command::AnswerJoin {
+            service: service_bare(),
+            node: "dev".into(),
+            jid: Jid::new("bob@chord.localhost").unwrap(),
+            state,
+            reply,
+        });
+        let sent = h.sent_iqs();
+        assert!(matches!(&sent[0], Iq::Set { .. }));
+        let text = payload_of(&sent[0]);
+        assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+        assert!(text.contains("bob@chord.localhost"), "{text}");
+        assert!(
+            text.contains(&format!("subscription=\"{state}\""))
+                || text.contains(&format!("subscription='{state}'")),
+            "{text}"
+        );
+        assert_eq!(rx.try_recv(), Ok(None));
+        h.answer(is_done, None);
+        assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    }
+}
+
+#[test]
+fn an_authorize_space_needs_the_service_feature() {
+    let mut h = harness();
+    let mut rx = create_with(&mut h, "Gate", SpaceAccess::Authorize);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Unsupported(_))))
+    ));
+    assert!(h.sent_iqs().is_empty());
+
+    let mut h = harness_with(&[FEATURE_ACCESS_AUTHORIZE]);
+    let mut rx = create_with(&mut h, "Gate", SpaceAccess::Authorize);
+    let sent = h.sent_iqs();
+    let text = payload_of(&sent[0]);
+    assert!(
+        text.contains("authorize") && text.contains(NS_SPACES),
+        "{text}"
+    );
+    assert_eq!(rx.try_recv(), Ok(None));
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::Create { .. })),
+        None,
+    );
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::CreateSubscribe { .. })),
+        Some(subscription("subscribed")),
+    );
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(_)))));
+    assert_eq!(column(&h, "SELECT access_model FROM spaces"), ["authorize"]);
+}
+
+#[test]
+fn the_access_forms_use_each_access_model() {
+    for (access, word) in [
+        (SpaceAccess::Open, "open"),
+        (SpaceAccess::Authorize, "authorize"),
+        (SpaceAccess::Whitelist, "whitelist"),
+    ] {
+        let form = node_config("x", access);
+        assert!(form.contains(&format!("<value>{word}</value>")), "{form}");
+    }
+}
+
+#[test]
+fn the_owner_commands_fail_offline() {
+    let (a, mut ra) = oneshot::channel::<Result<Vec<JoinRequest>, ClientError>>();
+    offline(Command::JoinRequests {
+        service: service_bare(),
+        node: "n".into(),
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    let (a, mut ra) = oneshot::channel();
+    offline(Command::AnswerJoin {
+        service: service_bare(),
+        node: "n".into(),
+        jid: Jid::new("b@x").unwrap(),
+        state: "none",
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
 }

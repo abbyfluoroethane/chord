@@ -25,6 +25,14 @@
 //!   with the owner `service/node`. If the info has no URL, we fetch the image from the
 //!   `urn:xmpp:avatar:data` node of the service. An image at a URL goes through
 //!   `Effect::Download`. `store_avatar_image` also takes an image from a caller.
+//! - Join approval: `join_space` on an `authorize` node returns `Pending`. We store the row
+//!   with `subscribed = 2`. The views read `subscribed = 1` only, so the space stays hidden.
+//!   The service later sends a subscription notification (XEP-0060, 8.x): `subscribed` turns
+//!   the row into a space and `none` drops it. Both send a `ClientEvent::Notice`. At start,
+//!   the subscriptions list does the same for an answer that came while we were offline.
+//!   `pending_space_joins` lists the rows. As owner, we get a `subscribe_authorization`
+//!   form (`on_authorization`, a `Notice`). `space_join_requests`, `approve_space_join`, and
+//!   `deny_space_join` use the owner subscriptions request and set (XEP-0060, 8.8.1, 8.8.2).
 //! - Private spaces use the `whitelist` access model. The owner makes a member with
 //!   `add_space_member`, then the member calls `join_space`. Join requests (`authorize`)
 //!   only work where a server offers them. Prosody 13 does not.
@@ -38,15 +46,17 @@ use xmpp_parsers::avatar::Data as AvatarData;
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::disco::{DiscoInfoQuery, DiscoInfoResult, DiscoItemsQuery};
 use xmpp_parsers::iq::Iq;
+use xmpp_parsers::message::Message;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::ns;
+use xmpp_parsers::pubsub::Subscription;
 use xmpp_parsers::pubsub::event::Payload;
 use xmpp_parsers::rsm::{SetQuery, SetResult};
 use xmpp_parsers::stanza_error::StanzaError;
 
 use super::avatars::{self, MAX_AVATAR_BYTES};
 use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, new_id, pubsub};
-use crate::actor::{ClientError, ClientHandle};
+use crate::actor::{ClientError, ClientEvent, ClientHandle};
 use crate::store::Store;
 use crate::views::{ChannelScope, ViewKey};
 
@@ -110,6 +120,43 @@ pub enum JoinOutcome {
     Pending,
 }
 
+/// The access model of a new space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpaceAccess {
+    /// Everyone can join.
+    Open,
+    /// The owner approves each join. The service must advertise `pubsub#access-authorize`.
+    Authorize,
+    /// Only members that the owner adds can join.
+    Whitelist,
+}
+
+impl SpaceAccess {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Authorize => "authorize",
+            Self::Whitelist => "whitelist",
+        }
+    }
+}
+
+/// A join request that waits for the owner of a space (XEP-0060, 8.6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinRequest {
+    /// The JID that asks to join.
+    pub jid: String,
+    /// The subscription id, if the service gives one.
+    pub subid: Option<String>,
+}
+
+/// A join that waits for approval: service, node, and name.
+pub type PendingJoin = (String, String, String);
+
+const FORM_SUBSCRIBE_AUTHORIZATION: &str =
+    "http://jabber.org/protocol/pubsub#subscribe_authorization";
+const FEATURE_ACCESS_AUTHORIZE: &str = "http://jabber.org/protocol/pubsub#access-authorize";
+
 type Reply<T> = oneshot::Sender<Result<T, ClientError>>;
 
 /// In-memory state for one session.
@@ -161,6 +208,8 @@ pub(crate) enum After {
     Nothing,
     Items,
     Join(Reply<JoinOutcome>),
+    /// Our join waits for approval. Keep the metadata, but do not follow the space.
+    Pending,
 }
 
 /// What to do when a simple request succeeds.
@@ -186,6 +235,7 @@ pub(crate) enum Action {
         node: String,
     },
     AddMember,
+    Nothing,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -221,19 +271,24 @@ pub(crate) enum Pending {
         service: BareJid,
         node: String,
         name: String,
-        private: bool,
+        access: SpaceAccess,
         reply: Reply<(String, String)>,
     },
     CreateSubscribe {
         service: BareJid,
         node: String,
         name: String,
-        private: bool,
+        access: SpaceAccess,
         reply: Reply<(String, String)>,
     },
     Done {
         action: Action,
         reply: Reply<()>,
+    },
+    /// The pending subscriptions of a space that we own.
+    JoinRequests {
+        node: String,
+        reply: Reply<Vec<JoinRequest>>,
     },
     /// The image of a space avatar, from the data node of the service.
     AvatarData {
@@ -262,8 +317,25 @@ pub(crate) enum Command {
     },
     Create {
         name: String,
-        private: bool,
+        access: SpaceAccess,
         reply: Reply<(String, String)>,
+    },
+    /// The joins that wait for approval. Reads the store, so it works offline.
+    PendingJoins {
+        reply: Reply<Vec<PendingJoin>>,
+    },
+    JoinRequests {
+        service: BareJid,
+        node: String,
+        reply: Reply<Vec<JoinRequest>>,
+    },
+    /// Answer a join request: `subscribed` approves, `none` denies.
+    AnswerJoin {
+        service: BareJid,
+        node: String,
+        jid: Jid,
+        state: &'static str,
+        reply: Reply<()>,
     },
     AddRoom {
         service: BareJid,
@@ -328,10 +400,88 @@ impl ClientHandle {
         name: &str,
         private: bool,
     ) -> Result<(String, String), ClientError> {
+        let access = if private {
+            SpaceAccess::Whitelist
+        } else {
+            SpaceAccess::Open
+        };
+        self.create_space_with(name, access).await
+    }
+
+    /// Create a space with an access model. `Authorize` needs a service that advertises
+    /// `pubsub#access-authorize`. Without it, this fails with `Unsupported`.
+    pub async fn create_space_with(
+        &self,
+        name: &str,
+        access: SpaceAccess,
+    ) -> Result<(String, String), ClientError> {
         let name = name.to_owned();
         self.space_call(|reply| Command::Create {
             name,
-            private,
+            access,
+            reply,
+        })
+        .await
+    }
+
+    /// The spaces that we asked to join and that wait for the owner: service, node, name.
+    /// This reads the store, so it works without a session.
+    pub async fn pending_space_joins(&self) -> Result<Vec<PendingJoin>, ClientError> {
+        self.space_call(|reply| Command::PendingJoins { reply })
+            .await
+    }
+
+    /// The join requests that wait for us, the owner of an `authorize` space.
+    pub async fn space_join_requests(
+        &self,
+        service: &str,
+        node: &str,
+    ) -> Result<Vec<JoinRequest>, ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        self.space_call(|reply| Command::JoinRequests {
+            service,
+            node,
+            reply,
+        })
+        .await
+    }
+
+    /// Approve a join request (owner only).
+    pub async fn approve_space_join(
+        &self,
+        service: &str,
+        node: &str,
+        jid: &str,
+    ) -> Result<(), ClientError> {
+        self.answer_join(service, node, jid, "subscribed").await
+    }
+
+    /// Deny a join request (owner only).
+    pub async fn deny_space_join(
+        &self,
+        service: &str,
+        node: &str,
+        jid: &str,
+    ) -> Result<(), ClientError> {
+        self.answer_join(service, node, jid, "none").await
+    }
+
+    async fn answer_join(
+        &self,
+        service: &str,
+        node: &str,
+        jid: &str,
+        state: &'static str,
+    ) -> Result<(), ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        let jid = Jid::new(jid).map_err(|e| ClientError::Invalid(format!("jid {jid}: {e}")))?;
+        self.space_call(|reply| Command::AnswerJoin {
+            service,
+            node,
+            jid,
+            state,
             reply,
         })
         .await
@@ -676,11 +826,58 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 reply,
             });
         }
+        Command::PendingJoins { reply } => {
+            let _ = reply.send(pending_joins(ctx.store, ctx.account_id));
+        }
+        Command::JoinRequests {
+            service,
+            node,
+            reply,
+        } => {
+            let iq = owner_iq(
+                false,
+                &service,
+                &format!("<subscriptions node='{}'/>", xml_escape(&node)),
+            );
+            go(ctx, iq, reply, |reply| Pending::JoinRequests {
+                node,
+                reply,
+            });
+        }
+        Command::AnswerJoin {
+            service,
+            node,
+            jid,
+            state,
+            reply,
+        } => {
+            let iq = owner_iq(
+                true,
+                &service,
+                &format!(
+                    "<subscriptions node='{}'><subscription jid='{}' subscription='{state}'/></subscriptions>",
+                    xml_escape(&node),
+                    xml_escape(jid.as_str())
+                ),
+            );
+            go(ctx, iq, reply, |reply| Pending::Done {
+                action: Action::Nothing,
+                reply,
+            });
+        }
         Command::Create {
             name,
-            private,
+            access,
             reply,
-        } => match service_of(ctx) {
+        } => match service_of(ctx).and_then(|service| {
+            if access == SpaceAccess::Authorize && !advertises(ctx, FEATURE_ACCESS_AUTHORIZE) {
+                Err(ClientError::Unsupported(
+                    "the pubsub service has no access-authorize".into(),
+                ))
+            } else {
+                Ok(service)
+            }
+        }) {
             Ok(service) => {
                 let node = format!("space-{}", &new_id().replace('-', "")[..12]);
                 let iq = pubsub_iq(
@@ -689,14 +886,14 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                     &format!(
                         "<create node='{}'/><configure>{}</configure>",
                         xml_escape(&node),
-                        node_config(&name, private)
+                        node_config(&name, access)
                     ),
                 );
                 go(ctx, iq, reply, |reply| Pending::Create {
                     service,
                     node,
                     name,
-                    private,
+                    access,
                     reply,
                 });
             }
@@ -803,8 +1000,8 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
 }
 
 /// The node configuration form of a new space (XEP-0503, "Space Node Configuration").
-fn node_config(name: &str, private: bool) -> String {
-    let access = if private { "whitelist" } else { "open" };
+fn node_config(name: &str, access: SpaceAccess) -> String {
+    let access = access.as_str();
     let text = |var: &str, value: &str| Field::new(var, FieldType::TextSingle).with_value(value);
     let boolean = |var: &str, value: &str| Field::new(var, FieldType::Boolean).with_value(value);
     let fields = vec![
@@ -833,6 +1030,9 @@ pub(crate) fn offline(command: Command) {
         Command::Join { reply, .. } => no(reply),
         Command::Leave { reply, .. } => no(reply),
         Command::Create { reply, .. } => no(reply),
+        Command::PendingJoins { reply } => no(reply),
+        Command::JoinRequests { reply, .. } => no(reply),
+        Command::AnswerJoin { reply, .. } => no(reply),
         Command::AddRoom { reply, .. } => no(reply),
         Command::RemoveRoom { reply, .. } => no(reply),
         Command::AddMember { reply, .. } => no(reply),
@@ -910,6 +1110,14 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 match state {
                     "subscribed" => request_info(ctx, &service, &node, After::Join(reply)),
                     "pending" => {
+                        // Keep the request. The service tells us when the owner answers.
+                        let s = service.to_string();
+                        if let Err(e) =
+                            db::upsert_pending(ctx.store.conn(), ctx.account_id, &s, &node)
+                        {
+                            ctx.store_error("store a pending join", e);
+                        }
+                        request_info(ctx, &service, &node, After::Pending);
                         let _ = reply.send(Ok(JoinOutcome::Pending));
                     }
                     other => {
@@ -930,7 +1138,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             service,
             node,
             name,
-            private,
+            access,
             reply,
         } => match result {
             Ok(_) => {
@@ -939,7 +1147,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                     service,
                     node,
                     name,
-                    private,
+                    access,
                     reply,
                 });
             }
@@ -951,11 +1159,11 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             service,
             node,
             name,
-            private,
+            access,
             reply,
         } => match result {
             Ok(_) => {
-                let access = if private { "whitelist" } else { "open" };
+                let access = access.as_str();
                 let s = service.to_string();
                 if let Err(e) = db::upsert_space(
                     ctx.store.conn(),
@@ -976,6 +1184,13 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(Err(e));
             }
         },
+        Pending::JoinRequests { node, reply } => {
+            let _ = reply.send(result.map(|payload| {
+                payload
+                    .map(|p| parse_join_requests(&p, &node))
+                    .unwrap_or_default()
+            }));
+        }
         Pending::Done { action, reply } => match result {
             Ok(_) => {
                 apply_action(ctx, action);
@@ -1012,7 +1227,7 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             remove_item(ctx, &s, &node, room.as_str());
             changed(ctx, &s, &node);
         }
-        Action::AddMember => {}
+        Action::AddMember | Action::Nothing => {}
     }
 }
 
@@ -1022,16 +1237,17 @@ fn on_subscriptions(ctx: &mut Ctx<'_>, service: &BareJid, payload: &Element) {
         return;
     };
     let mut nodes = Vec::new();
+    let mut denied = Vec::new();
     for sub in list.children().filter(|c| c.is("subscription", ns::PUBSUB)) {
         let ours = match sub.attr("jid").map(BareJid::new) {
             Some(Ok(jid)) => jid == *ctx.account,
             Some(Err(_)) => false,
             None => true,
         };
-        if let (true, Some("subscribed"), Some(node)) =
-            (ours, sub.attr("subscription"), sub.attr("node"))
-        {
-            nodes.push(node.to_owned());
+        match (ours, sub.attr("subscription"), sub.attr("node")) {
+            (true, Some("subscribed"), Some(node)) => nodes.push(node.to_owned()),
+            (true, Some("none"), Some(node)) => denied.push(node.to_owned()),
+            _ => {}
         }
     }
     let s = service.to_string();
@@ -1044,8 +1260,131 @@ fn on_subscriptions(ctx: &mut Ctx<'_>, service: &BareJid, payload: &Element) {
         }
         Err(e) => ctx.store_error("read the spaces", e),
     }
+    // A pending join that the owner denied while we were away. A pending join that the list
+    // omits stays: some services do not list them. `leave_space` cancels it.
+    for node in denied {
+        if db::is_pending(ctx.store.conn(), ctx.account_id, &s, &node).unwrap_or(false) {
+            remove_space(ctx, &s, &node);
+            ctx.emit(ClientEvent::Notice(format!(
+                "Your request to join {node} was denied"
+            )));
+        }
+    }
+    // A pending join that the owner approved becomes a space: `upsert_space` follows it.
     for node in nodes {
         request_info(ctx, service, &node, After::Items);
+    }
+}
+
+/// The subscriptions of a space node for its owner. Keeps the pending ones.
+fn parse_join_requests(payload: &Element, node: &str) -> Vec<JoinRequest> {
+    let Some(list) = payload
+        .get_child("subscriptions", ns::PUBSUB_OWNER)
+        .or_else(|| payload.get_child("subscriptions", ns::PUBSUB))
+    else {
+        return Vec::new();
+    };
+    if list.attr("node").is_some_and(|n| n != node) {
+        return Vec::new();
+    }
+    list.children()
+        .filter(|c| c.name() == "subscription" && c.attr("subscription") == Some("pending"))
+        .filter_map(|c| {
+            Some(JoinRequest {
+                jid: c.attr("jid")?.to_owned(),
+                subid: c.attr("subid").map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+/// True if the pubsub service of the spaces advertises `feature`.
+fn advertises(ctx: &Ctx<'_>, feature: &str) -> bool {
+    spaces_service(&ctx.state.disco).is_some_and(|(_, info)| info.features.contains(feature))
+}
+
+/// A message from the service with an authorization form (XEP-0060, 8.6): a user asks to
+/// join a space that we own. Emits a notice. Returns true if the message is such a form.
+pub(crate) fn on_authorization(ctx: &mut Ctx<'_>, message: &Message) -> bool {
+    let Some(from) = message.from.as_ref().map(Jid::to_bare) else {
+        return false;
+    };
+    let form = message
+        .payloads
+        .iter()
+        .filter_map(|p| DataForm::try_from(p.clone()).ok())
+        .find(|f| f.form_type() == Some(FORM_SUBSCRIBE_AUTHORIZATION));
+    let Some(form) = form else {
+        return false;
+    };
+    if ctx.state.spaces.service.as_ref() != Some(&from) {
+        log::warn!("dropped a join request from {from}: not our spaces service");
+        return true;
+    }
+    let value = |var: &str| {
+        form.fields
+            .iter()
+            .find(|f| f.var.as_deref() == Some(var))
+            .and_then(|f| f.values.first().cloned())
+    };
+    let (Some(node), Some(jid)) = (value("pubsub#node"), value("pubsub#subscriber_jid")) else {
+        log::warn!("a join request from {from} has no node or subscriber");
+        return true;
+    };
+    let name = db::space_name(ctx.store.conn(), ctx.account_id, from.as_str(), &node)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| node.clone());
+    ctx.emit(ClientEvent::Notice(format!(
+        "{jid} asks to join the space {name}"
+    )));
+    true
+}
+
+/// The joins that wait for approval.
+pub(crate) fn pending_joins(
+    store: &Store,
+    account_id: i64,
+) -> Result<Vec<PendingJoin>, ClientError> {
+    db::pending(store.conn(), account_id).map_err(|e| ClientError::Invalid(format!("store: {e}")))
+}
+
+/// A subscription notification about us (XEP-0060, 8.x). It answers a join that waited for
+/// the owner. Any other subscription event is dropped.
+fn on_subscription_event(
+    ctx: &mut Ctx<'_>,
+    service: &Jid,
+    node: &str,
+    jid: Option<Jid>,
+    state: Option<Subscription>,
+) {
+    if service.resource().is_some() || jid.is_some_and(|j| j.to_bare() != *ctx.account) {
+        return;
+    }
+    let bare = service.to_bare();
+    let s = bare.to_string();
+    if !db::is_pending(ctx.store.conn(), ctx.account_id, &s, node).unwrap_or(false) {
+        log::debug!("dropped a subscription event for {node} of {service}: no pending join");
+        return;
+    }
+    let name = db::space_name(ctx.store.conn(), ctx.account_id, &s, node)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| node.to_owned());
+    match state {
+        Some(Subscription::Subscribed) => {
+            request_info(ctx, &bare, node, After::Items);
+            ctx.emit(ClientEvent::Notice(format!(
+                "Your request to join {name} was approved"
+            )));
+        }
+        Some(Subscription::None) => {
+            remove_space(ctx, &s, node);
+            ctx.emit(ClientEvent::Notice(format!(
+                "Your request to join {name} was denied"
+            )));
+        }
+        _ => {}
     }
 }
 
@@ -1063,6 +1402,25 @@ fn on_node_info(
         .and_then(|p| p.clone())
         .and_then(|p| DiscoInfoResult::try_from(p).ok());
     let s = service.to_string();
+    if matches!(after, After::Pending) {
+        // Only the metadata: the space is not ours yet.
+        if let Some(info) = info {
+            let meta = meta_of(&info);
+            if let Err(e) = db::update_pending_meta(
+                ctx.store.conn(),
+                ctx.account_id,
+                &s,
+                node,
+                meta.title.as_deref(),
+                meta.description.as_deref(),
+                meta.access_model.as_deref(),
+            ) {
+                ctx.store_error("store a pending join", e);
+            }
+            changed(ctx, &s, node);
+        }
+        return;
+    }
     match (info, &after) {
         (Some(info), _) => {
             let meta = meta_of(&info);
@@ -1107,7 +1465,7 @@ fn on_node_info(
     }
     changed(ctx, &s, node);
     match after {
-        After::Nothing => {}
+        After::Nothing | After::Pending => {}
         After::Items => request_items(ctx, service, node, None),
         After::Join(reply) => request_items(ctx, service, node, Some(reply)),
     }
@@ -1796,6 +2154,12 @@ fn changed(ctx: &mut Ctx<'_>, service: &str, node: &str) {
 /// of a space that we follow can change it: any other sender is dropped.
 pub(crate) fn on_event(ctx: &mut Ctx<'_>, service: &Jid, payload: Payload) {
     let node = pubsub::node_of(&payload).to_owned();
+    if let Payload::Subscription {
+        jid, subscription, ..
+    } = payload
+    {
+        return on_subscription_event(ctx, service, &node, jid, subscription);
+    }
     let s = service.to_string();
     match db::is_followed(ctx.store.conn(), ctx.account_id, &s, &node) {
         Ok(true) => {}
@@ -1874,6 +2238,79 @@ mod db {
             params![account_id, service, node, name, description, access_model],
         )?;
         Ok(())
+    }
+
+    /// Store a join that waits for the owner: `subscribed` is 2. A followed space stays.
+    pub fn upsert_pending(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT INTO spaces (account_id, service, node, subscribed, position)
+             VALUES (?1, ?2, ?3, 2,
+                     (SELECT COALESCE(MAX(position), -1) + 1 FROM spaces WHERE account_id = ?1))
+             ON CONFLICT (account_id, service, node) DO NOTHING",
+            params![account_id, service, node],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_pending_meta(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        access_model: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE spaces SET name = ?4, description = ?5, access_model = ?6
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND subscribed = 2",
+            params![account_id, service, node, name, description, access_model],
+        )?;
+        Ok(())
+    }
+
+    pub fn is_pending(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<bool> {
+        conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM spaces
+                            WHERE account_id = ?1 AND service = ?2 AND node = ?3
+                              AND subscribed = 2)",
+            params![account_id, service, node],
+            |row| row.get(0),
+        )
+    }
+
+    pub fn pending(conn: &Connection, account_id: i64) -> rusqlite::Result<Vec<PendingJoin>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT service, node, COALESCE(name, node) FROM spaces
+             WHERE account_id = ?1 AND subscribed = 2 ORDER BY position, node",
+        )?;
+        stmt.query_map(params![account_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect()
+    }
+
+    pub fn space_name(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT name FROM spaces WHERE account_id = ?1 AND service = ?2 AND node = ?3",
+        )?;
+        let mut rows = stmt.query_map(params![account_id, service, node], |row| row.get(0))?;
+        Ok(rows.next().transpose()?.flatten())
     }
 
     pub fn is_followed(

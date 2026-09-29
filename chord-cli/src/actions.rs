@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chord_core::features::roster::Subscription;
-use chord_core::features::spaces::JoinOutcome;
+use chord_core::features::spaces::{JoinOutcome, SpaceAccess};
 use chord_core::jid::{BareJid, Jid};
 
 use crate::json::{Obj, array};
@@ -135,16 +135,21 @@ pub async fn space_join(client: &Client, service: &str, node: &str) -> Result<()
     Ok(())
 }
 
-/// `space-create <name> [--private]`.
+/// `space-create <name> [--private | --authorize]`.
 pub async fn space_create(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliError> {
-    let (name, private) = match args {
-        [name] => (*name, false),
-        [name, "--private"] => (*name, true),
-        _ => return Err("usage: space-create <name> [--private]".to_owned().into()),
+    let (name, access) = match args {
+        [name] => (*name, SpaceAccess::Open),
+        [name, "--private"] => (*name, SpaceAccess::Whitelist),
+        [name, "--authorize"] => (*name, SpaceAccess::Authorize),
+        _ => {
+            return Err("usage: space-create <name> [--private | --authorize]"
+                .to_owned()
+                .into());
+        }
     };
     let (service, node) = client
         .handle
-        .create_space(name, private)
+        .create_space_with(name, access)
         .await
         .map_err(err)?;
     if opts.json {
@@ -452,6 +457,77 @@ pub async fn notify(client: &Client, args: &[&str]) -> Result<(), CliError> {
         .await
         .map_err(err)?;
     println!("{peer}: {}", level.as_str());
+    Ok(())
+}
+
+/// `space-pending`: the spaces that wait for the owner to approve our join.
+pub async fn space_pending(opts: &Opts, client: &Client) -> Result<(), CliError> {
+    let list = client.handle.pending_space_joins().await.map_err(err)?;
+    if opts.json {
+        let items = list.iter().map(|(service, node, name)| {
+            Obj::new()
+                .str("service", service)
+                .str("node", node)
+                .str("name", name)
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        println!("pending joins ({})", list.len());
+        for (service, node, name) in &list {
+            println!("  {name}  ({service} {node})");
+        }
+    }
+    Ok(())
+}
+
+/// `space-requests <service> <node>`: the join requests for a space that we own.
+pub async fn space_requests(
+    opts: &Opts,
+    client: &Client,
+    service: &str,
+    node: &str,
+) -> Result<(), CliError> {
+    let list = client
+        .handle
+        .space_join_requests(service, node)
+        .await
+        .map_err(err)?;
+    if opts.json {
+        let items = list.iter().map(|r| {
+            Obj::new()
+                .str("jid", &r.jid)
+                .opt_str("subid", r.subid.as_deref())
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        println!("join requests ({})", list.len());
+        for r in &list {
+            println!("  {}", r.jid);
+        }
+    }
+    Ok(())
+}
+
+/// `space-approve` and `space-deny <service> <node> <jid>`.
+pub async fn space_answer(
+    client: &Client,
+    service: &str,
+    node: &str,
+    jid: &str,
+    approve: bool,
+) -> Result<(), CliError> {
+    if approve {
+        client.handle.approve_space_join(service, node, jid).await
+    } else {
+        client.handle.deny_space_join(service, node, jid).await
+    }
+    .map_err(err)?;
+    println!(
+        "{} {jid} for {service} {node}",
+        if approve { "approved" } else { "denied" }
+    );
     Ok(())
 }
 
