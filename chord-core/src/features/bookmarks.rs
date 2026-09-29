@@ -11,3 +11,6 @@ pub(crate) fn on_connected(_ctx: &mut Ctx<'_>) {}
 pub(crate) fn on_response(_ctx: &mut Ctx<'_>, pending: Pending, _response: IqResponse) {
     match pending {}
 }
+
+/// A PEP event on our bookmarks node: bookmarks were added, changed, or removed.
+pub(crate) fn on_event(_ctx: &mut Ctx<'_>, _payload: xmpp_parsers::pubsub::event::Payload) {}

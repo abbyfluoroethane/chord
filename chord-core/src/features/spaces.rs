@@ -27,3 +27,11 @@ pub(crate) fn on_command(_ctx: &mut Ctx<'_>, command: Command) {
 pub(crate) fn offline(command: Command) {
     match command {}
 }
+
+/// A pubsub event from `service`, for example a change to a space node.
+pub(crate) fn on_event(
+    _ctx: &mut Ctx<'_>,
+    _service: &jid::Jid,
+    _payload: xmpp_parsers::pubsub::event::Payload,
+) {
+}

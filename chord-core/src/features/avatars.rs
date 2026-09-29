@@ -36,3 +36,11 @@ pub(crate) fn on_presence(
 ) -> bool {
     false
 }
+
+/// A PEP event on the avatar metadata node of `owner`.
+pub(crate) fn on_metadata_event(
+    _ctx: &mut Ctx<'_>,
+    _owner: &jid::BareJid,
+    _payload: xmpp_parsers::pubsub::event::Payload,
+) {
+}

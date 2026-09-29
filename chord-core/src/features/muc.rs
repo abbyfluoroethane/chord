@@ -40,3 +40,14 @@ pub(crate) fn on_presence(
 ) -> bool {
     false
 }
+
+/// Store a groupchat message from a room archive (MAM). `archive_id` is the MAM result
+/// id, which is the stanza-id of the room. The MAM module calls it.
+pub(crate) fn store_archived(
+    _ctx: &mut Ctx<'_>,
+    _room: &jid::BareJid,
+    _message: &xmpp_parsers::message::Message,
+    _archive_id: &str,
+    _timestamp: Option<i64>,
+) {
+}

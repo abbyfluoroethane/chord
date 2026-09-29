@@ -35,3 +35,7 @@ pub(crate) fn on_result(_ctx: &mut Ctx<'_>, _message: &xmpp_parsers::message::Me
 
 /// A timeline wants messages older than the oldest stored one.
 pub(crate) fn need_older(_ctx: &mut Ctx<'_>, _room: &jid::BareJid) {}
+
+/// Fetch the room archive after a join: the messages after the newest stored one.
+/// The MUC module calls it when the join completes.
+pub(crate) fn catch_up_room(_ctx: &mut Ctx<'_>, _room: &jid::BareJid) {}

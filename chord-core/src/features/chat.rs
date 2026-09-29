@@ -13,6 +13,24 @@ use crate::views::{ChannelScope, ViewKey};
 /// Store a chat message and report it, once per key. A message from our own account
 /// (a copy of a message that another client sent) is outgoing.
 pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
+    let ids = MessageIds::of(message, ctx.account);
+    store(ctx, message, ids, delay_ms(message));
+}
+
+/// Store a chat message from our account archive (MAM). `archive_id` is the MAM result
+/// id, which is the stanza-id of our server. The MAM module calls it.
+pub(crate) fn store_archived(
+    ctx: &mut Ctx<'_>,
+    message: &Message,
+    archive_id: &str,
+    timestamp: Option<i64>,
+) {
+    let mut ids = MessageIds::of(message, ctx.account);
+    ids.stanza_id = Some(archive_id.to_owned());
+    store(ctx, message, ids, timestamp.or_else(|| delay_ms(message)));
+}
+
+fn store(ctx: &mut Ctx<'_>, message: &Message, ids: MessageIds, timestamp: Option<i64>) {
     if !matches!(message.type_, MessageType::Chat | MessageType::Normal) {
         return;
     }
@@ -27,7 +45,6 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
     } else {
         (Direction::In, from.to_bare())
     };
-    let ids = MessageIds::of(message, ctx.account);
     let peer_str = peer.to_string();
 
     // A message that is stored under its origin-id gets its stanza-id now.
@@ -61,7 +78,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
         peer: &peer_str,
         sender: &sender,
         body,
-        timestamp: delay_ms(message),
+        timestamp,
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
