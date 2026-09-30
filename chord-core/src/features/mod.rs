@@ -19,6 +19,8 @@ pub mod chat_states;
 pub mod corrections;
 pub mod csi;
 pub mod disco;
+pub mod extdisco;
+pub mod jmi;
 pub mod mam;
 pub mod markers;
 pub mod message_ext;
@@ -90,6 +92,7 @@ pub(crate) enum Pending {
     Push(push::Pending),
     Blocking(blocking::Pending),
     Presence(presence::Pending),
+    Extdisco(extdisco::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -130,6 +133,8 @@ pub(crate) struct FeatureState {
     pub avatars: avatars::State,
     pub chat_states: chat_states::State,
     pub csi: csi::State,
+    pub extdisco: extdisco::State,
+    pub jmi: jmi::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -155,6 +160,8 @@ pub(crate) enum FeatureCommand {
     Presence(presence::Command),
     Search(search::Command),
     Csi(csi::Command),
+    Extdisco(extdisco::Command),
+    Jmi(jmi::Command),
 }
 
 /// Everything a feature function can use.
@@ -287,6 +294,9 @@ fn on_message(ctx: &mut Ctx<'_>, message: Message) {
     if mam::on_result(ctx, &message) {
         return;
     }
+    if extdisco::on_message(ctx, &message) || jmi::on_message(ctx, &message) {
+        return;
+    }
     chat_states::on_message(ctx, &message);
     if muc::on_message(ctx, &message) {
         return;
@@ -374,6 +384,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Push(p) => push::on_response(ctx, p, response),
         Pending::Blocking(p) => blocking::on_response(ctx, p, response),
         Pending::Presence(p) => presence::on_response(ctx, p, response),
+        Pending::Extdisco(p) => extdisco::on_response(ctx, p, response),
     }
 }
 
@@ -385,6 +396,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Spaces(_)
             | FeatureCommand::Upload(_)
             | FeatureCommand::Push(push::Command::Enable { .. })
+            | FeatureCommand::Extdisco(_)
             | FeatureCommand::Muc(muc::Command::RoomService { .. })
             | FeatureCommand::Blocking(
                 blocking::Command::Block { .. }
@@ -402,6 +414,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
 /// Service discovery finished. Run the commands that waited for it.
 pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
     blocking::on_services_ready(ctx);
+    extdisco::on_services_ready(ctx);
     for command in std::mem::take(&mut ctx.state.deferred) {
         dispatch(ctx, command);
     }
@@ -427,6 +440,8 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Presence(c) => presence::on_command(ctx, c),
         FeatureCommand::Search(c) => search::on_command(ctx, c),
         FeatureCommand::Csi(c) => csi::on_command(ctx, c),
+        FeatureCommand::Extdisco(c) => extdisco::on_command(ctx, c),
+        FeatureCommand::Jmi(c) => jmi::on_command(ctx, c),
     }
 }
 
@@ -470,6 +485,8 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Reactions(c) => reactions::offline(c),
         FeatureCommand::Replies(c) => replies::offline(c),
         FeatureCommand::Push(c) => push::offline(c),
+        FeatureCommand::Extdisco(c) => extdisco::offline(c),
+        FeatureCommand::Jmi(c) => jmi::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.
@@ -485,6 +502,8 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
 /// A session tick. Features use it for time limits.
 pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     chat_states::on_tick(ctx);
+    extdisco::on_tick(ctx);
+    jmi::on_tick(ctx);
 }
 
 /// A result from work outside the session.

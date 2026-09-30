@@ -146,6 +146,9 @@ pub enum ClientEvent {
     /// The roster entry or the presence of a contact changed. Read the contact list
     /// again with `contacts`.
     ContactChanged(BareJid),
+    /// A call changed (XEP-0353): someone proposes a call, a peer rings or proceeds, or a
+    /// call ends. This is the message layer only. See `features::jmi`.
+    Call(crate::features::jmi::CallEvent),
 }
 
 /// An error from a `ClientHandle` call.

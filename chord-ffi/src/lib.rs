@@ -9,10 +9,12 @@
 //! `cargo run -p chord-ffi --bin uniffi-bindgen -- generate --library
 //! target/debug/libchord_ffi.so --language kotlin --out-dir <dir>`
 
+mod calls;
 mod client;
 mod error;
 mod types;
 
+pub use calls::*;
 pub use client::*;
 pub use error::ChordError;
 pub use types::*;

@@ -252,7 +252,7 @@ impl ChordClient {
 
 impl ChordClient {
     /// Run a `ClientHandle` call on the client runtime.
-    async fn call<T, Fut>(
+    pub(crate) async fn call<T, Fut>(
         &self,
         f: impl FnOnce(ClientHandle) -> Fut + Send,
     ) -> Result<T, ChordError>

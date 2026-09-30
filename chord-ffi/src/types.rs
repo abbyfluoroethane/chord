@@ -462,6 +462,10 @@ pub enum ClientEvent {
     ContactChanged {
         jid: String,
     },
+    /// A call changed (XEP-0353). This is the message layer only.
+    Call {
+        event: crate::calls::CallEvent,
+    },
     /// An event that this binding version does not know.
     Unknown,
 }
@@ -667,6 +671,9 @@ impl From<core_actor::ClientEvent> for ClientEvent {
             E::BlockListChanged => Self::BlockListChanged,
             E::ContactChanged(jid) => Self::ContactChanged {
                 jid: jid.to_string(),
+            },
+            E::Call(event) => Self::Call {
+                event: event.into(),
             },
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,
