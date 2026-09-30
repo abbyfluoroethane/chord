@@ -44,6 +44,10 @@
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!   adhoc <jid> <node> [name=value ...]   run a one-step ad-hoc command (XEP-0050)
+//!   adhoc-list <jid> | adhoc-run <jid> <node> [name=value ...]   list, or run with all the steps
+//!   room-form <room> [name=value ...]   show the whole owner form (XEP-0045), or submit values
+//!   passwd                          change the password (XEP-0077). New one: CHORD_NEW_PASSWORD
+//!   register-form | register [name=value ...]   in-band registration of CHORD_JID (XEP-0077), no login
 //!   ice [--secrets]                 STUN and TURN servers of the server (XEP-0215)
 //!   call <jid> [audio|video] [--retract-after <secs>] [--finish]   propose a call (XEP-0353)
 //!   call-answer accept|reject [reason] [--ring] | call-watch [--secs N]
@@ -75,6 +79,7 @@
 
 mod actions;
 mod calls;
+mod forms;
 mod json;
 mod show;
 mod views;
@@ -110,7 +115,8 @@ read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds]
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
 invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
-adhoc <jid> <node> [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
+adhoc <jid> <node> [name=value ...] | adhoc-list <jid> | adhoc-run <jid> <node> [name=value ...] | \
+room-form <room> [name=value ...] | passwd | register-form | register [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
 call-answer accept|reject [reason] [--ring] | call-watch [--secs N] | \
 notify <jid> [all|mentions|none [--until <unix-ms>]] | \
 presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>]";
@@ -313,12 +319,24 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "search",
         "ice",
         "adhoc",
+        "adhoc-list",
+        "adhoc-run",
+        "room-form",
+        "passwd",
+        "register-form",
+        "register",
         "call",
         "call-answer",
         "call-watch",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
+    }
+    // Registration runs before there is an account to log in to.
+    match (*command, rest) {
+        ("register-form", args) => return forms::register_form(opts, args).await,
+        ("register", args) => return forms::register_account(opts, args).await,
+        _ => {}
     }
     let needs_session = !matches!(
         *command,
@@ -429,6 +447,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("push-list", []) => actions::push_list(opts, &client).await,
         ("ice", args) => calls::ice(opts, &client, args).await,
         ("adhoc", args) => calls::adhoc(opts, &client, args).await,
+        ("adhoc-list", args) => forms::adhoc_list(opts, &client, args).await,
+        ("adhoc-run", args) => forms::adhoc_run(opts, &client, args).await,
+        ("room-form", args) => forms::room_form(opts, &client, args).await,
+        ("passwd", args) => forms::passwd(&client, args).await,
         ("call", args) => calls::call(&mut client, args).await,
         ("call-answer", args) => calls::call_answer(&mut client, args).await,
         ("call-watch", args) => calls::call_watch(&mut client, args).await,
@@ -463,6 +485,14 @@ fn config() -> Result<SessionConfig, String> {
             let _ = PIN.set(pin.clone());
             Ok(config.with_pin(pin))
         }
+    Ok(SessionConfig::new(jid, password, server_addr()?))
+}
+
+/// The server of `CHORD_SERVER`: SRV lookup by default.
+fn server_addr() -> Result<ServerAddr, String> {
+    match std::env::var("CHORD_SERVER").ok().as_deref() {
+        None | Some("srv") => Ok(ServerAddr::Srv),
+        Some(s) => parse_server(s),
     }
 }
 
