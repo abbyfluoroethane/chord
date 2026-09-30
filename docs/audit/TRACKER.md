@@ -8,18 +8,20 @@ This file tracks the fixes from the audit of 2026-09-30. Nine read-only agents c
 
 | Area | Report | High | Medium | Low | Info | Done |
 |---|---|---|---|---|---|---|
-| RFC 6120 and RFC 6121 core session audit | [01-core-session.md](01-core-session.md) | 1 | 7 | 10 | 4 | 0 |
-| One-to-one messaging extensions | [02-messaging.md](02-messaging.md) | 3 | 7 | 10 | 5 | 0 |
-| XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 0 |
+| RFC 6120 and RFC 6121 core session audit | [01-core-session.md](01-core-session.md) | 1 | 7 | 10 | 4 | 1 |
+| One-to-one messaging extensions | [02-messaging.md](02-messaging.md) | 3 | 7 | 10 | 5 | 3 |
+| XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 2 |
 | XEP-0503 Spaces, Pubsub, Avatars, Profiles, Bookmarks, and xmpp: URIs | [04-spaces-pubsub.md](04-spaces-pubsub.md) | 0 | 7 | 20 | 3 | 0 |
-| End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 0 |
-| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 0 |
-| Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 0 |
-| Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 0 |
-| Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 0 |
-| **All** | | **19** | **77** | **97** | **25** | **0** |
+| End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 1 |
+| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 5 |
+| Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 2 |
+| Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 2 |
+| Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 2 |
+| **All** | | **19** | **77** | **97** | **25** | **18** |
 
 No finding is Critical. Update the Done column when you tick boxes.
+
+On 2026-09-30, 18 of the 19 High findings closed. CALLSPUSHPRESENCE-07 (#118) stays open until Chord has an Android app. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
 
 ## Decisions needed
 
@@ -30,21 +32,21 @@ No finding is Critical. Update the Done column when you tick boxes.
 
 ### Wave 1: bugs and security (about 1 to 2 days)
 
-- [ ] Accept only file paths that the file dialog returned in `upload` and `save_image` (BRIDGESECURITY-01, BRIDGESECURITY-02).
-- [ ] Keep a 1:1 message that has no stanza-id and no origin-id (MESSAGING-02).
-- [ ] Show a bounced message (`type=error`) as failed, with a retry (MESSAGING-03).
-- [ ] Add and remove room bookmarks from the desktop app, so a room that the user leaves stays gone (MUC-01, MUC-02).
+- [x] Accept only file paths that the file dialog returned in `upload` and `save_image` (BRIDGESECURITY-01, BRIDGESECURITY-02).
+- [x] Keep a 1:1 message that has no stanza-id and no origin-id (MESSAGING-02).
+- [x] Show a bounced message (`type=error`) as failed, with a retry (MESSAGING-03).
+- [x] Add and remove room bookmarks from the desktop app, so a room that the user leaves stays gone (MUC-01, MUC-02).
 - [ ] Save the display name for real, or remove the field (SPACESPUBSUB-05).
-- [ ] Make the header search work, or remove it until it works (DESKTOPGAPS-01).
-- [ ] Read the five notification settings in the app and the bridge (DESKTOPGAPS-02).
+- [x] Make the header search work, or remove it until it works (DESKTOPGAPS-01).
+- [x] Read the five notification settings in the app and the bridge (DESKTOPGAPS-02).
 
 ### Wave 2: compliance quick wins (about 2 to 3 days)
 
 - [ ] Advertise the features that Chord implements in disco#info and caps: markers, corrections, retraction, reactions, replies, fallback, OOB, hints, direct invites. Stop advertising MAM (MESSAGING-01, CORESESSION-08, COMPLIANCEXEPS-07).
-- [ ] Send a roster version only when the server offers `rosterver` (CORESESSION-01, RFC 6121 2.6.2).
-- [ ] Add Client State Indication, XEP-0352 (CALLSPUSHPRESENCE-06, COMPLIANCEXEPS-01).
+- [x] Send a roster version only when the server offers `rosterver` (CORESESSION-01, RFC 6121 2.6.2).
+- [x] Add Client State Indication, XEP-0352 (CALLSPUSHPRESENCE-06, COMPLIANCEXEPS-01).
 - [ ] Add client ping, XEP-0199, and shorter dead-connection detection (CORESESSION-06, CORESESSION-07).
-- [ ] Show `/me` messages as actions, XEP-0245 (COMPLIANCEXEPS-02).
+- [x] Show `/me` messages as actions, XEP-0245 (COMPLIANCEXEPS-02).
 - [ ] Send delivery receipts, XEP-0184 (MESSAGING-05).
 - [ ] Add direct TLS and the `_xmpps-client` SRV lookup, XEP-0368 (CORESESSION-02, COMPLIANCEXEPS-03).
 - [ ] Add MUC self-ping and a join timeout, XEP-0410 (MUC-03).
@@ -67,7 +69,7 @@ Report: [01-core-session.md](01-core-session.md)
 
 **High**
 
-- [ ] **CORESESSION-01** ([#1](https://github.com/abbyfluoroethane/chord/issues/1)) (Spec violation, RFC 6121 2.6.2): Read the `rosterver` namespace in `stream_features`.
+- [x] **CORESESSION-01** ([#1](https://github.com/abbyfluoroethane/chord/issues/1)) (Spec violation, RFC 6121 2.6.2): Read the `rosterver` namespace in `stream_features`.
 
 **Medium**
 
@@ -105,9 +107,9 @@ Report: [02-messaging.md](02-messaging.md)
 
 **High**
 
-- [ ] **MESSAGING-01** ([#19](https://github.com/abbyfluoroethane/chord/issues/19)) (Missing XEP, XEP-0115, XEP-0030): Add `urn:xmpp:chat-markers:0`, `urn:xmpp:message-correct:0`, `urn:xmpp:message-retract:1`, `urn:xmpp:reactions:0`, `urn:xmpp:reply:0`, `urn:xmpp:fallback:0`, ...
-- [ ] **MESSAGING-02** ([#20](https://github.com/abbyfluoroethane/chord/issues/20)) (Bug, XEP-0359, RFC 6121): Fall back to a local key: the `id` attribute with the sender JID, or a random local key.
-- [ ] **MESSAGING-03** ([#21](https://github.com/abbyfluoroethane/chord/issues/21)) (Bug, RFC 6121 8.5, RFC 6120 8.3): Parse the error message.
+- [x] **MESSAGING-01** ([#19](https://github.com/abbyfluoroethane/chord/issues/19)) (Missing XEP, XEP-0115, XEP-0030): Add `urn:xmpp:chat-markers:0`, `urn:xmpp:message-correct:0`, `urn:xmpp:message-retract:1`, `urn:xmpp:reactions:0`, `urn:xmpp:reply:0`, `urn:xmpp:fallback:0`, ...
+- [x] **MESSAGING-02** ([#20](https://github.com/abbyfluoroethane/chord/issues/20)) (Bug, XEP-0359, RFC 6121): Fall back to a local key: the `id` attribute with the sender JID, or a random local key.
+- [x] **MESSAGING-03** ([#21](https://github.com/abbyfluoroethane/chord/issues/21)) (Bug, RFC 6121 8.5, RFC 6120 8.3): Parse the error message.
 
 **Medium**
 
@@ -146,8 +148,8 @@ Report: [03-muc.md](03-muc.md)
 
 **High**
 
-- [ ] **MUC-01** ([#39](https://github.com/abbyfluoroethane/chord/issues/39)) (Missing feature, XEP-0402 section 3): Add Tauri commands.
-- [ ] **MUC-02** ([#40](https://github.com/abbyfluoroethane/chord/issues/40)) (Bug, XEP-0402 section 3): A room that the user leaves must not rejoin.
+- [x] **MUC-01** ([#39](https://github.com/abbyfluoroethane/chord/issues/39)) (Missing feature, XEP-0402 section 3): Add Tauri commands.
+- [x] **MUC-02** ([#40](https://github.com/abbyfluoroethane/chord/issues/40)) (Bug, XEP-0402 section 3): A room that the user leaves must not rejoin.
 
 **Medium**
 
@@ -229,7 +231,7 @@ Report: [05-security-auth.md](05-security-auth.md)
 
 **High**
 
-- [ ] **SECURITYAUTH-01** ([#88](https://github.com/abbyfluoroethane/chord/issues/88)) (Missing XEP, XEP-0384 (OMEMO 0.8+), XEP-0420 SCE): Plan OMEMO 0.8 (urn:xmpp:omemo:2) with SCE.
+- [x] **SECURITYAUTH-01** ([#88](https://github.com/abbyfluoroethane/chord/issues/88)) (Missing XEP, XEP-0384 (OMEMO 0.8+), XEP-0420 SCE): Plan OMEMO 0.8 (urn:xmpp:omemo:2) with SCE.
 
 **Medium**
 
@@ -270,12 +272,12 @@ Report: [06-calls-push-presence.md](06-calls-push-presence.md)
 
 **High**
 
-- [ ] **CALLSPUSHPRESENCE-01** ([#112](https://github.com/abbyfluoroethane/chord/issues/112)) (Missing feature, XEP-0166, XEP-0167, XEP-0176, XEP-0320): Plan a call stack.
-- [ ] **CALLSPUSHPRESENCE-02** ([#113](https://github.com/abbyfluoroethane/chord/issues/113)) (Missing XEP, XEP-0353): Add Jingle Message Initiation: `propose`, `ringing`, `proceed`, `reject`, `retract`.
-- [ ] **CALLSPUSHPRESENCE-03** ([#114](https://github.com/abbyfluoroethane/chord/issues/114)) (Missing XEP, XEP-0215): Fetch STUN and TURN credentials with `services` IQ at connect.
-- [ ] **CALLSPUSHPRESENCE-06** ([#117](https://github.com/abbyfluoroethane/chord/issues/117)) (Missing XEP, XEP-0352): Add `csi::inactive` and `csi::active` commands.
-- [ ] **CALLSPUSHPRESENCE-07** ([#118](https://github.com/abbyfluoroethane/chord/issues/118)) (Missing feature, XEP-0357): Write the Android glue: get the token from FCM or UnifiedPush, register with an app server, call `enable_push`.
-- [ ] **CALLSPUSHPRESENCE-13** ([#124](https://github.com/abbyfluoroethane/chord/issues/124)) (Missing feature, FFI parity): Add `set_presence` and `own_presence` to the FFI.
+- [x] **CALLSPUSHPRESENCE-01** ([#112](https://github.com/abbyfluoroethane/chord/issues/112)) (Missing feature, XEP-0166, XEP-0167, XEP-0176, XEP-0320): Plan a call stack.
+- [x] **CALLSPUSHPRESENCE-02** ([#113](https://github.com/abbyfluoroethane/chord/issues/113)) (Missing XEP, XEP-0353): Add Jingle Message Initiation: `propose`, `ringing`, `proceed`, `reject`, `retract`.
+- [x] **CALLSPUSHPRESENCE-03** ([#114](https://github.com/abbyfluoroethane/chord/issues/114)) (Missing XEP, XEP-0215): Fetch STUN and TURN credentials with `services` IQ at connect.
+- [x] **CALLSPUSHPRESENCE-06** ([#117](https://github.com/abbyfluoroethane/chord/issues/117)) (Missing XEP, XEP-0352): Add `csi::inactive` and `csi::active` commands.
+- [ ] **CALLSPUSHPRESENCE-07** ([#118](https://github.com/abbyfluoroethane/chord/issues/118)) (Missing feature, XEP-0357): Write the Android glue: get the token from FCM or UnifiedPush, register with an app server, call `enable_push`. Open: Chord has no Android app yet. The FFI, the ad-hoc commands and [android-push.md](../android-push.md) are ready.
+- [x] **CALLSPUSHPRESENCE-13** ([#124](https://github.com/abbyfluoroethane/chord/issues/124)) (Missing feature, FFI parity): Add `set_presence` and `own_presence` to the FFI.
 
 **Medium**
 
@@ -310,8 +312,8 @@ Report: [07-desktop-gaps.md](07-desktop-gaps.md)
 
 **High**
 
-- [ ] **DESKTOPGAPS-01** ([#135](https://github.com/abbyfluoroethane/chord/issues/135)) (UX gap): Build search on local store data first.
-- [ ] **DESKTOPGAPS-02** ([#136](https://github.com/abbyfluoroethane/chord/issues/136)) (Bug): Wire each toggle or remove it.
+- [x] **DESKTOPGAPS-01** ([#135](https://github.com/abbyfluoroethane/chord/issues/135)) (UX gap): Build search on local store data first.
+- [x] **DESKTOPGAPS-02** ([#136](https://github.com/abbyfluoroethane/chord/issues/136)) (Bug): Wire each toggle or remove it.
 
 **Medium**
 
@@ -356,8 +358,8 @@ Report: [08-bridge-security.md](08-bridge-security.md)
 
 **High**
 
-- [ ] **BRIDGESECURITY-01** ([#163](https://github.com/abbyfluoroethane/chord/issues/163)) (Security): Attack: a UI script bug (for example a theme or a future XSS) calls `upload` with `~/.ssh/id_ed25519` and any room JID.
-- [ ] **BRIDGESECURITY-02** ([#164](https://github.com/abbyfluoroethane/chord/issues/164)) (Security): Attack: a UI script calls `save_image` with an attacker image URL and a path such as `~/.zshrc`, `~/Library/LaunchAgents/x.plist` or `~/.ssh/authorized_keys`.
+- [x] **BRIDGESECURITY-01** ([#163](https://github.com/abbyfluoroethane/chord/issues/163)) (Security): Attack: a UI script bug (for example a theme or a future XSS) calls `upload` with `~/.ssh/id_ed25519` and any room JID.
+- [x] **BRIDGESECURITY-02** ([#164](https://github.com/abbyfluoroethane/chord/issues/164)) (Security): Attack: a UI script calls `save_image` with an attacker image URL and a path such as `~/.zshrc`, `~/Library/LaunchAgents/x.plist` or `~/.ssh/authorized_keys`.
 
 **Medium**
 
@@ -392,8 +394,8 @@ Report: [09-compliance-xeps.md](09-compliance-xeps.md)
 
 **High**
 
-- [ ] **COMPLIANCEXEPS-01** ([#180](https://github.com/abbyfluoroethane/chord/issues/180)) (Missing XEP, XEP-0352, Mobile Core): Send `<inactive/>` when the app is in the background and `<active/>` when it returns.
-- [ ] **COMPLIANCEXEPS-02** ([#181](https://github.com/abbyfluoroethane/chord/issues/181)) (Missing XEP, XEP-0245, IM Core): Show a body that starts with `/me ` as an action line ("* Alice waves").
+- [x] **COMPLIANCEXEPS-01** ([#180](https://github.com/abbyfluoroethane/chord/issues/180)) (Missing XEP, XEP-0352, Mobile Core): Send `<inactive/>` when the app is in the background and `<active/>` when it returns.
+- [x] **COMPLIANCEXEPS-02** ([#181](https://github.com/abbyfluoroethane/chord/issues/181)) (Missing XEP, XEP-0245, IM Core): Show a body that starts with `/me ` as an action line ("* Alice waves").
 
 **Medium**
 
