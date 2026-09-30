@@ -133,6 +133,14 @@ pub enum ClientEvent {
         reason: Option<String>,
         password: Option<String>,
     },
+    /// The owner destroyed a room that we were in (XEP-0045, section 10.9). The room is
+    /// gone: Chord left it and retracted its bookmark. `alternate` is the room that the
+    /// owner names for the people of the old room, if any.
+    RoomDestroyed {
+        room: BareJid,
+        reason: Option<String>,
+        alternate: Option<BareJid>,
+    },
     /// The people who type in a conversation changed (XEP-0085). `peer` is the bare JID of
     /// a chat or a room, or room@service/nick for a private message. `typers` holds bare
     /// JIDs in a chat and nicks in a room. An empty list means nobody types now.
@@ -175,6 +183,25 @@ pub enum ClientError {
     Unsupported(String),
     /// The actor stopped.
     ActorGone,
+}
+
+impl ClientError {
+    /// The XMPP error condition of a `Server` error, for example `not-authorized` (a room
+    /// password is missing or wrong), `conflict` (nick in use) or `registration-required`
+    /// (members only). `None` for any other error.
+    pub fn condition(&self) -> Option<&str> {
+        let Self::Server(text) = self else {
+            return None;
+        };
+        let end = text.find([':', ' ']).unwrap_or(text.len());
+        let (condition, rest) = text.split_at(end);
+        let valid = !condition.is_empty()
+            && condition
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '-')
+            && (rest.is_empty() || rest.starts_with(':') || rest.starts_with(" ("));
+        valid.then_some(condition)
+    }
 }
 
 impl fmt::Display for ClientError {

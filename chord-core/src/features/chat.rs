@@ -32,6 +32,9 @@ pub(crate) fn store_archived(
     archive_id: &str,
     timestamp: Option<i64>,
 ) {
+    if super::muc::is_invitation(message) {
+        return;
+    }
     let mut ids = MessageIds::of(message, ctx.account);
     ids.stanza_id = Some(archive_id.to_owned());
     // History is not news: it goes to the store and the views, but not to the events.

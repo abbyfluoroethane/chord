@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use chord_core::actor;
 use chord_core::actor::ClientEvent;
-use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomSettings};
+use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomRole, RoomSettings};
 use chord_core::features::notify::{NotificationLevel, NotificationSetting};
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
@@ -452,16 +452,51 @@ pub async fn search_messages(
 
 // ---------------------------------------------------------------- rooms
 
+/// Join a room. With no nick, the room may have reserved one for us (XEP-0045, 7.12),
+/// else the stored nick or the local part of the JID is the nick. A wrong or missing
+/// password fails with the code `notAuthorized`: ask for one and call again.
 #[tauri::command]
 pub async fn join_room(
     state: State<'_, AppState>,
     room: String,
-    nick: String,
+    nick: Option<String>,
     password: Option<String>,
+) -> Res<()> {
+    let handle = state.handle()?;
+    let room = bare(&room)?;
+    match nick {
+        Some(nick) => handle.join_room(room, nick, password).await?,
+        None => handle.join_room_default_nick(room, password).await?,
+    }
+    Ok(())
+}
+
+/// Set the subject of a room that we are in (XEP-0045, 8.1). An empty text clears it.
+#[tauri::command]
+pub async fn set_room_subject(
+    state: State<'_, AppState>,
+    room: String,
+    subject: String,
 ) -> Res<()> {
     Ok(state
         .handle()?
-        .join_room(bare(&room)?, nick, password)
+        .set_room_subject(bare(&room)?, subject)
+        .await?)
+}
+
+/// Set the role of an occupant by nick: none kicks, visitor mutes, participant gives
+/// voice, moderator makes a moderator.
+#[tauri::command]
+pub async fn set_room_role(
+    state: State<'_, AppState>,
+    room: String,
+    nick: String,
+    role: RoomRole,
+    reason: Option<String>,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .set_room_role(bare(&room)?, nick, role, reason)
         .await?)
 }
 

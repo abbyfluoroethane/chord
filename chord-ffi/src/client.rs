@@ -565,6 +565,40 @@ impl ChordClient {
             .await
     }
 
+    /// Join a room with no nick of our own. The room may have reserved a nick for us
+    /// (XEP-0045, section 7.12): Chord uses it. Else the nick is the stored one or the local
+    /// part of our JID. The errors are those of `join_room`.
+    pub async fn join_room_default_nick(
+        &self,
+        room: String,
+        password: Option<String>,
+    ) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        self.call(move |h| async move { h.join_room_default_nick(room, password).await })
+            .await
+    }
+
+    /// Set the subject of a room that we are in. An empty text clears it.
+    pub async fn set_room_subject(&self, room: String, subject: String) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        self.call(move |h| async move { h.set_room_subject(room, subject).await })
+            .await
+    }
+
+    /// Set the role of an occupant, by nick: `None` kicks, `Visitor` mutes, `Participant`
+    /// gives voice. We need the right to do it.
+    pub async fn set_room_role(
+        &self,
+        room: String,
+        nick: String,
+        role: RoomRole,
+        reason: Option<String>,
+    ) -> Result<(), ChordError> {
+        let room = parse_bare(&room)?;
+        self.call(move |h| async move { h.set_room_role(room, nick, role.into(), reason).await })
+            .await
+    }
+
     /// Set the affiliation of a JID with a room. We need the right to do it.
     pub async fn set_room_affiliation(
         &self,

@@ -449,6 +449,13 @@ pub enum ClientEvent {
         reason: Option<String>,
         password: Option<String>,
     },
+    /// The owner destroyed a room that we were in. Chord left it and retracted its
+    /// bookmark. `alternate` is the room that the owner names instead, if any.
+    RoomDestroyed {
+        room: String,
+        reason: Option<String>,
+        alternate: Option<String>,
+    },
     /// The people who type in a conversation changed (XEP-0085). `peer` is a bare JID, or
     /// room@service/nick for a private message. `typers` are bare JIDs in a chat and nicks
     /// in a room. An empty list means nobody types.
@@ -492,6 +499,27 @@ impl From<RoomAffiliation> for core_muc::RoomAffiliation {
     }
 }
 
+/// The role of an occupant in a room. `set_room_role` sets it: `None` kicks, `Visitor`
+/// mutes, `Participant` gives voice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum RoomRole {
+    None,
+    Visitor,
+    Participant,
+    Moderator,
+}
+
+impl From<RoomRole> for core_muc::RoomRole {
+    fn from(r: RoomRole) -> Self {
+        match r {
+            RoomRole::None => Self::None,
+            RoomRole::Visitor => Self::Visitor,
+            RoomRole::Participant => Self::Participant,
+            RoomRole::Moderator => Self::Moderator,
+        }
+    }
+}
+
 /// Room settings for `configure_room`. A field that is `None` stays as it is.
 #[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
 pub struct RoomSettings {
@@ -506,6 +534,7 @@ impl From<RoomSettings> for core_muc::RoomSettings {
             name: s.name,
             public: s.public,
             members_only: s.members_only,
+            password: None,
         }
     }
 }
@@ -685,6 +714,15 @@ impl From<core_actor::ClientEvent> for ClientEvent {
                 from: from.to_string(),
                 reason,
                 password,
+            },
+            E::RoomDestroyed {
+                room,
+                reason,
+                alternate,
+            } => Self::RoomDestroyed {
+                room: room.to_string(),
+                reason,
+                alternate: alternate.map(|a| a.to_string()),
             },
             E::Typing { peer, typers } => Self::Typing { peer, typers },
             E::BlockListChanged => Self::BlockListChanged,

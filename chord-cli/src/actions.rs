@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use chord_core::features::muc::{RoomAffiliation, RoomSettings};
+use chord_core::features::muc::{RoomAffiliation, RoomRole, RoomSettings};
 use chord_core::features::presence::{Availability, InvisibleMethod};
 use chord_core::features::roster::Subscription;
 use chord_core::features::spaces::{JoinOutcome, SpaceAccess};
@@ -30,24 +30,146 @@ pub async fn join(client: &Client, args: &[&str]) -> Result<(), CliError> {
         _ => return Err(usage()),
     };
     let room = bare(room)?;
-    let nick = nick.unwrap_or_else(|| {
-        client
-            .account
-            .node()
-            .map_or_else(|| "chord".to_owned(), |n| n.to_string())
-    });
     let password = std::env::var("CHORD_ROOM_PASSWORD").ok();
+    // With no nick, the room may have reserved one for us (XEP-0045, 7.12).
+    let joined = match &nick {
+        Some(nick) => {
+            client
+                .handle
+                .join_room(room.clone(), nick.clone(), password)
+                .await
+        }
+        None => {
+            client
+                .handle
+                .join_room_default_nick(room.clone(), password)
+                .await
+        }
+    };
+    if let Err(e) = &joined
+        && e.condition() == Some("not-authorized")
+    {
+        return Err(format!(
+            "{room} needs a password: set CHORD_ROOM_PASSWORD and try again ({e})"
+        )
+        .into());
+    }
+    joined.map_err(err)?;
     client
         .handle
-        .join_room(room.clone(), nick.clone(), password)
+        .add_bookmark(room.clone(), None, true, nick.clone())
         .await
         .map_err(err)?;
+    match nick {
+        Some(nick) => println!("joined {room} as {nick}"),
+        None => println!("joined {room}"),
+    }
+    Ok(())
+}
+
+/// Join a room that we joined before, and wait for it, so that a room command that follows
+/// finds us in the room. Each CLI command is a new session.
+async fn enter(client: &Client, room: &BareJid) -> Result<(), CliError> {
     client
         .handle
-        .add_bookmark(room.clone(), None, true, Some(nick.clone()))
+        .join_room_default_nick(room.clone(), None)
+        .await
+        .map_err(err)
+}
+
+/// `subject <room> <text>`: set the subject of a room (an empty text clears it).
+pub async fn subject(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let [room, text] = args else {
+        return Err("usage: subject <room> <text>".to_owned().into());
+    };
+    let room = bare(room)?;
+    enter(client, &room).await?;
+    client
+        .handle
+        .set_room_subject(room.clone(), (*text).to_owned())
         .await
         .map_err(err)?;
-    println!("joined {room} as {nick}");
+    println!("the subject of {room} is now: {text}");
+    Ok(())
+}
+
+/// `room-role <room> <nick> <none|visitor|participant|moderator> [reason]`: set the role
+/// of an occupant. `none` kicks, `visitor` mutes, `participant` gives voice back.
+pub async fn room_role(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (room, nick, word, reason) = match args {
+        [room, nick, word] => (*room, *nick, *word, None),
+        [room, nick, word, reason] => (*room, *nick, *word, Some((*reason).to_owned())),
+        _ => {
+            return Err(
+                "usage: room-role <room> <nick> <none|visitor|participant|moderator> [reason]"
+                    .to_owned()
+                    .into(),
+            );
+        }
+    };
+    let role = match word {
+        "none" => RoomRole::None,
+        "visitor" => RoomRole::Visitor,
+        "participant" => RoomRole::Participant,
+        "moderator" => RoomRole::Moderator,
+        _ => return Err(format!("unknown role {word}").into()),
+    };
+    let room = bare(room)?;
+    enter(client, &room).await?;
+    client
+        .handle
+        .set_room_role(room.clone(), nick.to_owned(), role, reason)
+        .await
+        .map_err(err)?;
+    println!("{nick} is now {word} in {room}");
+    Ok(())
+}
+
+/// `room-destroy <room> [reason] [--alternate <room>]`: destroy a room that we own.
+pub async fn room_destroy(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage =
+        || CliError::from("usage: room-destroy <room> [reason] [--alternate <room>]".to_owned());
+    let (room, mut rest) = args.split_first().ok_or_else(usage)?;
+    let mut reason = None;
+    let mut alternate = None;
+    while let Some((word, tail)) = rest.split_first() {
+        rest = tail;
+        if *word == "--alternate" {
+            let (alt, tail) = rest.split_first().ok_or_else(usage)?;
+            alternate = Some(bare(alt)?);
+            rest = tail;
+        } else if reason.is_none() {
+            reason = Some((*word).to_owned());
+        } else {
+            return Err(usage());
+        }
+    }
+    client
+        .handle
+        .destroy_room(bare(room)?, reason, alternate)
+        .await
+        .map_err(err)?;
+    println!("destroyed {room}");
+    Ok(())
+}
+
+/// `decline <room> <from-jid> [reason]`: decline an invitation (a mediated decline).
+pub async fn decline(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (room, from, reason) = match args {
+        [room, from] => (*room, *from, None),
+        [room, from, reason] => (*room, *from, Some((*reason).to_owned())),
+        _ => {
+            return Err("usage: decline <room> <from-jid> [reason]"
+                .to_owned()
+                .into());
+        }
+    };
+    client
+        .handle
+        .decline_room_invite(bare(room)?, bare(from)?, reason)
+        .await
+        .map_err(err)?;
+    println!("declined the invitation from {from} to {room}");
     Ok(())
 }
 
@@ -183,6 +305,7 @@ pub async fn room_info(opts: &Opts, client: &Client, room: &str) -> Result<(), C
                 .opt_num("occupants", c.occupants.map(i64::from))
                 .bool("password_protected", c.password_protected)
                 .bool("members_only", c.members_only)
+                .bool("change_subject", c.change_subject)
                 .finish()
         );
     } else {
@@ -192,6 +315,9 @@ pub async fn room_info(opts: &Opts, client: &Client, room: &str) -> Result<(), C
         }
         if let Some(n) = c.occupants {
             println!("  {n} people");
+        }
+        if c.change_subject {
+            println!("  anyone may change the subject");
         }
     }
     Ok(())
@@ -723,9 +849,13 @@ pub async fn invite(client: &Client, args: &[&str]) -> Result<(), CliError> {
         [room, jid, reason] => (*room, *jid, Some((*reason).to_owned())),
         _ => return Err("usage: invite <room> <jid> [reason]".to_owned().into()),
     };
+    let room = bare(room)?;
+    // The room takes an invitation from an occupant only, and an owner grants membership
+    // only from inside the room.
+    enter(client, &room).await?;
     client
         .handle
-        .invite_to_room(bare(room)?, bare(jid)?, reason)
+        .invite_to_room(room.clone(), bare(jid)?, reason)
         .await
         .map_err(err)?;
     println!("invited {jid} to {room}");
@@ -736,7 +866,8 @@ pub async fn invite(client: &Client, args: &[&str]) -> Result<(), CliError> {
 pub async fn room_config(client: &Client, args: &[&str]) -> Result<(), CliError> {
     let usage = || {
         CliError::from(
-            "usage: room-config <room> [--name N] [--public|--private] [--members-only|--open]"
+            "usage: room-config <room> [--name N] [--public|--private] [--members-only|--open] \
+             [--protect|--unprotect]"
                 .to_owned(),
         )
     };
@@ -758,6 +889,12 @@ pub async fn room_config(client: &Client, args: &[&str]) -> Result<(), CliError>
             "--private" => settings.public = Some(false),
             "--members-only" => settings.members_only = Some(true),
             "--open" => settings.members_only = Some(false),
+            // The password comes from the environment, never from an argument.
+            "--protect" => match std::env::var("CHORD_ROOM_PASSWORD") {
+                Ok(password) if !password.is_empty() => settings.password = Some(password),
+                _ => return Err("--protect needs CHORD_ROOM_PASSWORD".to_owned().into()),
+            },
+            "--unprotect" => settings.password = Some(String::new()),
             _ => return Err(usage()),
         }
     }

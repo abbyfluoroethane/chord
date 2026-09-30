@@ -39,6 +39,8 @@ const NS_DATA: &str = "jabber:x:data";
 const NS_DISCO_INFO: &str = "http://jabber.org/protocol/disco#info";
 /// The form type of the room information in a disco#info answer (XEP-0045, 15.5).
 const NS_ROOM_INFO: &str = "http://jabber.org/protocol/muc#roominfo";
+/// The disco#info node that answers with our reserved nick (XEP-0045, 7.12).
+const NODE_RESERVED_NICK: &str = "x-roomuser-item";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
@@ -75,6 +77,34 @@ impl RoomAffiliation {
     }
 }
 
+/// The role of an occupant in a room (XEP-0045, section 5.1). `set_room_role` sets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
+pub enum RoomRole {
+    /// Out of the room: a kick.
+    None,
+    /// Can read, cannot speak: a mute.
+    Visitor,
+    /// Can speak: a grant of voice.
+    Participant,
+    Moderator,
+}
+
+impl RoomRole {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Visitor => "visitor",
+            Self::Participant => "participant",
+            Self::Moderator => "moderator",
+        }
+    }
+}
+
 /// Room settings that `configure_room` changes. A `None` field stays as it is.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(
@@ -89,6 +119,9 @@ pub struct RoomSettings {
     pub public: Option<bool>,
     /// True lets only members enter (`muc#roomconfig_membersonly`).
     pub members_only: Option<bool>,
+    /// The password to enter the room (`muc#roomconfig_roomsecret`). An empty string
+    /// removes the password.
+    pub password: Option<String>,
 }
 
 /// What `room_info` reads about a room, for an invite card. It is read only.
@@ -108,6 +141,9 @@ pub struct RoomCard {
     pub occupants: Option<u32>,
     pub password_protected: bool,
     pub members_only: bool,
+    /// True when any occupant may change the subject (`muc#roominfo_changesubject`).
+    /// False when only moderators may, or when the room does not say.
+    pub change_subject: bool,
 }
 
 /// A join that waits for the self-presence or an error.
@@ -139,6 +175,11 @@ pub(crate) struct State {
     iq_outbox: HashMap<BareJid, Vec<(Iq, super::Pending)>>,
     /// A nick change that arrived while the join ran. It runs when the join completes.
     pending_nick: HashMap<BareJid, (String, Reply)>,
+    /// Subject changes that wait for the room: the message id, the room, and the reply.
+    /// The echo of the subject or an error message answers them.
+    subjects: HashMap<String, (BareJid, Reply)>,
+    /// Joins that wait for the reserved nick of the room (XEP-0045, 7.12).
+    reserving: HashMap<BareJid, (Option<String>, Vec<Reply>)>,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -166,6 +207,8 @@ pub(crate) enum Pending {
     SettingsForm(BareJid, RoomSettings, Reply),
     /// The disco#info of a room, for `room_info`.
     Card(BareJid, oneshot::Sender<Result<RoomCard, ClientError>>),
+    /// The answer of a room to the question for our reserved nick. The join follows.
+    ReservedNick(BareJid),
     /// The answer to `grant_membership`. Nobody waits for it.
     Grant {
         room: BareJid,
@@ -245,6 +288,30 @@ pub(crate) enum Command {
         settings: RoomSettings,
         reply: Reply,
     },
+    /// Join with the nick that the room reserved for us, else the default nick.
+    JoinDefault {
+        room: BareJid,
+        password: Option<String>,
+        reply: Reply,
+    },
+    SetSubject {
+        room: BareJid,
+        subject: String,
+        reply: Reply,
+    },
+    SetRole {
+        room: BareJid,
+        nick: String,
+        role: RoomRole,
+        reason: Option<String>,
+        reply: Reply,
+    },
+    Destroy {
+        room: BareJid,
+        reason: Option<String>,
+        alternate: Option<BareJid>,
+        reply: Reply,
+    },
 }
 
 impl ClientHandle {
@@ -262,6 +329,78 @@ impl ClientHandle {
             room,
             nick,
             password,
+            reply,
+        })
+        .await
+    }
+
+    /// Join a room with no nick of our own. If the room reserved a nick for us (XEP-0045,
+    /// section 7.12), we use it. Else the nick is the stored one or the local part of our
+    /// JID. Errors are the same as for `join_room`.
+    pub async fn join_room_default_nick(
+        &self,
+        room: BareJid,
+        password: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::JoinDefault {
+            room,
+            password,
+            reply,
+        })
+        .await
+    }
+
+    /// Set the subject of a room that we are in (XEP-0045, section 8.1) and wait for the
+    /// room to announce it. An empty subject clears it. Fails with `ClientError::Invalid`
+    /// when we are not in the room, and with `ClientError::Server` when the room refuses
+    /// (`forbidden`: only moderators may change the subject).
+    pub async fn set_room_subject(
+        &self,
+        room: BareJid,
+        subject: String,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::SetSubject {
+            room,
+            subject,
+            reply,
+        })
+        .await
+    }
+
+    /// Set the role of an occupant, by nick (XEP-0045, sections 8.2, 8.3, 9.1 and 9.2):
+    /// `None` kicks, `Visitor` mutes, `Participant` grants voice, `Moderator` makes a
+    /// moderator. We need the right to do it. Fails with `ClientError::Server` when the
+    /// room refuses (`forbidden`, `not-allowed`, `item-not-found`).
+    pub async fn set_room_role(
+        &self,
+        room: BareJid,
+        nick: String,
+        role: RoomRole,
+        reason: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::SetRole {
+            room,
+            nick,
+            role,
+            reason,
+            reply,
+        })
+        .await
+    }
+
+    /// Destroy a room that we own (XEP-0045, section 10.9). The room tells its occupants
+    /// the `reason` and the `alternate` room, if given. Fails with `ClientError::Server`
+    /// when we are not an owner (`forbidden`).
+    pub async fn destroy_room(
+        &self,
+        room: BareJid,
+        reason: Option<String>,
+        alternate: Option<BareJid>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::Destroy {
+            room,
+            reason,
+            alternate,
             reply,
         })
         .await
@@ -469,6 +608,14 @@ pub(crate) fn next_session(ctx: &mut Ctx<'_>) -> State {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
     }
+    for (_, (_, reply)) in ctx.state.muc.subjects.drain() {
+        let _ = reply.send(Err(ClientError::NotConnected));
+    }
+    for (_, (_, replies)) in ctx.state.muc.reserving.drain() {
+        for reply in replies {
+            let _ = reply.send(Err(ClientError::NotConnected));
+        }
+    }
     State {
         previous,
         ..State::default()
@@ -522,6 +669,26 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             };
             for reply in replies {
                 let _ = reply.send(result.clone());
+            }
+        }
+        Pending::ReservedNick(room) => {
+            // An error or an empty answer means no reserved nick: use the default.
+            let lost = matches!(response, IqResponse::Lost);
+            let reserved = match response {
+                IqResponse::Result(Some(query)) => reserved_nick(&query),
+                IqResponse::Result(None) | IqResponse::Error(_) | IqResponse::Lost => None,
+            };
+            if let Some((password, replies)) = ctx.state.muc.reserving.remove(&room) {
+                if lost {
+                    for reply in replies {
+                        let _ = reply.send(Err(ClientError::NotConnected));
+                    }
+                    return;
+                }
+                let nick = reserved.or_else(|| default_nick(ctx, &room));
+                for reply in replies {
+                    join_room(ctx, &room, nick.clone(), password.clone(), Some(reply));
+                }
             }
         }
         Pending::Grant { room, jid } => match response {
@@ -744,10 +911,104 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             }
             let x = Element::builder("x", NS_MUC_USER).append(decline).build();
             let mut message = Message::new(Some(Jid::from(room)));
+            message.type_ = MessageType::Normal;
             message.id = Some(Id(new_id()));
             message.payloads.push(x);
             ctx.send(message);
             let _ = reply.send(Ok(()));
+        }
+        Command::JoinDefault {
+            room,
+            password,
+            reply,
+        } => {
+            let has_nick = ctx.state.muc.nicks.contains_key(&room)
+                || ctx.state.muc.joins.contains_key(&room)
+                || room_row(ctx, &room).is_some_and(|r| r.nick.is_some());
+            if has_nick {
+                join_room(ctx, &room, None, password, Some(reply));
+            } else if let Some((_, replies)) = ctx.state.muc.reserving.get_mut(&room) {
+                replies.push(reply);
+            } else {
+                // A first join: the room may have reserved a nick for us (XEP-0045, 7.12).
+                ctx.state
+                    .muc
+                    .reserving
+                    .insert(room.clone(), (password, vec![reply]));
+                let iq = Iq::Get {
+                    from: None,
+                    to: Some(Jid::from(room.clone())),
+                    id: String::new(),
+                    payload: format!(
+                        "<query xmlns='{NS_DISCO_INFO}' node='{NODE_RESERVED_NICK}'/>"
+                    )
+                    .parse()
+                    .expect("static XML"),
+                };
+                ctx.request(iq, super::Pending::Muc(Pending::ReservedNick(room)));
+            }
+        }
+        Command::SetSubject {
+            room,
+            subject,
+            reply,
+        } => {
+            if !ctx.state.muc.nicks.contains_key(&room) {
+                let _ = reply.send(Err(ClientError::Invalid(format!("not in the room {room}"))));
+                return;
+            }
+            let id = new_id();
+            let mut message = Message::groupchat(Jid::from(room.clone()));
+            message.id = Some(Id(id.clone()));
+            message
+                .subjects
+                .insert(xmpp_parsers::message::Lang(String::new()), subject);
+            ctx.send(message);
+            ctx.state.muc.subjects.insert(id, (room, reply));
+        }
+        Command::SetRole {
+            room,
+            nick,
+            role,
+            reason,
+            reply,
+        } => {
+            let mut item = Element::builder("item", NS_MUC_ADMIN)
+                .attr(nc("nick"), nick)
+                .attr(nc("role"), role.as_str());
+            if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+                item = item.append(Element::builder("reason", NS_MUC_ADMIN).append(reason));
+            }
+            let iq = Iq::Set {
+                from: None,
+                to: Some(Jid::from(room)),
+                id: String::new(),
+                payload: Element::builder("query", NS_MUC_ADMIN).append(item).build(),
+            };
+            ctx.request(iq, super::Pending::Muc(Pending::Simple(reply)));
+        }
+        Command::Destroy {
+            room,
+            reason,
+            alternate,
+            reply,
+        } => {
+            let mut destroy = Element::builder("destroy", NS_MUC_OWNER);
+            if let Some(alternate) = alternate {
+                destroy = destroy.attr(nc("jid"), alternate.to_string());
+            }
+            if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+                destroy = destroy.append(Element::builder("reason", NS_MUC_OWNER).append(reason));
+            }
+            let iq = Iq::Set {
+                from: None,
+                to: Some(Jid::from(room)),
+                id: String::new(),
+                payload: Element::builder("query", NS_MUC_OWNER)
+                    .append(destroy)
+                    .build(),
+            };
+            ctx.request(iq, super::Pending::Muc(Pending::Simple(reply)));
         }
         Command::Configure {
             room,
@@ -797,7 +1058,27 @@ fn room_card(room: &BareJid, query: Element) -> Result<RoomCard, ClientError> {
         occupants: value("muc#roominfo_occupants").and_then(|v| v.trim().parse().ok()),
         password_protected: feature("passwordprotected"),
         members_only: feature("membersonly"),
+        change_subject: value("muc#roominfo_changesubject")
+            .is_some_and(|v| matches!(v.trim(), "1" | "true")),
     })
+}
+
+/// The reserved nick in the disco#info answer of the node `x-roomuser-item`: the name of
+/// its identity (XEP-0045, 7.12).
+fn reserved_nick(query: &Element) -> Option<String> {
+    query
+        .children()
+        .find(|c| c.name() == "identity")
+        .and_then(|i| i.attr("name"))
+        .filter(|n| !n.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// The nick for a room with no nick of ours: the local part of our JID.
+fn default_nick(ctx: &Ctx<'_>, room: &BareJid) -> Option<String> {
+    room_row(ctx, room)
+        .and_then(|row| row.nick)
+        .or_else(|| ctx.account.node().map(|n| n.as_str().to_owned()))
 }
 
 /// True when we are owner or admin of a room that we are in.
@@ -859,6 +1140,8 @@ fn send_invitation(ctx: &mut Ctx<'_>, room: &BareJid, jid: &BareJid, reason: Opt
     }
     let x = Element::builder("x", NS_MUC_USER).append(invite).build();
     let mut message = Message::new(Some(Jid::from(room.clone())));
+    // A room takes an invitation in a normal message. A chat message is refused.
+    message.type_ = MessageType::Normal;
     message.id = Some(Id(new_id()));
     message.payloads.push(x);
     ctx.send(message);
@@ -895,9 +1178,28 @@ fn settings_submit(form: &DataForm, settings: &RoomSettings) -> Element {
     {
         x = x.append(field("muc#roomconfig_membersonly", flag(members_only)));
     }
+    if let Some(password) = &settings.password {
+        if has("muc#roomconfig_passwordprotectedroom") {
+            x = x.append(field(
+                "muc#roomconfig_passwordprotectedroom",
+                flag(!password.is_empty()),
+            ));
+        }
+        if has("muc#roomconfig_roomsecret") {
+            x = x.append(field("muc#roomconfig_roomsecret", password));
+        }
+    }
     Element::builder("query", NS_MUC_OWNER)
         .append(x.build())
         .build()
+}
+
+/// Whether a message is an invitation to a room: mediated (XEP-0045, 7.8.2) or direct
+/// (XEP-0249). An archived invitation is old news: it is not a chat message.
+pub(crate) fn is_invitation(message: &Message) -> bool {
+    message.payloads.iter().any(|x| {
+        (x.is("x", NS_MUC_USER) && x.has_child("invite", NS_MUC_USER)) || x.is("x", NS_CONFERENCE)
+    })
 }
 
 /// An invitation to a room: mediated (XEP-0045, 7.8.2) or direct (XEP-0249). Emits
@@ -906,10 +1208,16 @@ fn on_invitation(ctx: &mut Ctx<'_>, message: &Message) -> bool {
     let Some(from) = &message.from else {
         return false;
     };
+    // The copy of an invitation that another session of ours sent (XEP-0280) is not an
+    // invitation for us.
+    let ours = from.to_bare() == *ctx.account;
     for x in &message.payloads {
         if x.is("x", NS_MUC_USER)
             && let Some(invite) = x.get_child("invite", NS_MUC_USER)
         {
+            if ours {
+                return true;
+            }
             let inviter = invite
                 .attr("from")
                 .and_then(|f| f.parse::<Jid>().ok())
@@ -933,6 +1241,9 @@ fn on_invitation(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         if x.is("x", NS_CONFERENCE)
             && let Some(room) = x.attr("jid").and_then(|j| j.parse::<Jid>().ok())
         {
+            if ours {
+                return true;
+            }
             let non_empty = |name: &str| x.attr(name).filter(|v| !v.is_empty()).map(str::to_owned);
             ctx.emit(ClientEvent::RoomInvite {
                 room: room.to_bare(),
@@ -969,6 +1280,10 @@ pub(crate) fn offline(command: Command) {
     | Command::Invite { reply, .. }
     | Command::DeclineInvite { reply, .. }
     | Command::Configure { reply, .. }
+    | Command::JoinDefault { reply, .. }
+    | Command::SetSubject { reply, .. }
+    | Command::SetRole { reply, .. }
+    | Command::Destroy { reply, .. }
     | Command::Leave { reply, .. }
     | Command::ChangeNick { reply, .. }
     | Command::AddBookmark { reply, .. }
@@ -1652,11 +1967,64 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         MessageType::Groupchat => {
             if let Some((_, subject)) = message.get_best_subject(vec![]) {
                 set_subject(ctx, &room, subject);
+                // The room announces our own change: the change is done.
+                if from
+                    .resource()
+                    .is_some_and(|n| is_ours(ctx, &room, n.as_str(), message))
+                {
+                    let ids: Vec<String> = ctx
+                        .state
+                        .muc
+                        .subjects
+                        .iter()
+                        .filter(|(_, (r, _))| *r == room)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    for id in ids {
+                        if let Some((_, reply)) = ctx.state.muc.subjects.remove(&id) {
+                            let _ = reply.send(Ok(()));
+                        }
+                    }
+                }
             }
             let ids = MessageIds::of(message, &room);
             store(ctx, &room, message, ids, delay_ms(message), true);
         }
-        MessageType::Error => log::warn!("error message from the room {from}"),
+        MessageType::Error => {
+            let waiting = message
+                .id
+                .as_ref()
+                .and_then(|id| ctx.state.muc.subjects.remove(&id.0));
+            if let Some((_, reply)) = waiting {
+                let error = message
+                    .payloads
+                    .iter()
+                    .find_map(|p| StanzaError::try_from(p.clone()).ok());
+                let _ = reply.send(Err(ClientError::Server(match &error {
+                    Some(e) if e.defined_condition == DefinedCondition::Forbidden => {
+                        "forbidden: only moderators may change the subject".to_owned()
+                    }
+                    Some(e) => error_text(e),
+                    None => "error".to_owned(),
+                })));
+            } else if message
+                .payloads
+                .iter()
+                .any(|x| x.is("x", NS_MUC_USER) && x.has_child("invite", NS_MUC_USER))
+            {
+                // The room refused our invitation, for example when we are not in it.
+                let text = message
+                    .payloads
+                    .iter()
+                    .find_map(|p| StanzaError::try_from(p.clone()).ok())
+                    .map_or_else(|| "error".to_owned(), |e| error_text(&e));
+                ctx.emit(ClientEvent::Notice(format!(
+                    "The room {room} refused the invitation: {text}"
+                )));
+            } else {
+                log::warn!("error message from the room {from}");
+            }
+        }
         // Private messages between occupants, and mediated invites.
         _ => {
             let ids = MessageIds::of(message, ctx.account);
@@ -1869,7 +2237,65 @@ fn on_error(ctx: &mut Ctx<'_>, room: &BareJid, nick: Option<&str>, presence: &Pr
     }
 }
 
+/// The `destroy` child of the `x` element of a presence: the room is gone (XEP-0045,
+/// 10.9). `xmpp-parsers` has no type for it, so this reads the raw element. Gives the
+/// reason and the alternate room.
+fn destroy_of(presence: &Presence) -> Option<(Option<String>, Option<BareJid>)> {
+    let destroy = presence
+        .payloads
+        .iter()
+        .filter(|p| p.is("x", NS_MUC_USER))
+        .find_map(|x| x.get_child("destroy", NS_MUC_USER))?;
+    let reason = destroy
+        .get_child("reason", NS_MUC_USER)
+        .map(Element::text)
+        .filter(|r| !r.trim().is_empty());
+    let alternate = destroy
+        .attr("jid")
+        .and_then(|j| j.parse::<Jid>().ok())
+        .map(|j| j.to_bare());
+    Some((reason, alternate))
+}
+
+/// The owner destroyed the room. We are out of it for good: stop the session state of the
+/// room, retract its bookmark (it would join a room that is gone at each login), and say
+/// why. The stored messages stay. Each occupant gets the same presence: report it once.
+fn on_destroyed(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    reason: Option<String>,
+    alternate: Option<BareJid>,
+) {
+    if !is_joined_or_joining(ctx, room) {
+        return;
+    }
+    ctx.state.muc.nicks.remove(room);
+    if let Some(join) = ctx.state.muc.joins.remove(room) {
+        for reply in join.replies {
+            let _ = reply.send(Err(ClientError::Server("the room was destroyed".into())));
+        }
+    }
+    drop_outbox(ctx, room);
+    set_joined(ctx, room, false);
+    clear_occupants(ctx, room);
+    if bookmarks::is_bookmarked(ctx, room) {
+        // Nobody waits for the answer.
+        let (reply, _) = oneshot::channel();
+        bookmarks::remove(ctx, room.clone(), reply);
+    }
+    ctx.emit(ClientEvent::RoomDestroyed {
+        room: room.clone(),
+        reason,
+        alternate,
+    });
+    mark_room(ctx, room);
+}
+
 fn on_unavailable(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presence) {
+    if let Some((reason, alternate)) = destroy_of(presence) {
+        on_destroyed(ctx, room, reason, alternate);
+        return;
+    }
     let user = muc_user(presence);
     let has = |s: Status| user.as_ref().is_some_and(|u| u.status.contains(&s));
     let ours = our_nick(ctx, room);
@@ -2167,8 +2593,10 @@ pub(crate) fn error_text(error: &StanzaError) -> String {
             "registration-required: only members can join the room"
         }
         DefinedCondition::Forbidden => "forbidden: not allowed, or banned",
-        DefinedCondition::ItemNotFound => "item-not-found",
-        DefinedCondition::ServiceUnavailable => "service-unavailable",
+        DefinedCondition::ItemNotFound => {
+            "item-not-found: the room does not exist, or it is locked"
+        }
+        DefinedCondition::ServiceUnavailable => "service-unavailable: the room is full",
         DefinedCondition::NotAllowed => "not-allowed",
         DefinedCondition::PolicyViolation => "policy-violation",
         DefinedCondition::RemoteServerNotFound => "remote-server-not-found",
@@ -3402,6 +3830,8 @@ mod tests {
 
     fn check_invitation(message: &Message) {
         assert_eq!(message.to.as_ref(), Some(&jid(ROOM)));
+        // A chat message is refused by the room.
+        assert_eq!(message.type_, MessageType::Normal);
         let x = message
             .payloads
             .iter()
@@ -3508,6 +3938,43 @@ mod tests {
     }
 
     #[test]
+    fn an_invitation_that_we_sent_from_another_session_is_no_event() {
+        let mut h = Harness::new();
+        let direct = from_sender(
+            ACCOUNT,
+            &format!("<x xmlns='jabber:x:conference' jid='{ROOM}'/>"),
+        );
+        let mediated = from_sender(
+            ACCOUNT,
+            &format!("<x xmlns='{NS_MUC_USER}'><invite to='bob@example.org'/></x>"),
+        );
+        for message in [direct, mediated] {
+            h.with_ctx(|ctx| assert!(on_message(ctx, &message)));
+        }
+        assert!(invites(&h).is_empty());
+    }
+
+    #[test]
+    fn an_archived_invitation_is_no_chat_message() {
+        let mut h = Harness::new();
+        let mut message = from_sender(
+            ROOM,
+            &format!("<x xmlns='{NS_MUC_USER}'><invite from='alice@example.org'/></x>"),
+        );
+        message.type_ = MessageType::Normal;
+        message.bodies.insert(
+            xmpp_parsers::message::Lang(String::new()),
+            "alice invites you".to_owned(),
+        );
+        assert!(is_invitation(&message));
+        h.with_ctx(|ctx| super::super::chat::store_archived(ctx, &message, "srv-1", Some(5)));
+        let rows = messages_with(h.store.conn(), h.account_id, ROOM).unwrap();
+        assert!(rows.is_empty());
+        let peer = messages_with(h.store.conn(), h.account_id, ACCOUNT).unwrap();
+        assert!(peer.is_empty());
+    }
+
+    #[test]
     fn a_direct_invitation_emits_an_event() {
         let mut h = Harness::new();
         let message = from_sender(
@@ -3540,7 +4007,37 @@ mod tests {
             .get_child("decline", NS_MUC_USER)
             .unwrap();
         assert_eq!(decline.attr("to"), Some("alice@example.org"));
+        assert_eq!(messages[0].type_, MessageType::Normal);
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn a_refused_invitation_becomes_a_notice() {
+        let mut h = Harness::new();
+        let mut refused = Message::new(Some(jid(ACCOUNT)));
+        refused.type_ = MessageType::Error;
+        refused.from = Some(jid(ROOM));
+        refused.payloads.push(
+            format!("<x xmlns='{NS_MUC_USER}'><invite to='bob@example.org'/></x>")
+                .parse()
+                .unwrap(),
+        );
+        refused.payloads.push(
+            StanzaError::new(
+                ErrorType::Modify,
+                DefinedCondition::NotAcceptable,
+                "en",
+                "not in the room",
+            )
+            .into(),
+        );
+        h.with_ctx(|ctx| {
+            ensure_room(ctx, &room(), Some("alice"), None);
+            on_message(ctx, &refused)
+        });
+        assert!(h.effects.iter().any(|e| matches!(e,
+            super::super::Effect::Emit(ClientEvent::Notice(n))
+                if n.contains("refused the invitation") && n.contains("not-acceptable"))));
     }
 
     #[test]
@@ -3552,6 +4049,7 @@ mod tests {
                 name: Some("General".into()),
                 public: Some(true),
                 members_only: Some(false),
+                password: None,
             },
             reply,
         });
@@ -3688,5 +4186,440 @@ mod tests {
             room_info_answer(&mut h, IqResponse::Lost),
             Err(ClientError::NotConnected)
         );
+    }
+
+    #[test]
+    fn a_destroyed_room_reports_the_reason_and_the_alternate_and_retracts_the_bookmark() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        h.with_ctx(|ctx| {
+            ctx.store
+                .conn()
+                .execute("UPDATE rooms SET bookmarked = 1, autojoin = 1", [])
+                .unwrap();
+        });
+        let xml = format!(
+            "<presence xmlns='jabber:client' from='{ROOM}/alice' type='unavailable'>\
+             <x xmlns='{NS_MUC_USER}'><item affiliation='none' role='none'/>\
+             <destroy jid='new@rooms.chord.localhost'><reason>Moved away</reason></destroy>\
+             </x></presence>"
+        );
+        let gone = Presence::try_from(xml.parse::<Element>().unwrap()).unwrap();
+        h.with_ctx(|ctx| on_presence(ctx, &gone));
+        assert!(!joined_flag(&h));
+        assert!(occupant_nicks(&h).is_empty());
+        assert!(!h.state.muc.nicks.contains_key(&room()));
+        let destroyed: Vec<_> = h
+            .effects
+            .iter()
+            .filter_map(|e| match e {
+                super::super::Effect::Emit(ClientEvent::RoomDestroyed {
+                    room,
+                    reason,
+                    alternate,
+                }) => Some((room.clone(), reason.clone(), alternate.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            destroyed,
+            [(
+                room(),
+                Some("Moved away".to_owned()),
+                Some(BareJid::new("new@rooms.chord.localhost").unwrap())
+            )]
+        );
+        // The retract of the bookmark went out.
+        let iqs = h.sent_iqs();
+        assert!(
+            iqs.iter()
+                .any(|iq| matches!(iq, Iq::Set { payload, .. } if payload.name() == "pubsub")),
+            "{iqs:?}"
+        );
+        // A second presence of the same destroy (one per occupant) says nothing more.
+        h.effects.clear();
+        h.with_ctx(|ctx| on_presence(ctx, &gone));
+        assert!(!h.effects.iter().any(|e| matches!(
+            e,
+            super::super::Effect::Emit(ClientEvent::RoomDestroyed { .. })
+        )));
+    }
+
+    #[test]
+    fn a_destroy_without_a_reason_or_an_alternate_is_still_a_destroy() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let xml = format!(
+            "<presence xmlns='jabber:client' from='{ROOM}/alice' type='unavailable'>\
+             <x xmlns='{NS_MUC_USER}'><item affiliation='none' role='none'/><destroy/></x></presence>"
+        );
+        let gone = Presence::try_from(xml.parse::<Element>().unwrap()).unwrap();
+        h.with_ctx(|ctx| on_presence(ctx, &gone));
+        assert!(h.effects.iter().any(|e| matches!(
+            e,
+            super::super::Effect::Emit(ClientEvent::RoomDestroyed {
+                reason: None,
+                alternate: None,
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn the_condition_of_a_server_error_is_its_first_word() {
+        let cases = [
+            (
+                "not-authorized: the room needs a password",
+                Some("not-authorized"),
+            ),
+            ("conflict: the nick is in use (taken)", Some("conflict")),
+            ("item-not-found", Some("item-not-found")),
+            ("empty answer", None),
+            ("", None),
+        ];
+        for (text, expect) in cases {
+            assert_eq!(
+                ClientError::Server(text.into()).condition(),
+                expect,
+                "{text}"
+            );
+        }
+        assert_eq!(ClientError::NotConnected.condition(), None);
+        let error = StanzaError::new(ErrorType::Auth, DefinedCondition::NotAuthorized, "en", "");
+        assert_eq!(
+            ClientError::Server(error_text(&error)).condition(),
+            Some("not-authorized")
+        );
+    }
+
+    #[test]
+    fn join_with_a_password_sends_it_and_a_wrong_one_fails_with_not_authorized() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Join {
+                    room: room(),
+                    nick: "alice".into(),
+                    password: Some("hunter2".into()),
+                    reply,
+                },
+            )
+        });
+        let sent = h.take_sent();
+        let [Stanza::Presence(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        let x = p
+            .payloads
+            .iter()
+            .find(|e| e.is("x", "http://jabber.org/protocol/muc"))
+            .expect("the muc element");
+        let password = x.get_child("password", "http://jabber.org/protocol/muc");
+        assert_eq!(password.map(Element::text).as_deref(), Some("hunter2"));
+        let error = Presence::error()
+            .with_from(jid(ROOM))
+            .with_payload(StanzaError::new(
+                ErrorType::Auth,
+                DefinedCondition::NotAuthorized,
+                "en",
+                "",
+            ));
+        h.with_ctx(|ctx| on_presence(ctx, &error));
+        let Some(Err(e)) = answer.try_recv().unwrap() else {
+            panic!("expected an error")
+        };
+        assert_eq!(e.condition(), Some("not-authorized"));
+    }
+
+    fn subject_command(h: &mut Harness, subject: &str) -> (Answer, String) {
+        let answer = command(h, |reply| Command::SetSubject {
+            room: room(),
+            subject: subject.into(),
+            reply,
+        });
+        let messages = sent_messages(h);
+        let [message] = messages.as_slice() else {
+            panic!("{messages:?}")
+        };
+        assert_eq!(message.type_, MessageType::Groupchat);
+        assert_eq!(message.to, Some(jid(ROOM)));
+        assert!(message.bodies.is_empty());
+        (answer, message.id.clone().expect("an id").0)
+    }
+
+    #[test]
+    fn set_subject_sends_a_subject_only_message_and_waits_for_the_echo() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let (mut answer, _) = subject_command(&mut h, "Build day");
+        let sent_subject = h.state.muc.subjects.len();
+        assert_eq!(sent_subject, 1);
+        assert!(
+            answer.try_recv().unwrap().is_none(),
+            "the room has not answered"
+        );
+        // The room announces the subject from our nick.
+        let mut echo = groupchat("alice", "", None, None);
+        echo.bodies.clear();
+        echo.subjects.insert(
+            xmpp_parsers::message::Lang(String::new()),
+            "Build day".into(),
+        );
+        h.with_ctx(|ctx| on_message(ctx, &echo));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(h.state.muc.subjects.is_empty());
+    }
+
+    #[test]
+    fn a_subject_from_another_occupant_does_not_finish_our_change() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let (mut answer, _) = subject_command(&mut h, "Mine");
+        let mut other = groupchat("bob", "", None, None);
+        other.bodies.clear();
+        other
+            .subjects
+            .insert(xmpp_parsers::message::Lang(String::new()), "Theirs".into());
+        h.with_ctx(|ctx| on_message(ctx, &other));
+        assert!(answer.try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn set_subject_maps_forbidden_to_a_plain_error_and_needs_the_room() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::SetSubject {
+            room: room(),
+            subject: "x".into(),
+            reply,
+        });
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        joined(&mut h, "alice");
+        let (mut answer, id) = subject_command(&mut h, "Nope");
+        let mut refused = Message::new(Some(jid(ROOM)));
+        refused.type_ = MessageType::Error;
+        refused.from = Some(jid(ROOM));
+        refused.id = Some(Id(id));
+        refused
+            .payloads
+            .push(StanzaError::new(ErrorType::Auth, DefinedCondition::Forbidden, "en", "").into());
+        h.with_ctx(|ctx| on_message(ctx, &refused));
+        let Some(Err(ClientError::Server(text))) = answer.try_recv().unwrap() else {
+            panic!("expected a server error")
+        };
+        assert!(text.starts_with("forbidden"), "{text}");
+        assert!(text.contains("moderators"), "{text}");
+    }
+
+    #[test]
+    fn set_role_sends_the_nick_and_the_role_and_maps_errors() {
+        for (role, word) in [
+            (RoomRole::None, "none"),
+            (RoomRole::Visitor, "visitor"),
+            (RoomRole::Participant, "participant"),
+            (RoomRole::Moderator, "moderator"),
+        ] {
+            let mut h = Harness::new();
+            let mut answer = command(&mut h, |reply| Command::SetRole {
+                room: room(),
+                nick: "bob".into(),
+                role,
+                reason: Some("spam".into()),
+                reply,
+            });
+            let iqs = h.sent_iqs();
+            let Some(Iq::Set { to, payload, .. }) = iqs.first() else {
+                panic!("{iqs:?}")
+            };
+            assert_eq!(to.as_ref(), Some(&jid(ROOM)));
+            let item = payload.get_child("item", NS_MUC_ADMIN).expect("item");
+            assert_eq!(item.attr("nick"), Some("bob"));
+            assert_eq!(item.attr("role"), Some(word));
+            assert_eq!(item.attr("jid"), None);
+            assert_eq!(
+                item.get_child("reason", NS_MUC_ADMIN).unwrap().text(),
+                "spam"
+            );
+            h.answer(is_muc, None);
+            assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        }
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::SetRole {
+            room: room(),
+            nick: "bob".into(),
+            role: RoomRole::None,
+            reason: None,
+            reply,
+        });
+        h.respond(is_muc, forbidden());
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
+    }
+
+    #[test]
+    fn destroy_room_sends_the_reason_and_the_alternate() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::Destroy {
+            room: room(),
+            reason: Some("Moved".into()),
+            alternate: Some(BareJid::new("new@rooms.chord.localhost").unwrap()),
+            reply,
+        });
+        let iqs = h.sent_iqs();
+        let Some(Iq::Set { to, payload, .. }) = iqs.first() else {
+            panic!("{iqs:?}")
+        };
+        assert_eq!(to.as_ref(), Some(&jid(ROOM)));
+        assert!(payload.is("query", NS_MUC_OWNER));
+        let destroy = payload.get_child("destroy", NS_MUC_OWNER).expect("destroy");
+        assert_eq!(destroy.attr("jid"), Some("new@rooms.chord.localhost"));
+        assert_eq!(
+            destroy.get_child("reason", NS_MUC_OWNER).unwrap().text(),
+            "Moved"
+        );
+        h.answer(is_muc, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    fn join_default(h: &mut Harness) -> Answer {
+        command(h, |reply| Command::JoinDefault {
+            room: room(),
+            password: None,
+            reply,
+        })
+    }
+
+    #[test]
+    fn a_first_join_asks_for_the_reserved_nick_and_uses_it() {
+        let mut h = Harness::new();
+        let mut answer = join_default(&mut h);
+        let iqs = h.sent_iqs();
+        let Some(Iq::Get { to, payload, .. }) = iqs.first() else {
+            panic!("{iqs:?}")
+        };
+        assert_eq!(to.as_ref(), Some(&jid(ROOM)));
+        assert!(payload.is("query", NS_DISCO_INFO));
+        assert_eq!(payload.attr("node"), Some("x-roomuser-item"));
+        // A second join call waits for the same answer.
+        let mut second = join_default(&mut h);
+        assert!(h.take_sent().is_empty());
+        let reserved: Element = format!(
+            "<query xmlns='{NS_DISCO_INFO}' node='x-roomuser-item'>\
+             <identity category='conference' name='Alice Reserved' type='text'/></query>"
+        )
+        .parse()
+        .unwrap();
+        h.answer(is_muc, Some(reserved));
+        let sent = h.take_sent();
+        let [Stanza::Presence(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(p.to, Some(jid(&format!("{ROOM}/Alice Reserved"))));
+        h.with_ctx(|ctx| on_presence(ctx, &self_presence("Alice Reserved")));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert_eq!(second.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn without_a_reserved_nick_the_join_uses_the_local_part_of_the_account() {
+        let mut h = Harness::new();
+        let _answer = join_default(&mut h);
+        h.take_sent();
+        let error = IqResponse::Error(StanzaError::new(
+            ErrorType::Cancel,
+            DefinedCondition::ItemNotFound,
+            "en",
+            "",
+        ));
+        h.respond(is_muc, error);
+        let sent = h.take_sent();
+        let [Stanza::Presence(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        let node = BareJid::new(ACCOUNT).unwrap().node().unwrap().to_string();
+        assert_eq!(p.to, Some(jid(&format!("{ROOM}/{node}"))));
+    }
+
+    #[test]
+    fn a_room_with_a_stored_nick_joins_without_asking() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| ensure_room(ctx, &room(), Some("stored"), None));
+        let _answer = join_default(&mut h);
+        let sent = h.take_sent();
+        let [Stanza::Presence(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(p.to, Some(jid(&format!("{ROOM}/stored"))));
+    }
+
+    #[test]
+    fn room_info_reads_whether_occupants_may_change_the_subject() {
+        let mut h = Harness::new();
+        let query = |value: &str| -> Element {
+            format!(
+                "<query xmlns='{NS_DISCO_INFO}'>\
+                 <identity category='conference' type='text' name='Dev'/>\
+                 <x xmlns='jabber:x:data' type='result'>\
+                 <field var='FORM_TYPE' type='hidden'><value>{NS_ROOM_INFO}</value></field>\
+                 <field var='muc#roominfo_changesubject'><value>{value}</value></field>\
+                 </x></query>"
+            )
+            .parse()
+            .unwrap()
+        };
+        let card = room_info_answer(&mut h, IqResponse::Result(Some(query("1")))).unwrap();
+        assert!(card.change_subject);
+        let card = room_info_answer(&mut h, IqResponse::Result(Some(query("0")))).unwrap();
+        assert!(!card.change_subject);
+    }
+
+    #[test]
+    fn configure_room_sets_and_clears_the_password() {
+        for (password, flag) in [("hunter2", "1"), ("", "0")] {
+            let mut h = Harness::new();
+            let mut answer = command(&mut h, |reply| Command::Configure {
+                room: room(),
+                settings: RoomSettings {
+                    password: Some(password.into()),
+                    ..RoomSettings::default()
+                },
+                reply,
+            });
+            h.sent_iqs();
+            let form: Element = format!(
+                "<query xmlns='{NS_MUC_OWNER}'><x xmlns='jabber:x:data' type='form'>\
+                 <field var='muc#roomconfig_passwordprotectedroom' type='boolean'/>\
+                 <field var='muc#roomconfig_roomsecret' type='text-private'/></x></query>"
+            )
+            .parse()
+            .unwrap();
+            h.answer(is_muc, Some(form));
+            let iqs = h.sent_iqs();
+            let Some(Iq::Set { payload, .. }) = iqs.first() else {
+                panic!("{iqs:?}")
+            };
+            let x = payload.get_child("x", NS_DATA).unwrap();
+            let value = |var: &str| {
+                x.children()
+                    .find(|f| f.attr("var") == Some(var))
+                    .map(|f| f.get_child("value", NS_DATA).unwrap().text())
+            };
+            assert_eq!(
+                value("muc#roomconfig_passwordprotectedroom").as_deref(),
+                Some(flag)
+            );
+            assert_eq!(
+                value("muc#roomconfig_roomsecret").as_deref(),
+                Some(password)
+            );
+            h.answer(is_muc, None);
+            assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        }
     }
 }

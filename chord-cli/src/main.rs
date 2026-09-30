@@ -34,6 +34,11 @@
 //!   room-member <room> <jid> [member|admin|owner|none|outcast]   set an affiliation
 //!   room-members <room> [affiliation] | invite <room> <jid> [reason]
 //!   room-config <room> [--name N] [--public|--private] [--members-only|--open]
+//!                [--protect|--unprotect]   (--protect: password from CHORD_ROOM_PASSWORD)
+//!   subject <room> <text>           set the subject of a room
+//!   room-role <room> <nick> <none|visitor|participant|moderator> [reason]   kick, mute, voice
+//!   decline <room> <from-jid> [reason]   decline a room invitation
+//!   room-destroy <room> [reason] [--alternate <room>]   destroy a room that we own
 //!   notify <jid> [all|mentions|none [--until <unix-ms>]]   also with --offline
 //!   presence [available|away|dnd|xa|invisible [status]]     show or set our presence (also with --offline)
 //!   search <text> [--in <jid>]      search the stored messages (also with --offline)
@@ -113,7 +118,9 @@ edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> |
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
-invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
+invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] [--protect|--unprotect] | \
+subject <room> <text> | room-role <room> <nick> <none|visitor|participant|moderator> [reason] | \
+decline <room> <from-jid> [reason] | room-destroy <room> [reason] [--alternate <room>] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
 adhoc <jid> <node> [name=value ...] | adhoc-list <jid> | adhoc-run <jid> <node> [name=value ...] | \
 room-form <room> [name=value ...] | passwd | register-form | register [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
@@ -311,6 +318,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "room-members",
         "invite",
         "room-config",
+        "subject",
+        "room-role",
+        "decline",
+        "room-destroy",
         "push-enable",
         "push-disable",
         "push-list",
@@ -439,6 +450,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("room-members", args) => actions::room_members(&client, args).await,
         ("invite", args) => actions::invite(&client, args).await,
         ("room-config", args) => actions::room_config(&client, args).await,
+        ("subject", args) => actions::subject(&client, args).await,
+        ("room-role", args) => actions::room_role(&client, args).await,
+        ("decline", args) => actions::decline(&client, args).await,
+        ("room-destroy", args) => actions::room_destroy(&client, args).await,
         ("push-enable", [service, node]) => actions::push_enable(&client, service, node).await,
         ("push-disable", args) => actions::push_disable(&client, args).await,
         ("notify", args) => actions::notify(&client, args).await,
@@ -667,6 +682,15 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
                 } else {
                     ""
                 }
+            ),
+            ClientEvent::RoomDestroyed {
+                room,
+                reason,
+                alternate,
+            } => println!(
+                "destroyed: {room}{}{}",
+                reason.map_or(String::new(), |r| format!(": {r}")),
+                alternate.map_or(String::new(), |a| format!(" (use {a} instead)"))
             ),
             other => log::debug!("event: {other:?}"),
         }

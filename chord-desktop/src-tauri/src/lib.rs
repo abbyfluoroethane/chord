@@ -101,6 +101,8 @@ pub fn run() {
             commands::invite_to_room,
             commands::decline_room_invite,
             commands::configure_room,
+            commands::set_room_subject,
+            commands::set_room_role,
             commands::browse_spaces,
             commands::join_space,
             commands::space_info,

@@ -44,7 +44,13 @@ impl From<ClientError> for ChordError {
         let code = match &error {
             ClientError::NotConnected => "notConnected",
             ClientError::Session(_) => "session",
-            ClientError::Server(_) => "server",
+            // The UI branches on these conditions, for example to ask for a room password.
+            ClientError::Server(_) => match error.condition() {
+                Some("not-authorized") => "notAuthorized",
+                Some("conflict") => "conflict",
+                Some("registration-required") => "registrationRequired",
+                _ => "server",
+            },
             ClientError::Invalid(_) => "invalid",
             ClientError::Unsupported(_) => "unsupported",
             ClientError::ActorGone => "actorGone",
@@ -84,6 +90,18 @@ mod tests {
             (ClientError::NotConnected, "notConnected"),
             (ClientError::Session(SessionError::Closed), "session"),
             (ClientError::Server("x".into()), "server"),
+            (
+                ClientError::Server("not-authorized: the room needs a password".into()),
+                "notAuthorized",
+            ),
+            (
+                ClientError::Server("conflict: the nick is in use".into()),
+                "conflict",
+            ),
+            (
+                ClientError::Server("registration-required: only members".into()),
+                "registrationRequired",
+            ),
             (ClientError::Invalid("x".into()), "invalid"),
             (ClientError::Unsupported("x".into()), "unsupported"),
             (ClientError::ActorGone, "actorGone"),
