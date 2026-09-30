@@ -5,7 +5,9 @@
 //! UI builds the URL with `avatarUrl` in src/lib/chord/avatars.ts.
 //!
 //! The scheme reads the database with its own connection. It never waits for the actor,
-//! and it works offline. The scheme serves only `image/*` types.
+//! and it works offline. The scheme serves only png, jpeg, gif and webp. It reads the type
+//! from the bytes of the image, never from the type that a peer gave. A page in the scheme
+//! runs no script and loads nothing (a `Content-Security-Policy` with a sandbox).
 
 use std::sync::{Arc, Mutex};
 
@@ -72,10 +74,11 @@ pub fn respond(store: &Mutex<(Store, i64)>, path: &str) -> Response<Vec<u8>> {
     let Some(image) = image else {
         return status(StatusCode::NOT_FOUND);
     };
-    // An avatar comes from another user. Never serve it as a page or a script.
-    if !image.mime.starts_with("image/") {
+    // An avatar comes from another user. Never serve it as a page or a script, and never
+    // as SVG. The type comes from the bytes: the stored type is what a peer wrote.
+    let Some(mime) = avatars::sniff_mime(&image.data) else {
         return status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    }
+    };
     let cache = if image.immutable {
         "max-age=31536000, immutable"
     } else {
@@ -83,9 +86,11 @@ pub fn respond(store: &Mutex<(Store, i64)>, path: &str) -> Response<Vec<u8>> {
     };
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, image.mime)
+        .header(header::CONTENT_TYPE, mime)
         .header(header::CACHE_CONTROL, cache)
         .header("X-Content-Type-Options", "nosniff")
+        // Opened as a page, an avatar can run nothing and load nothing.
+        .header("Content-Security-Policy", "default-src 'none'; sandbox")
         // The profile card reads the pixels for its banner colour. A canvas can do that
         // only for an image with CORS.
         .header("Access-Control-Allow-Origin", "*")
@@ -177,15 +182,17 @@ mod tests {
         assert!(lookup(&store, id, HASH).is_none());
     }
 
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n1234";
+
     #[test]
     fn the_response_serves_images_only() {
         let (store, id) = store_with(&[
-            ("bob@example.org", HASH, Some("image/png"), Some(&[1])),
+            ("bob@example.org", HASH, Some("image/png"), Some(PNG)),
             (
                 "eve@example.org",
                 "f".repeat(40).as_str(),
                 Some("text/html"),
-                Some(&[2]),
+                Some(b"<html>"),
             ),
         ]);
         let store = Mutex::new((store, id));
@@ -194,11 +201,49 @@ mod tests {
         assert_eq!(ok.headers()[header::CONTENT_TYPE], "image/png");
         // The profile card reads the pixels of the avatar for its banner colour.
         assert_eq!(ok.headers()["Access-Control-Allow-Origin"], "*");
-        assert_eq!(ok.body(), &vec![1]);
+        assert_eq!(
+            ok.headers()["Content-Security-Policy"],
+            "default-src 'none'; sandbox"
+        );
+        assert_eq!(ok.body(), &PNG.to_vec());
         assert_eq!(
             respond(&store, "/eve%40example.org").status(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
         assert_eq!(respond(&store, "/none").status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn svg_is_never_served_whatever_the_stored_type() {
+        let svg: &[u8] = b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>";
+        let (store, id) = store_with(&[
+            ("a@example.org", HASH, Some("image/svg+xml"), Some(svg)),
+            // A peer that calls an SVG a PNG.
+            (
+                "b@example.org",
+                "e".repeat(40).as_str(),
+                Some("image/png"),
+                Some(svg),
+            ),
+        ]);
+        let store = Mutex::new((store, id));
+        for owner in ["a", "b"] {
+            let response = respond(&store, &format!("/{owner}%40example.org"));
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{owner}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_type_comes_from_the_bytes() {
+        // A JPEG that the peer called a GIF is served as a JPEG.
+        let jpeg: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 0, 0];
+        let (store, id) = store_with(&[("a@example.org", HASH, Some("image/gif"), Some(jpeg))]);
+        let store = Mutex::new((store, id));
+        let response = respond(&store, "/a%40example.org");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/jpeg");
     }
 }
