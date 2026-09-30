@@ -326,6 +326,7 @@ mod tests {
                 Some("Room".into()),
                 true,
                 Some("al".into()),
+                None,
                 reply,
             )
         });
