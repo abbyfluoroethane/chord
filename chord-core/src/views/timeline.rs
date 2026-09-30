@@ -320,10 +320,15 @@ pub(crate) fn contact_name(q: &QueryCtx<'_>, bare: &str) -> rusqlite::Result<Str
     Ok(name.unwrap_or_else(|| local_part(bare)))
 }
 
+/// The avatar hash of `owner`. An avatar with no image yet has no hash here. The image
+/// request would fail, and the view changes again when the image arrives.
 pub(crate) fn avatar_hash(q: &QueryCtx<'_>, owner: &str) -> rusqlite::Result<Option<String>> {
     q.store
         .conn()
-        .prepare_cached("SELECT hash FROM avatars WHERE account_id = ?1 AND owner = ?2")?
+        .prepare_cached(
+            "SELECT hash FROM avatars
+             WHERE account_id = ?1 AND owner = ?2 AND data IS NOT NULL",
+        )?
         .query_row(params![q.account_id, owner], |row| row.get(0))
         .optional()
 }
@@ -344,6 +349,33 @@ mod tests {
         find_by_timeline_id, insert_message, upgrade_to_stanza_id,
     };
     use crate::views::diff::{ListDiff, diff};
+
+    #[test]
+    fn an_avatar_has_a_hash_in_the_view_only_when_its_image_is_stored() {
+        let store = Store::open_in_memory().unwrap();
+        let account = BareJid::new("alice@chord.localhost").unwrap();
+        let account_id = ensure_account(store.conn(), account.as_str()).unwrap();
+        let q = QueryCtx {
+            store: &store,
+            account_id,
+            account: &account,
+        };
+        let owner = "bob@chord.localhost";
+        store
+            .conn()
+            .execute(
+                "INSERT INTO avatars (account_id, owner, hash, mime, data)
+                 VALUES (?1, ?2, 'abc', 'image/png', NULL)",
+                params![account_id, owner],
+            )
+            .unwrap();
+        assert_eq!(avatar_hash(&q, owner).unwrap(), None);
+        store
+            .conn()
+            .execute("UPDATE avatars SET data = x'01' WHERE owner = ?1", [owner])
+            .unwrap();
+        assert_eq!(avatar_hash(&q, owner).unwrap().as_deref(), Some("abc"));
+    }
 
     #[test]
     fn a_key_upgrade_gives_one_update() {
