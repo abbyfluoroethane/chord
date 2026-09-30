@@ -415,9 +415,6 @@
   .box:hover {
     border-color: var(--ink-muted);
   }
-  .box:focus-within {
-    border-color: var(--accent);
-  }
   .upload {
     display: grid;
     place-items: center;
@@ -527,8 +524,11 @@
   .mirror :global(.q:not(.mk)) {
     color: var(--ink-muted);
   }
+  /* The box text is transparent, so the placeholder sets its own fill. */
   textarea::placeholder {
     color: var(--ink-muted);
+    -webkit-text-fill-color: var(--ink-muted);
+    opacity: 1;
   }
   .tools {
     display: flex;
