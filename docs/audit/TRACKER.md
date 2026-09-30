@@ -8,20 +8,20 @@ This file tracks the fixes from the audit of 2026-09-30. Nine read-only agents c
 
 | Area | Report | High | Medium | Low | Info | Done |
 |---|---|---|---|---|---|---|
-| RFC 6120 and RFC 6121 core session audit | [01-core-session.md](01-core-session.md) | 1 | 7 | 10 | 4 | 8 |
-| One-to-one messaging extensions | [02-messaging.md](02-messaging.md) | 3 | 7 | 10 | 5 | 9 |
-| XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 11 |
-| XEP-0503 Spaces, Pubsub, Avatars, Profiles, Bookmarks, and xmpp: URIs | [04-spaces-pubsub.md](04-spaces-pubsub.md) | 0 | 7 | 20 | 3 | 6 |
-| End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 3 |
-| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 13 |
-| Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 12 |
-| Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 7 |
-| Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 5 |
-| **All** | | **19** | **77** | **97** | **25** | **74** |
+| RFC 6120 and RFC 6121 core session audit | [01-core-session.md](01-core-session.md) | 1 | 7 | 10 | 4 | 18 |
+| One-to-one messaging extensions | [02-messaging.md](02-messaging.md) | 3 | 7 | 10 | 5 | 19 |
+| XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 22 |
+| XEP-0503 Spaces, Pubsub, Avatars, Profiles, Bookmarks, and xmpp: URIs | [04-spaces-pubsub.md](04-spaces-pubsub.md) | 0 | 7 | 20 | 3 | 25 |
+| End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 12 |
+| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 19 |
+| Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 28 |
+| Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 16 |
+| Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 10 |
+| **All** | | **19** | **77** | **97** | **25** | **169** |
 
 No finding is Critical. Update the Done column when you tick boxes.
 
-On 2026-09-30, all 19 High findings closed. The Android app work of CALLSPUSHPRESENCE-07 (#118) moved to #198. Later that night, 55 of the 77 Medium findings closed. The 22 open Medium findings wait for an epic (OMEMO #194, sign-in #196, calls #195, Android #198), for a decision (#199, #200), or have a partial fix with the rest named in the issue. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
+On 2026-09-30, all 19 High findings closed. The Android app work of CALLSPUSHPRESENCE-07 (#118) moved to #198. Later that night, 55 of the 77 Medium findings closed. The 22 open Medium findings wait for an epic (OMEMO #194, sign-in #196, calls #195, Android #198), for a decision (#199, #200), or have a partial fix with the rest named in the issue. The same day, 94 of the 97 Low findings closed too. #131 and #193 wait for the decision in #199, and #69 has a plan in the issue. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
 
 ## Decisions needed
 
@@ -83,16 +83,16 @@ Report: [01-core-session.md](01-core-session.md)
 
 **Low**
 
-- [ ] **CORESESSION-04** ([#4](https://github.com/abbyfluoroethane/chord/issues/4)) (Missing feature, RFC 7677, RFC 5802): Accept for now.
-- [ ] **CORESESSION-05** ([#5](https://github.com/abbyfluoroethane/chord/issues/5)) (Missing XEP, XEP-0388, XEP-0386, XEP-0484): Not urgent.
-- [ ] **CORESESSION-09** ([#9](https://github.com/abbyfluoroethane/chord/issues/9)) (Spec violation, XEP-0030 section 3, XEP-0115 section 6): For a node that is not `CAPS_NODE#ver` and not empty, return `item-not-found`.
-- [ ] **CORESESSION-10** ([#10](https://github.com/abbyfluoroethane/chord/issues/10)) (Missing XEP, XEP-0092): Add a small handler that returns the name "Chord" and the version.
-- [ ] **CORESESSION-11** ([#11](https://github.com/abbyfluoroethane/chord/issues/11)) (Missing XEP, XEP-0202, XEP-0012): XEP-0202 is small and safe (UTC time and offset).
-- [ ] **CORESESSION-14** ([#14](https://github.com/abbyfluoroethane/chord/issues/14)) (UX gap, RFC 6120): Add random jitter (up to 50 percent).
-- [ ] **CORESESSION-15** ([#15](https://github.com/abbyfluoroethane/chord/issues/15)) (UX gap, RFC 6120 5.4.3): Add an explicit "trust this certificate" flow with a stored SHA-256 pin.
-- [ ] **CORESESSION-16** ([#16](https://github.com/abbyfluoroethane/chord/issues/16)) (UX gap, RFC 6121 3.1.5): After an approval, offer "add back".
-- [ ] **CORESESSION-17** ([#17](https://github.com/abbyfluoroethane/chord/issues/17)) (Missing feature, RFC 6121 2.3): Add `set_contact_groups` and `rename_contact`.
-- [ ] **CORESESSION-18** ([#18](https://github.com/abbyfluoroethane/chord/issues/18)) (Missing feature, RFC 6121 4.6): Servers send unavailable when the stream closes, so the impact is small.
+- [x] **CORESESSION-04** ([#4](https://github.com/abbyfluoroethane/chord/issues/4)) (Missing feature, RFC 7677, RFC 5802): Accept for now.
+- [x] **CORESESSION-05** ([#5](https://github.com/abbyfluoroethane/chord/issues/5)) (Missing XEP, XEP-0388, XEP-0386, XEP-0484): Not urgent.
+- [x] **CORESESSION-09** ([#9](https://github.com/abbyfluoroethane/chord/issues/9)) (Spec violation, XEP-0030 section 3, XEP-0115 section 6): For a node that is not `CAPS_NODE#ver` and not empty, return `item-not-found`.
+- [x] **CORESESSION-10** ([#10](https://github.com/abbyfluoroethane/chord/issues/10)) (Missing XEP, XEP-0092): Add a small handler that returns the name "Chord" and the version.
+- [x] **CORESESSION-11** ([#11](https://github.com/abbyfluoroethane/chord/issues/11)) (Missing XEP, XEP-0202, XEP-0012): XEP-0202 is small and safe (UTC time and offset).
+- [x] **CORESESSION-14** ([#14](https://github.com/abbyfluoroethane/chord/issues/14)) (UX gap, RFC 6120): Add random jitter (up to 50 percent).
+- [x] **CORESESSION-15** ([#15](https://github.com/abbyfluoroethane/chord/issues/15)) (UX gap, RFC 6120 5.4.3): Add an explicit "trust this certificate" flow with a stored SHA-256 pin.
+- [x] **CORESESSION-16** ([#16](https://github.com/abbyfluoroethane/chord/issues/16)) (UX gap, RFC 6121 3.1.5): After an approval, offer "add back".
+- [x] **CORESESSION-17** ([#17](https://github.com/abbyfluoroethane/chord/issues/17)) (Missing feature, RFC 6121 2.3): Add `set_contact_groups` and `rename_contact`.
+- [x] **CORESESSION-18** ([#18](https://github.com/abbyfluoroethane/chord/issues/18)) (Missing feature, RFC 6121 4.6): Servers send unavailable when the stream closes, so the impact is small.
 
 **Info**
 
@@ -123,16 +123,16 @@ Report: [02-messaging.md](02-messaging.md)
 
 **Low**
 
-- [ ] **MESSAGING-11** ([#29](https://github.com/abbyfluoroethane/chord/issues/29)) (Bug, XEP-0363 4.3): Show the max size from the error.
-- [ ] **MESSAGING-12** ([#30](https://github.com/abbyfluoroethane/chord/issues/30)) (Bug, XEP-0334): Add `<no-store/>` and `<no-permanent-store/>` to chat state messages.
-- [ ] **MESSAGING-13** ([#31](https://github.com/abbyfluoroethane/chord/issues/31)) (Bug, XEP-0085 5.1): Send `gone` when the user closes a chat (optional).
-- [ ] **MESSAGING-14** ([#32](https://github.com/abbyfluoroethane/chord/issues/32)) (Bug, XEP-0359): Reactions message has no origin-id; the other extension messages have one.
-- [ ] **MESSAGING-15** ([#33](https://github.com/abbyfluoroethane/chord/issues/33)) (Bug, XEP-0424 6): XEP-0424 asks for origin-id in 1:1 when there is one.
-- [ ] **MESSAGING-16** ([#34](https://github.com/abbyfluoroethane/chord/issues/34)) (Bug, XEP-0313): Retry with back off.
-- [ ] **MESSAGING-17** ([#35](https://github.com/abbyfluoroethane/chord/issues/35)) (Bug, XEP-0313): Each reconnect refetches all messages since the last MAM sync.
-- [ ] **MESSAGING-18** ([#36](https://github.com/abbyfluoroethane/chord/issues/36)) (UX gap, XEP-0428): A fallback for other features (SFS, retract from other clients) shows in the body.
-- [ ] **MESSAGING-19** ([#37](https://github.com/abbyfluoroethane/chord/issues/37)) (UX gap, XEP-0461): A reply to an edited message quotes the old text.
-- [ ] **MESSAGING-20** ([#38](https://github.com/abbyfluoroethane/chord/issues/38)) (Bug, XEP-0280): Fine per RFC 6120 (server-set).
+- [x] **MESSAGING-11** ([#29](https://github.com/abbyfluoroethane/chord/issues/29)) (Bug, XEP-0363 4.3): Show the max size from the error.
+- [x] **MESSAGING-12** ([#30](https://github.com/abbyfluoroethane/chord/issues/30)) (Bug, XEP-0334): Add `<no-store/>` and `<no-permanent-store/>` to chat state messages.
+- [x] **MESSAGING-13** ([#31](https://github.com/abbyfluoroethane/chord/issues/31)) (Bug, XEP-0085 5.1): Send `gone` when the user closes a chat (optional).
+- [x] **MESSAGING-14** ([#32](https://github.com/abbyfluoroethane/chord/issues/32)) (Bug, XEP-0359): Reactions message has no origin-id; the other extension messages have one.
+- [x] **MESSAGING-15** ([#33](https://github.com/abbyfluoroethane/chord/issues/33)) (Bug, XEP-0424 6): XEP-0424 asks for origin-id in 1:1 when there is one.
+- [x] **MESSAGING-16** ([#34](https://github.com/abbyfluoroethane/chord/issues/34)) (Bug, XEP-0313): Retry with back off.
+- [x] **MESSAGING-17** ([#35](https://github.com/abbyfluoroethane/chord/issues/35)) (Bug, XEP-0313): Each reconnect refetches all messages since the last MAM sync.
+- [x] **MESSAGING-18** ([#36](https://github.com/abbyfluoroethane/chord/issues/36)) (UX gap, XEP-0428): A fallback for other features (SFS, retract from other clients) shows in the body.
+- [x] **MESSAGING-19** ([#37](https://github.com/abbyfluoroethane/chord/issues/37)) (UX gap, XEP-0461): A reply to an edited message quotes the old text.
+- [x] **MESSAGING-20** ([#38](https://github.com/abbyfluoroethane/chord/issues/38)) (Bug, XEP-0280): Fine per RFC 6120 (server-set).
 
 **Info**
 
@@ -165,17 +165,17 @@ Report: [03-muc.md](03-muc.md)
 
 **Low**
 
-- [ ] **MUC-12** ([#50](https://github.com/abbyfluoroethane/chord/issues/50)) (Bug, XEP-0045 section 10.2.1): On 104 (and on the config-change status message), reread the disco#info of the room.
-- [ ] **MUC-13** ([#51](https://github.com/abbyfluoroethane/chord/issues/51)) (Bug, XEP-0045 section 7.6): Give one plain sentence for each code.
-- [ ] **MUC-14** ([#52](https://github.com/abbyfluoroethane/chord/issues/52)) (Bug, XEP-0045 section 7.2.7 (status 210)): When the service assigns another nick (210), store the assigned nick with `ensure_room`.
-- [ ] **MUC-15** ([#53](https://github.com/abbyfluoroethane/chord/issues/53)) (Bug, XEP-0402 section 3): Keep the `extensions` child when the client republishes a bookmark.
-- [ ] **MUC-16** ([#54](https://github.com/abbyfluoroethane/chord/issues/54)) (Missing XEP, XEP-0048): Optional.
-- [ ] **MUC-17** ([#55](https://github.com/abbyfluoroethane/chord/issues/55)) (Missing feature, XEP-0249 section 2): Add the feature to `FEATURES`.
-- [ ] **MUC-18** ([#56](https://github.com/abbyfluoroethane/chord/issues/56)) (UX gap, XEP-0045 section 7.8.2): Emit a notice: "X declined your invitation".
-- [ ] **MUC-19** ([#57](https://github.com/abbyfluoroethane/chord/issues/57)) (Bug, XEP-0045 section 7.2): Add a join timeout (about 30 seconds).
-- [ ] **MUC-20** ([#58](https://github.com/abbyfluoroethane/chord/issues/58)) (Security): Store it in the OS keychain (the desktop already has keychain.rs).
-- [ ] **MUC-21** ([#59](https://github.com/abbyfluoroethane/chord/issues/59)) (UX gap, XEP-0045 section 10.1): For a link or a typed address, read disco#info first.
-- [ ] **MUC-22** ([#60](https://github.com/abbyfluoroethane/chord/issues/60)) (UX gap, XEP-0421): Store the occupant-id per message and per occupant.
+- [x] **MUC-12** ([#50](https://github.com/abbyfluoroethane/chord/issues/50)) (Bug, XEP-0045 section 10.2.1): On 104 (and on the config-change status message), reread the disco#info of the room.
+- [x] **MUC-13** ([#51](https://github.com/abbyfluoroethane/chord/issues/51)) (Bug, XEP-0045 section 7.6): Give one plain sentence for each code.
+- [x] **MUC-14** ([#52](https://github.com/abbyfluoroethane/chord/issues/52)) (Bug, XEP-0045 section 7.2.7 (status 210)): When the service assigns another nick (210), store the assigned nick with `ensure_room`.
+- [x] **MUC-15** ([#53](https://github.com/abbyfluoroethane/chord/issues/53)) (Bug, XEP-0402 section 3): Keep the `extensions` child when the client republishes a bookmark.
+- [x] **MUC-16** ([#54](https://github.com/abbyfluoroethane/chord/issues/54)) (Missing XEP, XEP-0048): Optional.
+- [x] **MUC-17** ([#55](https://github.com/abbyfluoroethane/chord/issues/55)) (Missing feature, XEP-0249 section 2): Add the feature to `FEATURES`.
+- [x] **MUC-18** ([#56](https://github.com/abbyfluoroethane/chord/issues/56)) (UX gap, XEP-0045 section 7.8.2): Emit a notice: "X declined your invitation".
+- [x] **MUC-19** ([#57](https://github.com/abbyfluoroethane/chord/issues/57)) (Bug, XEP-0045 section 7.2): Add a join timeout (about 30 seconds).
+- [x] **MUC-20** ([#58](https://github.com/abbyfluoroethane/chord/issues/58)) (Security): Store it in the OS keychain (the desktop already has keychain.rs).
+- [x] **MUC-21** ([#59](https://github.com/abbyfluoroethane/chord/issues/59)) (UX gap, XEP-0045 section 10.1): For a link or a typed address, read disco#info first.
+- [x] **MUC-22** ([#60](https://github.com/abbyfluoroethane/chord/issues/60)) (UX gap, XEP-0421): Store the occupant-id per message and per occupant.
 
 **Info**
 
@@ -198,26 +198,26 @@ Report: [04-spaces-pubsub.md](04-spaces-pubsub.md)
 
 **Low**
 
-- [ ] **SPACESPUBSUB-07** ([#67](https://github.com/abbyfluoroethane/chord/issues/67)) (Missing feature, XEP-0503 (Avatar and banner)): Add `set_space_avatar`, `set_space_banner`, and `configure_space` (owner).
+- [x] **SPACESPUBSUB-07** ([#67](https://github.com/abbyfluoroethane/chord/issues/67)) (Missing feature, XEP-0503 (Avatar and banner)): Add `set_space_avatar`, `set_space_banner`, and `configure_space` (owner).
 - [ ] **SPACESPUBSUB-09** ([#69](https://github.com/abbyfluoroethane/chord/issues/69)) (Missing XEP, XEP-0223, XEP-0049): Store per-account settings in a private PEP node (XEP-0223 options) or in XEP-0402 bookmark extensions.
-- [ ] **SPACESPUBSUB-10** ([#70](https://github.com/abbyfluoroethane/chord/issues/70)) (Bug, XEP-0402 4): Keep the extension elements on parse and write them back on publish.
-- [ ] **SPACESPUBSUB-11** ([#71](https://github.com/abbyfluoroethane/chord/issues/71)) (Bug, XEP-0060 7.1.5, XEP-0402 3): On `conflict` / `precondition-not-met`, fetch the node config, submit the wanted config, and retry the publish once.
-- [ ] **SPACESPUBSUB-12** ([#72](https://github.com/abbyfluoroethane/chord/issues/72)) (Security, RFC 3986, n/a): Refuse private, link-local, and loopback addresses after DNS resolution, at least for URLs from a remote entity.
-- [ ] **SPACESPUBSUB-13** ([#73](https://github.com/abbyfluoroethane/chord/issues/73)) (Bug, XEP-0084 4.2): If the only info has a URL, download it with the same checks as for spaces (hash, size, type).
-- [ ] **SPACESPUBSUB-14** ([#74](https://github.com/abbyfluoroethane/chord/issues/74)) (Spec violation, XEP-0084 4, 5): Resize to at most 256 by 256 in the UI and convert to PNG or JPEG.
-- [ ] **SPACESPUBSUB-15** ([#75](https://github.com/abbyfluoroethane/chord/issues/75)) (Security): Sniff the type for XEP-0084 data as for vCard (`sniff_mime`, avatars.rs:391).
-- [ ] **SPACESPUBSUB-16** ([#76](https://github.com/abbyfluoroethane/chord/issues/76)) (Missing feature, XEP-0153): Allow the fetch for a bare JID that has an open 1:1 chat.
-- [ ] **SPACESPUBSUB-17** ([#77](https://github.com/abbyfluoroethane/chord/issues/77)) (Spec violation, XEP-0060 8.6): Echo `pubsub#subid` when known.
-- [ ] **SPACESPUBSUB-18** ([#78](https://github.com/abbyfluoroethane/chord/issues/78)) (Spec violation, XEP-0060 6.2.1): Keep the subid from the subscribe result and send it on unsubscribe.
-- [ ] **SPACESPUBSUB-19** ([#79](https://github.com/abbyfluoroethane/chord/issues/79)) (Missing feature, XEP-0060 8.2, 8.9): Add `space_members`, `remove_space_member`, and `ban_space_member` using owner affiliations.
-- [ ] **SPACESPUBSUB-20** ([#80](https://github.com/abbyfluoroethane/chord/issues/80)) (Missing feature, XEP-0503 (Space items)): Show or ignore on purpose.
-- [ ] **SPACESPUBSUB-22** ([#81](https://github.com/abbyfluoroethane/chord/issues/81)) (Spec violation, XEP-0503 (Node config)): Set `pubsub#publish_model=publishers` and a description field on create.
-- [ ] **SPACESPUBSUB-23** ([#82](https://github.com/abbyfluoroethane/chord/issues/82)) (Bug, XEP-0060 5.6): Store the known non-space nodes.
-- [ ] **SPACESPUBSUB-24** ([#83](https://github.com/abbyfluoroethane/chord/issues/83)) (Bug, RFC 5122 2.2, XEP-0147): Accept IDNA labels via `URL` / `domainToASCII`.
-- [ ] **SPACESPUBSUB-25** ([#84](https://github.com/abbyfluoroethane/chord/issues/84)) (Spec violation, RFC 5122 3.2, XEP-0147): Lower-case the keys, or document that they are case sensitive.
-- [ ] **SPACESPUBSUB-26** ([#85](https://github.com/abbyfluoroethane/chord/issues/85)) (UX gap, XEP-0503 (URI form)): Write the XEP-0503 form, as the XEP asks.
-- [ ] **SPACESPUBSUB-27** ([#86](https://github.com/abbyfluoroethane/chord/issues/86)) (Missing feature, XEP-0147 5.x): Show a clearer message, "This kind of link is not supported".
-- [ ] **SPACESPUBSUB-30** ([#87](https://github.com/abbyfluoroethane/chord/issues/87)) (Bug, XEP-0060 6.5): Ask for a limit, and page with RSM.
+- [x] **SPACESPUBSUB-10** ([#70](https://github.com/abbyfluoroethane/chord/issues/70)) (Bug, XEP-0402 4): Keep the extension elements on parse and write them back on publish.
+- [x] **SPACESPUBSUB-11** ([#71](https://github.com/abbyfluoroethane/chord/issues/71)) (Bug, XEP-0060 7.1.5, XEP-0402 3): On `conflict` / `precondition-not-met`, fetch the node config, submit the wanted config, and retry the publish once.
+- [x] **SPACESPUBSUB-12** ([#72](https://github.com/abbyfluoroethane/chord/issues/72)) (Security, RFC 3986, n/a): Refuse private, link-local, and loopback addresses after DNS resolution, at least for URLs from a remote entity.
+- [x] **SPACESPUBSUB-13** ([#73](https://github.com/abbyfluoroethane/chord/issues/73)) (Bug, XEP-0084 4.2): If the only info has a URL, download it with the same checks as for spaces (hash, size, type).
+- [x] **SPACESPUBSUB-14** ([#74](https://github.com/abbyfluoroethane/chord/issues/74)) (Spec violation, XEP-0084 4, 5): Resize to at most 256 by 256 in the UI and convert to PNG or JPEG.
+- [x] **SPACESPUBSUB-15** ([#75](https://github.com/abbyfluoroethane/chord/issues/75)) (Security): Sniff the type for XEP-0084 data as for vCard (`sniff_mime`, avatars.rs:391).
+- [x] **SPACESPUBSUB-16** ([#76](https://github.com/abbyfluoroethane/chord/issues/76)) (Missing feature, XEP-0153): Allow the fetch for a bare JID that has an open 1:1 chat.
+- [x] **SPACESPUBSUB-17** ([#77](https://github.com/abbyfluoroethane/chord/issues/77)) (Spec violation, XEP-0060 8.6): Echo `pubsub#subid` when known.
+- [x] **SPACESPUBSUB-18** ([#78](https://github.com/abbyfluoroethane/chord/issues/78)) (Spec violation, XEP-0060 6.2.1): Keep the subid from the subscribe result and send it on unsubscribe.
+- [x] **SPACESPUBSUB-19** ([#79](https://github.com/abbyfluoroethane/chord/issues/79)) (Missing feature, XEP-0060 8.2, 8.9): Add `space_members`, `remove_space_member`, and `ban_space_member` using owner affiliations.
+- [x] **SPACESPUBSUB-20** ([#80](https://github.com/abbyfluoroethane/chord/issues/80)) (Missing feature, XEP-0503 (Space items)): Show or ignore on purpose.
+- [x] **SPACESPUBSUB-22** ([#81](https://github.com/abbyfluoroethane/chord/issues/81)) (Spec violation, XEP-0503 (Node config)): Set `pubsub#publish_model=publishers` and a description field on create.
+- [x] **SPACESPUBSUB-23** ([#82](https://github.com/abbyfluoroethane/chord/issues/82)) (Bug, XEP-0060 5.6): Store the known non-space nodes.
+- [x] **SPACESPUBSUB-24** ([#83](https://github.com/abbyfluoroethane/chord/issues/83)) (Bug, RFC 5122 2.2, XEP-0147): Accept IDNA labels via `URL` / `domainToASCII`.
+- [x] **SPACESPUBSUB-25** ([#84](https://github.com/abbyfluoroethane/chord/issues/84)) (Spec violation, RFC 5122 3.2, XEP-0147): Lower-case the keys, or document that they are case sensitive.
+- [x] **SPACESPUBSUB-26** ([#85](https://github.com/abbyfluoroethane/chord/issues/85)) (UX gap, XEP-0503 (URI form)): Write the XEP-0503 form, as the XEP asks.
+- [x] **SPACESPUBSUB-27** ([#86](https://github.com/abbyfluoroethane/chord/issues/86)) (Missing feature, XEP-0147 5.x): Show a clearer message, "This kind of link is not supported".
+- [x] **SPACESPUBSUB-30** ([#87](https://github.com/abbyfluoroethane/chord/issues/87)) (Bug, XEP-0060 6.5): Ask for a limit, and page with RSM.
 
 **Info**
 
@@ -244,7 +244,7 @@ Report: [05-security-auth.md](05-security-auth.md)
 - [ ] **SECURITYAUTH-09** ([#96](https://github.com/abbyfluoroethane/chord/issues/96)) (Missing XEP, XEP-0484 FAST): Needs SASL2.
 - [ ] **SECURITYAUTH-10** ([#97](https://github.com/abbyfluoroethane/chord/issues/97)) (Security, XEP-0474 (SCRAM downgrade protection), XEP-0440): Because STARTTLS is required, a network attacker cannot alter the list without breaking TLS.
 - [ ] **SECURITYAUTH-12** ([#99](https://github.com/abbyfluoroethane/chord/issues/99)) (Missing XEP, XEP-0397 (ISR)): Needs SASL2 and Bind2.
-- [ ] **SECURITYAUTH-13** ([#100](https://github.com/abbyfluoroethane/chord/issues/100)) (UX gap, RFC 7590 / RFC 6120 13.7): Add an opt-in per-account pin (TOFU): show the SHA-256 fingerprint, store it, and compare it on later connects.
+- [x] **SECURITYAUTH-13** ([#100](https://github.com/abbyfluoroethane/chord/issues/100)) (UX gap, RFC 7590 / RFC 6120 13.7): Add an opt-in per-account pin (TOFU): show the SHA-256 fingerprint, store it, and compare it on later connects.
 - [ ] **SECURITYAUTH-17** ([#104](https://github.com/abbyfluoroethane/chord/issues/104)) (Security): Unverified: the Android app may use the Android Keystore.
 - [ ] **SECURITYAUTH-18** ([#105](https://github.com/abbyfluoroethane/chord/issues/105)) (Missing XEP, XEP-0077 (in-band registration)): Add a `register` flow before login: read the form (`jabber:iq:register`, or the XEP-0004 data form), submit it, then log in.
 - [x] **SECURITYAUTH-19** ([#106](https://github.com/abbyfluoroethane/chord/issues/106)) (Missing feature, XEP-0077 section 3.3 (change password)): Add `change_password`.
@@ -253,14 +253,14 @@ Report: [05-security-auth.md](05-security-auth.md)
 
 **Low**
 
-- [ ] **SECURITYAUTH-06** ([#93](https://github.com/abbyfluoroethane/chord/issues/93)) (UX gap, XEP-0380 (Explicit Message Encryption)): Show a clear "encrypted message that Chord cannot read" notice when the element is present.
-- [ ] **SECURITYAUTH-11** ([#98](https://github.com/abbyfluoroethane/chord/issues/98)) (Security, XEP-0440 (SASL channel binding types)): This is correct.
-- [ ] **SECURITYAUTH-14** ([#101](https://github.com/abbyfluoroethane/chord/issues/101)) (Security, RFC 6120 13.7): Good.
-- [ ] **SECURITYAUTH-15** ([#102](https://github.com/abbyfluoroethane/chord/issues/102)) (Security): Use `secrecy::SecretString` or `zeroize`.
-- [ ] **SECURITYAUTH-16** ([#103](https://github.com/abbyfluoroethane/chord/issues/103)) (Security): Correct order.
-- [ ] **SECURITYAUTH-20** ([#107](https://github.com/abbyfluoroethane/chord/issues/107)) (Missing feature, XEP-0077 section 3.2 (cancel registration)): Optional.
-- [ ] **SECURITYAUTH-24** ([#110](https://github.com/abbyfluoroethane/chord/issues/110)) (UX gap): Show `account-disabled` and `credentials-expired` in plain words.
-- [ ] **SECURITYAUTH-25** ([#111](https://github.com/abbyfluoroethane/chord/issues/111)) (UX gap, XEP-0198): Optional.
+- [x] **SECURITYAUTH-06** ([#93](https://github.com/abbyfluoroethane/chord/issues/93)) (UX gap, XEP-0380 (Explicit Message Encryption)): Show a clear "encrypted message that Chord cannot read" notice when the element is present.
+- [x] **SECURITYAUTH-11** ([#98](https://github.com/abbyfluoroethane/chord/issues/98)) (Security, XEP-0440 (SASL channel binding types)): This is correct.
+- [x] **SECURITYAUTH-14** ([#101](https://github.com/abbyfluoroethane/chord/issues/101)) (Security, RFC 6120 13.7): Good.
+- [x] **SECURITYAUTH-15** ([#102](https://github.com/abbyfluoroethane/chord/issues/102)) (Security): Use `secrecy::SecretString` or `zeroize`.
+- [x] **SECURITYAUTH-16** ([#103](https://github.com/abbyfluoroethane/chord/issues/103)) (Security): Correct order.
+- [x] **SECURITYAUTH-20** ([#107](https://github.com/abbyfluoroethane/chord/issues/107)) (Missing feature, XEP-0077 section 3.2 (cancel registration)): Optional.
+- [x] **SECURITYAUTH-24** ([#110](https://github.com/abbyfluoroethane/chord/issues/110)) (UX gap): Show `account-disabled` and `credentials-expired` in plain words.
+- [x] **SECURITYAUTH-25** ([#111](https://github.com/abbyfluoroethane/chord/issues/111)) (UX gap, XEP-0198): Optional.
 
 **Info**
 
@@ -294,13 +294,13 @@ Report: [06-calls-push-presence.md](06-calls-push-presence.md)
 
 **Low**
 
-- [ ] **CALLSPUSHPRESENCE-12** ([#123](https://github.com/abbyfluoroethane/chord/issues/123)) (Bug, XEP-0126): Test with two resources.
-- [ ] **CALLSPUSHPRESENCE-15** ([#126](https://github.com/abbyfluoroethane/chord/issues/126)) (Missing XEP, XEP-0256): Skip.
-- [ ] **CALLSPUSHPRESENCE-19** ([#130](https://github.com/abbyfluoroethane/chord/issues/130)) (Missing XEP, XEP-0158, XEP-0077): Handle the `captcha` form in MUC join errors and in registration.
+- [x] **CALLSPUSHPRESENCE-12** ([#123](https://github.com/abbyfluoroethane/chord/issues/123)) (Bug, XEP-0126): Test with two resources.
+- [x] **CALLSPUSHPRESENCE-15** ([#126](https://github.com/abbyfluoroethane/chord/issues/126)) (Missing XEP, XEP-0256): Skip.
+- [x] **CALLSPUSHPRESENCE-19** ([#130](https://github.com/abbyfluoroethane/chord/issues/130)) (Missing XEP, XEP-0158, XEP-0077): Handle the `captcha` form in MUC join errors and in registration.
 - [ ] **CALLSPUSHPRESENCE-20** ([#131](https://github.com/abbyfluoroethane/chord/issues/131)) (Missing XEP, XEP-0393, XEP-0071): Decide: keep Discord syntax on send, and render XEP-0393 on receive.
-- [ ] **CALLSPUSHPRESENCE-21** ([#132](https://github.com/abbyfluoroethane/chord/issues/132)) (Missing feature, XEP-0377): Add an optional "block and report as spam or abuse" action.
-- [ ] **CALLSPUSHPRESENCE-22** ([#133](https://github.com/abbyfluoroethane/chord/issues/133)) (UX gap, XEP-0191): Add Block to the person context menu.
-- [ ] **CALLSPUSHPRESENCE-23** ([#134](https://github.com/abbyfluoroethane/chord/issues/134)) (Info, XEP-0115): Add the missing feature strings so peers can detect them.
+- [x] **CALLSPUSHPRESENCE-21** ([#132](https://github.com/abbyfluoroethane/chord/issues/132)) (Missing feature, XEP-0377): Add an optional "block and report as spam or abuse" action.
+- [x] **CALLSPUSHPRESENCE-22** ([#133](https://github.com/abbyfluoroethane/chord/issues/133)) (UX gap, XEP-0191): Add Block to the person context menu.
+- [x] **CALLSPUSHPRESENCE-23** ([#134](https://github.com/abbyfluoroethane/chord/issues/134)) (Info, XEP-0115): Add the missing feature strings so peers can detect them.
 
 **Info**
 
@@ -330,22 +330,22 @@ Report: [07-desktop-gaps.md](07-desktop-gaps.md)
 
 **Low**
 
-- [ ] **DESKTOPGAPS-10** ([#144](https://github.com/abbyfluoroethane/chord/issues/144)) (UX gap): Add XEP-0077 password change (`jabber:iq:register` with the new password) in core and bridge.
-- [ ] **DESKTOPGAPS-13** ([#147](https://github.com/abbyfluoroethane/chord/issues/147)) (UX gap, XEP-0045 s9.5): Read the room config form (XEP-0045 section 10.2) and fill the current values.
-- [ ] **DESKTOPGAPS-14** ([#148](https://github.com/abbyfluoroethane/chord/issues/148)) (UX gap, XEP-0045 s9): Add a ban list and member list view in Channel settings.
-- [ ] **DESKTOPGAPS-15** ([#149](https://github.com/abbyfluoroethane/chord/issues/149)) (UX gap, XEP-0191): Add "Unblock all" in Privacy, beside the blocked list.
-- [ ] **DESKTOPGAPS-16** ([#150](https://github.com/abbyfluoroethane/chord/issues/150)) (UX gap, XEP-0045 s7.5): Add a "Decline" button on an invite card.
-- [ ] **DESKTOPGAPS-17** ([#151](https://github.com/abbyfluoroethane/chord/issues/151)) (UX gap): Add Delete space and Remove channel from space in Space settings.
-- [ ] **DESKTOPGAPS-19** ([#153](https://github.com/abbyfluoroethane/chord/issues/153)) (Missing feature, XEP-0461 (thread as a reply)): Show a reply chain view on click of the reply preview.
-- [ ] **DESKTOPGAPS-20** ([#154](https://github.com/abbyfluoroethane/chord/issues/154)) (Missing feature): Add a message link.
-- [ ] **DESKTOPGAPS-21** ([#155](https://github.com/abbyfluoroethane/chord/issues/155)) (Missing feature): Show the total unread count in the window title and on the dock or taskbar icon.
-- [ ] **DESKTOPGAPS-22** ([#156](https://github.com/abbyfluoroethane/chord/issues/156)) (Missing feature): Optional.
-- [ ] **DESKTOPGAPS-23** ([#157](https://github.com/abbyfluoroethane/chord/issues/157)) (UX gap): Only mark read when the focus is not in an input.
-- [ ] **DESKTOPGAPS-24** ([#158](https://github.com/abbyfluoroethane/chord/issues/158)) (UX gap): Optional.
-- [ ] **DESKTOPGAPS-26** ([#159](https://github.com/abbyfluoroethane/chord/issues/159)) (Bug): Collect the failures.
-- [ ] **DESKTOPGAPS-27** ([#160](https://github.com/abbyfluoroethane/chord/issues/160)) (Bug): Show a toast in each case where the action is visible to the user.
-- [ ] **DESKTOPGAPS-28** ([#161](https://github.com/abbyfluoroethane/chord/issues/161)) (Accessibility): Use `role="alert"` for errors.
-- [ ] **DESKTOPGAPS-29** ([#162](https://github.com/abbyfluoroethane/chord/issues/162)) (Accessibility): Remove the empty handler.
+- [x] **DESKTOPGAPS-10** ([#144](https://github.com/abbyfluoroethane/chord/issues/144)) (UX gap): Add XEP-0077 password change (`jabber:iq:register` with the new password) in core and bridge.
+- [x] **DESKTOPGAPS-13** ([#147](https://github.com/abbyfluoroethane/chord/issues/147)) (UX gap, XEP-0045 s9.5): Read the room config form (XEP-0045 section 10.2) and fill the current values.
+- [x] **DESKTOPGAPS-14** ([#148](https://github.com/abbyfluoroethane/chord/issues/148)) (UX gap, XEP-0045 s9): Add a ban list and member list view in Channel settings.
+- [x] **DESKTOPGAPS-15** ([#149](https://github.com/abbyfluoroethane/chord/issues/149)) (UX gap, XEP-0191): Add "Unblock all" in Privacy, beside the blocked list.
+- [x] **DESKTOPGAPS-16** ([#150](https://github.com/abbyfluoroethane/chord/issues/150)) (UX gap, XEP-0045 s7.5): Add a "Decline" button on an invite card.
+- [x] **DESKTOPGAPS-17** ([#151](https://github.com/abbyfluoroethane/chord/issues/151)) (UX gap): Add Delete space and Remove channel from space in Space settings.
+- [x] **DESKTOPGAPS-19** ([#153](https://github.com/abbyfluoroethane/chord/issues/153)) (Missing feature, XEP-0461 (thread as a reply)): Show a reply chain view on click of the reply preview.
+- [x] **DESKTOPGAPS-20** ([#154](https://github.com/abbyfluoroethane/chord/issues/154)) (Missing feature): Add a message link.
+- [x] **DESKTOPGAPS-21** ([#155](https://github.com/abbyfluoroethane/chord/issues/155)) (Missing feature): Show the total unread count in the window title and on the dock or taskbar icon.
+- [x] **DESKTOPGAPS-22** ([#156](https://github.com/abbyfluoroethane/chord/issues/156)) (Missing feature): Optional.
+- [x] **DESKTOPGAPS-23** ([#157](https://github.com/abbyfluoroethane/chord/issues/157)) (UX gap): Only mark read when the focus is not in an input.
+- [x] **DESKTOPGAPS-24** ([#158](https://github.com/abbyfluoroethane/chord/issues/158)) (UX gap): Optional.
+- [x] **DESKTOPGAPS-26** ([#159](https://github.com/abbyfluoroethane/chord/issues/159)) (Bug): Collect the failures.
+- [x] **DESKTOPGAPS-27** ([#160](https://github.com/abbyfluoroethane/chord/issues/160)) (Bug): Show a toast in each case where the action is visible to the user.
+- [x] **DESKTOPGAPS-28** ([#161](https://github.com/abbyfluoroethane/chord/issues/161)) (Accessibility): Use `role="alert"` for errors.
+- [x] **DESKTOPGAPS-29** ([#162](https://github.com/abbyfluoroethane/chord/issues/162)) (Accessibility): Remove the empty handler.
 
 **Info**
 
@@ -372,15 +372,15 @@ Report: [08-bridge-security.md](08-bridge-security.md)
 
 **Low**
 
-- [ ] **BRIDGESECURITY-09** ([#171](https://github.com/abbyfluoroethane/chord/issues/171)) (Security): The UI can reveal any path in the file manager.
-- [ ] **BRIDGESECURITY-10** ([#172](https://github.com/abbyfluoroethane/chord/issues/172)) (Security): `default-src 'self'` covers frames and objects, but not `base-uri` or `form-action`.
-- [ ] **BRIDGESECURITY-11** ([#173](https://github.com/abbyfluoroethane/chord/issues/173)) (Security): An avatar can be `image/svg+xml`.
-- [ ] **BRIDGESECURITY-12** ([#174](https://github.com/abbyfluoroethane/chord/issues/174)) (UX gap): Attack: `[https://your-bank.com](https://evil.example)` opens the evil site with no confirmation.
-- [ ] **BRIDGESECURITY-13** ([#175](https://github.com/abbyfluoroethane/chord/issues/175)) (UX gap): Homograph JIDs (for example a Cyrillic "a") look like the real one in the confirmation dialog.
-- [ ] **BRIDGESECURITY-14** ([#176](https://github.com/abbyfluoroethane/chord/issues/176)) (Security): The disco query to an unknown room or space runs before the user confirms (the card and the dialog both call `request`).
-- [ ] **BRIDGESECURITY-15** ([#177](https://github.com/abbyfluoroethane/chord/issues/177)) (Security): Missing ranges: Teredo `2001::/32` (holds an IPv4 address), NAT64 local-use `64:ff9b:1::/48`, `100::/64`, `192.88.99.0/24`, and `192.31.196.0/24`.
-- [ ] **BRIDGESECURITY-16** ([#178](https://github.com/abbyfluoroethane/chord/issues/178)) (Security): A room with many distinct URLs starts many fetches at once.
-- [ ] **BRIDGESECURITY-17** ([#179](https://github.com/abbyfluoroethane/chord/issues/179)) (Bug): A crash between the two calls leaves no pack.
+- [x] **BRIDGESECURITY-09** ([#171](https://github.com/abbyfluoroethane/chord/issues/171)) (Security): The UI can reveal any path in the file manager.
+- [x] **BRIDGESECURITY-10** ([#172](https://github.com/abbyfluoroethane/chord/issues/172)) (Security): `default-src 'self'` covers frames and objects, but not `base-uri` or `form-action`.
+- [x] **BRIDGESECURITY-11** ([#173](https://github.com/abbyfluoroethane/chord/issues/173)) (Security): An avatar can be `image/svg+xml`.
+- [x] **BRIDGESECURITY-12** ([#174](https://github.com/abbyfluoroethane/chord/issues/174)) (UX gap): Attack: `[https://your-bank.com](https://evil.example)` opens the evil site with no confirmation.
+- [x] **BRIDGESECURITY-13** ([#175](https://github.com/abbyfluoroethane/chord/issues/175)) (UX gap): Homograph JIDs (for example a Cyrillic "a") look like the real one in the confirmation dialog.
+- [x] **BRIDGESECURITY-14** ([#176](https://github.com/abbyfluoroethane/chord/issues/176)) (Security): The disco query to an unknown room or space runs before the user confirms (the card and the dialog both call `request`).
+- [x] **BRIDGESECURITY-15** ([#177](https://github.com/abbyfluoroethane/chord/issues/177)) (Security): Missing ranges: Teredo `2001::/32` (holds an IPv4 address), NAT64 local-use `64:ff9b:1::/48`, `100::/64`, `192.88.99.0/24`, and `192.31.196.0/24`.
+- [x] **BRIDGESECURITY-16** ([#178](https://github.com/abbyfluoroethane/chord/issues/178)) (Security): A room with many distinct URLs starts many fetches at once.
+- [x] **BRIDGESECURITY-17** ([#179](https://github.com/abbyfluoroethane/chord/issues/179)) (Bug): A crash between the two calls leaves no pack.
 
 **Info**
 
@@ -408,11 +408,11 @@ Report: [09-compliance-xeps.md](09-compliance-xeps.md)
 
 **Low**
 
-- [ ] **COMPLIANCEXEPS-09** ([#188](https://github.com/abbyfluoroethane/chord/issues/188)) (Missing XEP, XEP-0092, XEP-0202, XEP-0012): Compliant as it is (RFC 6120 8.2.3).
-- [ ] **COMPLIANCEXEPS-10** ([#189](https://github.com/abbyfluoroethane/chord/issues/189)) (Spec violation, XEP-0030 section 3.1): For an unknown node, return `item-not-found`.
-- [ ] **COMPLIANCEXEPS-11** ([#190](https://github.com/abbyfluoroethane/chord/issues/190)) (Spec violation, XEP-0030 section 4): An entity that supports disco SHOULD answer disco#items with an empty list.
-- [ ] **COMPLIANCEXEPS-12** ([#191](https://github.com/abbyfluoroethane/chord/issues/191)) (Security, RFC 6120 section 6, RFC 7590): Remove ANONYMOUS from a password login.
-- [ ] **COMPLIANCEXEPS-13** ([#192](https://github.com/abbyfluoroethane/chord/issues/192)) (Missing XEP, XEP-0388 (SASL2), XEP-0386 (Bind 2), XEP-0484 (FAST)): Not in XEP-0479.
+- [x] **COMPLIANCEXEPS-09** ([#188](https://github.com/abbyfluoroethane/chord/issues/188)) (Missing XEP, XEP-0092, XEP-0202, XEP-0012): Compliant as it is (RFC 6120 8.2.3).
+- [x] **COMPLIANCEXEPS-10** ([#189](https://github.com/abbyfluoroethane/chord/issues/189)) (Spec violation, XEP-0030 section 3.1): For an unknown node, return `item-not-found`.
+- [x] **COMPLIANCEXEPS-11** ([#190](https://github.com/abbyfluoroethane/chord/issues/190)) (Spec violation, XEP-0030 section 4): An entity that supports disco SHOULD answer disco#items with an empty list.
+- [x] **COMPLIANCEXEPS-12** ([#191](https://github.com/abbyfluoroethane/chord/issues/191)) (Security, RFC 6120 section 6, RFC 7590): Remove ANONYMOUS from a password login.
+- [x] **COMPLIANCEXEPS-13** ([#192](https://github.com/abbyfluoroethane/chord/issues/192)) (Missing XEP, XEP-0388 (SASL2), XEP-0386 (Bind 2), XEP-0484 (FAST)): Not in XEP-0479.
 - [ ] **COMPLIANCEXEPS-14** ([#193](https://github.com/abbyfluoroethane/chord/issues/193)) (UX gap, XEP-0372, XEP-0393): Add XEP-0393 message styling (bold, code, quote) in the timeline.
 
 **Info**
