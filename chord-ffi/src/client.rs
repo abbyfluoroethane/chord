@@ -566,15 +566,16 @@ impl ChordClient {
     }
 
     /// Join a room with no nick of our own. The room may have reserved a nick for us
-    /// (XEP-0045, section 7.12): Chord uses it. Else the nick is the stored one or the local
-    /// part of our JID. The errors are those of `join_room`.
+    /// (XEP-0045, section 7.12): Chord uses it. Else the nick is the stored one, then
+    /// `fallback`, then the local part of our JID. The errors are those of `join_room`.
     pub async fn join_room_default_nick(
         &self,
         room: String,
         password: Option<String>,
+        fallback: Option<String>,
     ) -> Result<(), ChordError> {
         let room = parse_bare(&room)?;
-        self.call(move |h| async move { h.join_room_default_nick(room, password).await })
+        self.call(move |h| async move { h.join_room_default_nick(room, password, fallback).await })
             .await
     }
 

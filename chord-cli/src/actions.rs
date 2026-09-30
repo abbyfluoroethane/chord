@@ -42,7 +42,7 @@ pub async fn join(client: &Client, args: &[&str]) -> Result<(), CliError> {
         None => {
             client
                 .handle
-                .join_room_default_nick(room.clone(), password)
+                .join_room_default_nick(room.clone(), password, None)
                 .await
         }
     };
@@ -72,7 +72,7 @@ pub async fn join(client: &Client, args: &[&str]) -> Result<(), CliError> {
 async fn enter(client: &Client, room: &BareJid) -> Result<(), CliError> {
     client
         .handle
-        .join_room_default_nick(room.clone(), None)
+        .join_room_default_nick(room.clone(), None, None)
         .await
         .map_err(err)
 }

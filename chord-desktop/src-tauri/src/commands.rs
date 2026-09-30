@@ -452,21 +452,27 @@ pub async fn search_messages(
 
 // ---------------------------------------------------------------- rooms
 
-/// Join a room. With no nick, the room may have reserved one for us (XEP-0045, 7.12),
-/// else the stored nick or the local part of the JID is the nick. A wrong or missing
-/// password fails with the code `notAuthorized`: ask for one and call again.
+/// Join a room. With no nick, the room may have reserved one for us (XEP-0045, 7.12), else
+/// the stored nick, then `fallback_nick`, then the local part of the JID is the nick. A
+/// wrong or missing password fails with the code `notAuthorized`: ask for one and call
+/// again.
 #[tauri::command]
 pub async fn join_room(
     state: State<'_, AppState>,
     room: String,
     nick: Option<String>,
     password: Option<String>,
+    fallback_nick: Option<String>,
 ) -> Res<()> {
     let handle = state.handle()?;
     let room = bare(&room)?;
     match nick {
         Some(nick) => handle.join_room(room, nick, password).await?,
-        None => handle.join_room_default_nick(room, password).await?,
+        None => {
+            handle
+                .join_room_default_nick(room, password, fallback_nick)
+                .await?
+        }
     }
     Ok(())
 }

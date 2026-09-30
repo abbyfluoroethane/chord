@@ -196,7 +196,9 @@ pub(crate) fn on_event(ctx: &mut Ctx<'_>, payload: Payload) {
     }
 }
 
-/// Publish a bookmark. The password of the room, if we have one, goes with it.
+/// Publish a bookmark. The password of the room, if we have one, goes with it. With no
+/// `nick`, the bookmark gets the nick that we use in the room (or asked for), so that the
+/// next login joins with it.
 pub(crate) fn add(
     ctx: &mut Ctx<'_>,
     room: BareJid,
@@ -206,6 +208,7 @@ pub(crate) fn add(
     reply: Reply,
 ) {
     let password = muc::stored_password(ctx, &room);
+    let nick = nick.or_else(|| muc::our_nick(ctx, &room));
     let bookmark = Bookmark {
         room,
         name,
@@ -595,6 +598,35 @@ mod tests {
         assert_eq!(row(&h, A), Some((true, true, Some("al".into()))));
         // A local change does not join.
         assert!(join_presences(&mut h).is_empty());
+    }
+
+    #[test]
+    fn add_without_a_nick_uses_the_nick_of_the_room() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| {
+            muc::join_room(
+                ctx,
+                &BareJid::new(A).unwrap(),
+                Some("Reserved".into()),
+                None,
+                None,
+            )
+        });
+        h.take_sent();
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| add(ctx, BareJid::new(A).unwrap(), None, true, None, reply));
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!("not a set")
+        };
+        let PubSub::Publish { publish, .. } = PubSub::try_from(payload.clone()).unwrap() else {
+            panic!("not a publish")
+        };
+        let conference = Conference::try_from(publish.items[0].payload.clone().unwrap()).unwrap();
+        assert_eq!(
+            conference.nick.map(|n| n.as_str().to_owned()),
+            Some("Reserved".into())
+        );
     }
 
     #[test]

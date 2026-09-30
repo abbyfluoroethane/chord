@@ -146,6 +146,15 @@ pub struct RoomCard {
     pub change_subject: bool,
 }
 
+/// Join calls that wait for the answer to the question for the reserved nick.
+#[derive(Debug)]
+pub(super) struct Reserving {
+    password: Option<String>,
+    /// The nick to use when the room reserved none.
+    fallback: Option<String>,
+    replies: Vec<Reply>,
+}
+
 /// A join that waits for the self-presence or an error.
 #[derive(Debug)]
 pub(super) struct Join {
@@ -179,7 +188,7 @@ pub(crate) struct State {
     /// The echo of the subject or an error message answers them.
     subjects: HashMap<String, (BareJid, Reply)>,
     /// Joins that wait for the reserved nick of the room (XEP-0045, 7.12).
-    reserving: HashMap<BareJid, (Option<String>, Vec<Reply>)>,
+    reserving: HashMap<BareJid, Reserving>,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -292,6 +301,7 @@ pub(crate) enum Command {
     JoinDefault {
         room: BareJid,
         password: Option<String>,
+        fallback: Option<String>,
         reply: Reply,
     },
     SetSubject {
@@ -335,16 +345,18 @@ impl ClientHandle {
     }
 
     /// Join a room with no nick of our own. If the room reserved a nick for us (XEP-0045,
-    /// section 7.12), we use it. Else the nick is the stored one or the local part of our
-    /// JID. Errors are the same as for `join_room`.
+    /// section 7.12), we use it. Else the nick is the stored one, then `fallback`, then the
+    /// local part of our JID. Errors are the same as for `join_room`.
     pub async fn join_room_default_nick(
         &self,
         room: BareJid,
         password: Option<String>,
+        fallback: Option<String>,
     ) -> Result<(), ClientError> {
         self.room_command(|reply| Command::JoinDefault {
             room,
             password,
+            fallback,
             reply,
         })
         .await
@@ -611,8 +623,8 @@ pub(crate) fn next_session(ctx: &mut Ctx<'_>) -> State {
     for (_, (_, reply)) in ctx.state.muc.subjects.drain() {
         let _ = reply.send(Err(ClientError::NotConnected));
     }
-    for (_, (_, replies)) in ctx.state.muc.reserving.drain() {
-        for reply in replies {
+    for (_, waiting) in ctx.state.muc.reserving.drain() {
+        for reply in waiting.replies {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
     }
@@ -678,14 +690,19 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 IqResponse::Result(Some(query)) => reserved_nick(&query),
                 IqResponse::Result(None) | IqResponse::Error(_) | IqResponse::Lost => None,
             };
-            if let Some((password, replies)) = ctx.state.muc.reserving.remove(&room) {
+            if let Some(waiting) = ctx.state.muc.reserving.remove(&room) {
+                let Reserving {
+                    password,
+                    fallback,
+                    replies,
+                } = waiting;
                 if lost {
                     for reply in replies {
                         let _ = reply.send(Err(ClientError::NotConnected));
                     }
                     return;
                 }
-                let nick = reserved.or_else(|| default_nick(ctx, &room));
+                let nick = reserved.or(fallback).or_else(|| default_nick(ctx, &room));
                 for reply in replies {
                     join_room(ctx, &room, nick.clone(), password.clone(), Some(reply));
                 }
@@ -920,6 +937,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
         Command::JoinDefault {
             room,
             password,
+            fallback,
             reply,
         } => {
             let has_nick = ctx.state.muc.nicks.contains_key(&room)
@@ -927,14 +945,18 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 || room_row(ctx, &room).is_some_and(|r| r.nick.is_some());
             if has_nick {
                 join_room(ctx, &room, None, password, Some(reply));
-            } else if let Some((_, replies)) = ctx.state.muc.reserving.get_mut(&room) {
-                replies.push(reply);
+            } else if let Some(waiting) = ctx.state.muc.reserving.get_mut(&room) {
+                waiting.replies.push(reply);
             } else {
                 // A first join: the room may have reserved a nick for us (XEP-0045, 7.12).
-                ctx.state
-                    .muc
-                    .reserving
-                    .insert(room.clone(), (password, vec![reply]));
+                ctx.state.muc.reserving.insert(
+                    room.clone(),
+                    Reserving {
+                        password,
+                        fallback,
+                        replies: vec![reply],
+                    },
+                );
                 let iq = Iq::Get {
                     from: None,
                     to: Some(Jid::from(room.clone())),
@@ -1424,7 +1446,7 @@ pub(crate) fn mark_room(ctx: &mut Ctx<'_>, room: &BareJid) {
 }
 
 /// Our nick in a room: the nick of the joined room, else the nick that we asked for.
-fn our_nick(ctx: &Ctx<'_>, room: &BareJid) -> Option<String> {
+pub(crate) fn our_nick(ctx: &Ctx<'_>, room: &BareJid) -> Option<String> {
     ctx.state
         .muc
         .nicks
@@ -4491,6 +4513,7 @@ mod tests {
         command(h, |reply| Command::JoinDefault {
             room: room(),
             password: None,
+            fallback: None,
             reply,
         })
     }
@@ -4544,6 +4567,34 @@ mod tests {
         };
         let node = BareJid::new(ACCOUNT).unwrap().node().unwrap().to_string();
         assert_eq!(p.to, Some(jid(&format!("{ROOM}/{node}"))));
+    }
+
+    #[test]
+    fn the_fallback_nick_beats_the_local_part_when_the_room_reserved_none() {
+        let mut h = Harness::new();
+        let mut answer = command(&mut h, |reply| Command::JoinDefault {
+            room: room(),
+            password: None,
+            fallback: Some("Display Name".into()),
+            reply,
+        });
+        h.take_sent();
+        h.respond(
+            is_muc,
+            IqResponse::Error(StanzaError::new(
+                ErrorType::Cancel,
+                DefinedCondition::ItemNotFound,
+                "en",
+                "",
+            )),
+        );
+        let sent = h.take_sent();
+        let [Stanza::Presence(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(p.to, Some(jid(&format!("{ROOM}/Display Name"))));
+        h.with_ctx(|ctx| on_presence(ctx, &self_presence("Display Name")));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
     }
 
     #[test]
