@@ -78,7 +78,7 @@ use tokio::task::JoinHandle;
 
 /// `connect` returns after the login, so `Connected` must arrive at once. This is a safety limit.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <text> | \
+const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <text> [--wait] | \
 listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
 timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
 upload <jid> <file> | space-info <service> <node> | room-info <room> | space-browse | space-join <service> <node> | \
@@ -92,7 +92,8 @@ read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds]
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
 invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
-notify <jid> [all|mentions|none [--until <unix-ms>]]";
+notify <jid> [all|mentions|none [--until <unix-ms>]] | \
+presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>]";
 
 /// Global options.
 pub struct Opts {
