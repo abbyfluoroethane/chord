@@ -228,6 +228,9 @@ pub enum SessionEvent {
     /// A clock tick, about every `TICK`, while the session runs. The actor uses it for
     /// time limits, so that the features need no timers.
     Tick,
+    /// A message that the stream lost, sent again without success. XEP-0198 could not
+    /// confirm it and the session gave up. The actor marks it as failed.
+    SendFailed(Box<Stanza>),
 }
 
 /// The time between two `SessionEvent::Tick` events.

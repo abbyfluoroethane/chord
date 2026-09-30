@@ -552,6 +552,14 @@ pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     jmi::on_tick(ctx);
 }
 
+/// The session gave up on a stanza: the stream lost it, and sending it again did not work.
+/// Only a message shows that to the user.
+pub(crate) fn on_send_failed(ctx: &mut Ctx<'_>, stanza: &Stanza) {
+    if let Stanza::Message(message) = stanza {
+        chat::on_send_failed(ctx, message);
+    }
+}
+
 /// A result from work outside the session.
 pub(crate) fn on_internal(ctx: &mut Ctx<'_>, internal: Internal) {
     match internal {

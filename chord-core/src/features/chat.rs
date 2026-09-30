@@ -183,6 +183,27 @@ fn on_error(ctx: &mut Ctx<'_>, message: &Message) {
     }
 }
 
+/// The session gave up on a message of ours (see `SessionEvent::SendFailed`). Mark it as
+/// failed, the same as for an error message from the server.
+pub(crate) fn on_send_failed(ctx: &mut Ctx<'_>, message: &Message) {
+    let (Some(to), Some(id)) = (&message.to, &message.id) else {
+        return;
+    };
+    let peer = to.to_bare();
+    match queries::mark_failed(ctx.store.conn(), ctx.account_id, peer.as_str(), &id.0) {
+        Ok(true) => {
+            log::warn!(
+                "message {} to {peer} was lost and sending it again failed",
+                id.0
+            );
+            ctx.changed(ViewKey::Timeline(peer));
+            ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
+        }
+        Ok(false) => log::debug!("lost stanza {}: no such message", id.0),
+        Err(e) => ctx.store_error("mark a message as failed", e),
+    }
+}
+
 /// Send a chat message and store it. Returns its origin-id.
 pub(crate) fn send(ctx: &mut Ctx<'_>, to: Jid, body: String) -> String {
     send_message(ctx, to, body, Outgoing::default())
@@ -500,6 +521,24 @@ mod tests {
         h.with_ctx(|ctx| on_message(ctx, &forged));
         assert_eq!(statuses(&h, PEER), [DeliveryStatus::Sent]);
         assert!(h.take_dirty().is_empty());
+    }
+
+    #[test]
+    fn a_message_that_the_session_gave_up_on_is_marked_as_failed() {
+        let mut h = Harness::new();
+        let id = h.with_ctx(|ctx| send(ctx, Jid::new(PEER).unwrap(), "lost".into()));
+        h.take_dirty();
+        let mut lost = Message::new(Some(Jid::new(PEER).unwrap()));
+        lost.id = Some(Id(id));
+        h.with_ctx(|ctx| on_send_failed(ctx, &lost));
+        assert_eq!(statuses(&h, PEER), [DeliveryStatus::Failed]);
+        assert!(
+            h.take_dirty()
+                .contains(&ViewKey::Timeline(BareJid::new(PEER).unwrap()))
+        );
+        // A second report changes nothing.
+        h.with_ctx(|ctx| on_send_failed(ctx, &lost));
+        assert_eq!(statuses(&h, PEER), [DeliveryStatus::Failed]);
     }
 
     #[test]

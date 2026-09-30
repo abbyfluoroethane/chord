@@ -29,12 +29,15 @@ use tokio_xmpp::connect::ServerConnector;
 use tokio_xmpp::connect::tls_common::CertCheck;
 use tokio_xmpp::error::AuthError;
 use tokio_xmpp::rustls;
-use tokio_xmpp::stanzastream::{Connection, Event, StanzaStream, StreamEvent};
+use tokio_xmpp::stanzastream::{
+    Connection, Event, StanzaStage, StanzaState, StanzaStream, StanzaToken, StreamEvent,
+};
 use tokio_xmpp::xmlstream::{
     FallibleStreamElement, RecvFeaturesError, StreamHeader, Timeouts, accept_stream,
     initiate_stream,
 };
 use xmpp_parsers::bind::BindFeature;
+use xmpp_parsers::message::{Message, MessageType};
 use xmpp_parsers::ns;
 use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stream_features::StreamFeatures;
@@ -45,6 +48,9 @@ use super::{
     AuthFailure, ConnectError, DisconnectReason, SaslRetry, ServerAddr, Session, SessionConfig,
     SessionError, SessionEvent, TICK, sasl_retry,
 };
+
+/// How many times the session sends a message again after the stream lost it.
+const MAX_RESENDS: u8 = 2;
 
 /// Size of the inbound and outbound queues.
 const QUEUE_DEPTH: usize = 64;
@@ -407,6 +413,9 @@ async fn run(
     // `StreamEvent::Resumed` does not carry the JID, so keep the one from the last `Reset`.
     let mut bound_jid: Option<Jid> = None;
     let mut features: Vec<String> = Vec::new();
+    // Does the server offer XEP-0198? Only then does a token show that the server got a stanza.
+    let mut sm_offered = false;
+    let (lost_tx, mut lost_rx) = mpsc::unbounded_channel::<(Box<Message>, u8)>();
     let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + TICK, TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -417,14 +426,35 @@ async fn run(
             }
             command = commands.recv() => match command {
                 Some(Command::Send(stanza)) => {
-                    // The token reports delivery progress. Nothing uses it yet.
-                    let _token = stream.send(stanza).await;
+                    let resend = match &*stanza {
+                        Stanza::Message(message) if sm_offered && is_resendable(message) => {
+                            Some(Box::new(message.clone()))
+                        }
+                        _ => None,
+                    };
+                    let token = stream.send(stanza).await;
+                    if let Some(stanza) = resend {
+                        track(token, stanza, 0, lost_tx.clone());
+                    }
                 }
                 Some(Command::ClientState(active)) => {
                     let _token = stream.send_client_state(active).await;
                 }
                 Some(Command::Close) | None => break,
             },
+            // The stream lost a message. A new stream has no record of it (XEP-0198 5). Send
+            // it again with the same ids, so that the receiver can drop a duplicate.
+            Some((stanza, attempt)) = lost_rx.recv() => {
+                if attempt < MAX_RESENDS {
+                    log::info!("the stream lost a message. Sending it again (attempt {})", attempt + 1);
+                    let token = stream.send(Box::new(Stanza::Message((*stanza).clone()))).await;
+                    track(token, stanza, attempt + 1, lost_tx.clone());
+                } else {
+                    log::warn!("the stream lost a message {MAX_RESENDS} times. Giving up.");
+                    let failed = Box::new(Stanza::Message(*stanza));
+                    let _ = events.send(SessionEvent::SendFailed(failed)).await;
+                }
+            }
             Some(failure) = auth_failed.recv() => {
                 let reason = DisconnectReason::AuthFailed(failure);
                 let _ = events.send(SessionEvent::Disconnected(reason)).await;
@@ -435,6 +465,7 @@ async fn run(
                     Some(Event::Stanza(stanza)) => SessionEvent::Stanza(Box::new(stanza)),
                     Some(Event::Stream(StreamEvent::Reset { bound_jid: jid, features: stream_features })) => {
                         bound_jid = Some(jid.clone());
+                        sm_offered = stream_features.stream_management.is_some();
                         // xmpp-parsers stream_features.rs:62: the elements that it does not parse.
                         features = stream_features.others.iter().map(|e| e.ns()).collect();
                         SessionEvent::Connected { bound_jid: jid, resumed: false, features: features.clone() }
@@ -471,6 +502,38 @@ async fn run(
     let _ = events
         .send(SessionEvent::Disconnected(DisconnectReason::Closed))
         .await;
+}
+
+/// Does a lost copy of this stanza matter? A message does, unless it is a bare chat state:
+/// that is stale when the stream is back. An error message is an answer to a peer.
+fn is_resendable(message: &Message) -> bool {
+    if message.id.is_none() || message.type_ == MessageType::Error {
+        return false;
+    }
+    let only_chat_state =
+        message.bodies.is_empty() && message.payloads.iter().all(|p| p.ns() == ns::CHATSTATES);
+    !only_chat_state
+}
+
+/// Watch a stanza until the server confirms it. If the token ends without an ack, tell `run`:
+/// the stream dropped its record of the stanza, which happens when a stream ends without
+/// a resumption, or the send failed.
+fn track(
+    token: StanzaToken,
+    stanza: Box<Message>,
+    attempt: u8,
+    lost: mpsc::UnboundedSender<(Box<Message>, u8)>,
+) {
+    tokio::spawn(async move {
+        let mut token = token;
+        if !matches!(
+            token.wait_for(StanzaStage::Acked).await,
+            Some(StanzaState::Acked { .. })
+        ) {
+            // An error means that `run` ended. The stream is closed then.
+            let _ = lost.send((stanza, attempt));
+        }
+    });
 }
 
 async fn next_event(stream: &mut StanzaStream) -> Option<Event> {
@@ -761,15 +824,23 @@ mod tests {
     }
 
     /// Read from the fake server end until `needle` shows up.
-    async fn read_until(io: &mut tokio::io::DuplexStream, buf: &mut String, needle: &str) {
+    async fn read_until(
+        n: usize,
+        io: &mut tokio::io::DuplexStream,
+        buf: &mut String,
+        needle: &str,
+    ) {
         use tokio::io::AsyncReadExt;
         let mut chunk = [0_u8; 4096];
         while !buf.contains(needle) {
             let n = tokio::time::timeout(Duration::from_secs(5), io.read(&mut chunk))
                 .await
-                .expect("the client sends data")
+                .unwrap_or_else(|_| panic!("server {n}: waiting for {needle:?}. Got {buf:?}"))
                 .unwrap();
-            assert!(n > 0, "the client closed the stream. Got {buf:?}");
+            assert!(
+                n > 0,
+                "server {n}: the client closed the stream. Waiting for {needle:?}. Got {buf:?}"
+            );
             buf.push_str(&String::from_utf8_lossy(&chunk[..n]));
         }
     }
@@ -784,7 +855,7 @@ mod tests {
         let (client_io, mut server) = tokio::io::duplex(65536);
         let server_task = tokio::spawn(async move {
             let mut buf = String::new();
-            read_until(&mut server, &mut buf, "<stream:stream").await;
+            read_until(0, &mut server, &mut buf, "<stream:stream").await;
             server
                 .write_all(
                     b"<?xml version='1.0'?><stream:stream xmlns='jabber:client' \
@@ -795,7 +866,7 @@ mod tests {
                 .await
                 .unwrap();
             // The bind request.
-            read_until(&mut server, &mut buf, "</iq>").await;
+            read_until(0, &mut server, &mut buf, "</iq>").await;
             let from_id = buf.split("id=").nth(1).unwrap();
             let quote = from_id.chars().next().unwrap();
             let id = from_id[1..].split(quote).next().unwrap().to_owned();
@@ -812,8 +883,11 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            read_until(&mut server, &mut buf, "bad-request").await;
-            assert!(buf.contains("type=\"error\"") || buf.contains("type='error'"), "{buf}");
+            read_until(0, &mut server, &mut buf, "bad-request").await;
+            assert!(
+                buf.contains("type=\"error\"") || buf.contains("type='error'"),
+                "{buf}"
+            );
             assert!(buf.contains("bad1"), "{buf}");
             assert!(buf.contains("peer@example.org/x"), "{buf}");
             server
@@ -861,6 +935,160 @@ mod tests {
         }
         // The server saw the error for the invalid IQ.
         let _server = server_task.await.unwrap();
+    }
+
+    /// The fake server end of a stream. It reads and writes raw XML, so a test controls each
+    /// byte.
+    struct RawServer {
+        n: usize,
+        io: tokio::io::DuplexStream,
+        buf: String,
+    }
+
+    impl RawServer {
+        /// Read until `needle`. Return the text up to and including it, and drop that text.
+        async fn expect(&mut self, needle: &str) -> String {
+            read_until(self.n, &mut self.io, &mut self.buf, needle).await;
+            let end = self.buf.find(needle).unwrap() + needle.len();
+            self.buf.drain(..end).collect()
+        }
+
+        async fn write(&mut self, xml: &str) {
+            use tokio::io::AsyncWriteExt;
+            self.io.write_all(xml.as_bytes()).await.unwrap();
+        }
+
+        /// Answer the stream header, then bind and enable XEP-0198. With `resume_failed`, the
+        /// server lost the state of the old stream.
+        async fn negotiate(&mut self, resume_failed: bool) {
+            self.expect("<stream:stream").await;
+            self.write(
+                "<?xml version='1.0'?><stream:stream xmlns='jabber:client' \
+                 xmlns:stream='http://etherx.jabber.org/streams' from='example.org' \
+                 to='me@example.org' id='s1' version='1.0'><stream:features>\
+                 <bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/>\
+                 <sm xmlns='urn:xmpp:sm:3'/></stream:features>",
+            )
+            .await;
+            if resume_failed {
+                self.expect("<resume").await;
+                self.write(
+                    "<failed xmlns='urn:xmpp:sm:3' h='0'>\
+                     <item-not-found xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'/></failed>",
+                )
+                .await;
+            }
+            self.expect("</iq>").await;
+            // tokio-xmpp gives its bind request this fixed id.
+            self.write(
+                "<iq type='result' id='resource-binding'>\
+                 <bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>\
+                 <jid>me@example.org/r</jid></bind></iq>",
+            )
+            .await;
+        }
+    }
+
+    /// A client connection to a fake server, as the session login gives it.
+    async fn fake_connection(
+        n: usize,
+        seen: mpsc::UnboundedSender<(usize, String)>,
+    ) -> Result<Connection, LoginError> {
+        let (client_io, server_io) = tokio::io::duplex(65536);
+        tokio::spawn(async move {
+            let mut server = RawServer {
+                n,
+                io: server_io,
+                buf: String::new(),
+            };
+            // Every stream after the first one fails to resume the state of the last one.
+            server.negotiate(n > 1).await;
+            server.expect("<enable").await;
+            server
+                .write("<enabled xmlns='urn:xmpp:sm:3' id='r1' resume='true'/>")
+                .await;
+            let message = server.expect("</message>").await;
+            let _ = seen.send((n, message));
+            // The server drops the stream here. The client never got an ack.
+        });
+        let pending = initiate_stream(
+            tokio::io::BufReader::new(client_io),
+            ns::JABBER_CLIENT,
+            StreamHeader {
+                from: Some(Cow::Borrowed("me@example.org")),
+                to: Some(Cow::Borrowed("example.org")),
+                id: None,
+            },
+            Timeouts::default(),
+        )
+        .await
+        .map_err(|e| LoginError::Unreachable(e.to_string()))?;
+        let (features, stream) = pending
+            .recv_features::<FallibleStreamElement>()
+            .await
+            .map_err(|_| LoginError::Unreachable("no features".into()))?;
+        Ok(Connection {
+            stream: stream.box_stream(),
+            features,
+            identity: Jid::new("me@example.org").unwrap(),
+        })
+    }
+
+    /// CORESESSION-13 (XEP-0198 5): a message that the old stream never got acked is lost
+    /// when the new stream cannot resume. The session sends it again with the same id, up to
+    /// `MAX_RESENDS` times, and then reports `SendFailed`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_message_lost_with_the_stream_goes_out_again_then_fails() {
+        let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&connections);
+        let tx = seen_tx.clone();
+        let attempt = move || {
+            let n = counter.fetch_add(1, Ordering::SeqCst) + 2;
+            fake_connection(n, tx.clone())
+        };
+        let first = fake_connection(1, seen_tx).await.unwrap();
+        let mut session = NativeSession::spawn(Some(first), attempt, LOGIN_TIMEOUT);
+        let mut events = session.events().unwrap();
+        let mut message =
+            xmpp_parsers::message::Message::new(Some(Jid::new("peer@example.org").unwrap()));
+        message.type_ = xmpp_parsers::message::MessageType::Chat;
+        message.id = Some(xmpp_parsers::message::Id("m-1".into()));
+        message.bodies.insert(
+            xmpp_parsers::message::Lang(String::new()),
+            "hello".to_owned(),
+        );
+
+        let mut sent = false;
+        let failed = loop {
+            let fut = core::future::poll_fn(|cx| Pin::new(&mut events).poll_next(cx));
+            let event = tokio::time::timeout(Duration::from_secs(10), fut)
+                .await
+                .expect("an event within 10 s")
+                .expect("the session stays up");
+            match event {
+                SessionEvent::Connected { .. } if !sent => {
+                    sent = true;
+                    session.send(message.clone().into()).await.unwrap();
+                }
+                SessionEvent::SendFailed(stanza) => break stanza,
+                _ => {}
+            }
+        };
+        let Stanza::Message(failed) = *failed else {
+            panic!("expected a message");
+        };
+        assert_eq!(failed.id.as_ref().map(|i| i.0.as_str()), Some("m-1"));
+        // The first send and two resends, each on its own stream, each with the same id.
+        let mut streams = Vec::new();
+        while let Ok((n, text)) = seen_rx.try_recv() {
+            assert!(
+                text.contains("id=\"m-1\"") || text.contains("id='m-1'"),
+                "{text}"
+            );
+            streams.push(n);
+        }
+        assert_eq!(streams, [1, 2, 3]);
     }
 
     /// The whole path, with the real `StanzaStream` worker and a fake login: a reconnect

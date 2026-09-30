@@ -798,6 +798,9 @@ impl<S: Session> Actor<S> {
                 self.expire_pending();
                 self.with_ctx(features::on_tick);
             }
+            SessionEvent::SendFailed(stanza) => {
+                self.with_ctx(|ctx| features::on_send_failed(ctx, &stanza));
+            }
         }
     }
 
