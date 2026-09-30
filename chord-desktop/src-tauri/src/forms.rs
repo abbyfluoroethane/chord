@@ -91,6 +91,24 @@ pub async fn change_password(state: State<'_, AppState>, password: String) -> Re
     Ok(())
 }
 
+/// Delete the account on the server (XEP-0077) and drop its saved password. It cannot be
+/// undone. `confirm` is the address that the user typed: core refuses it unless it is the
+/// address of the open account. The UI must log out after it.
+#[tauri::command]
+pub async fn delete_account(state: State<'_, AppState>, confirm: String) -> Res<()> {
+    let client = state.client()?;
+    client.handle.delete_account(&confirm).await?;
+    // The account is gone: a saved password is of no use. A failure of the keychain must
+    // not hide that the server deleted the account.
+    if let Err(e) = keychain::delete(client.account.as_str()) {
+        log::warn!(
+            "cannot drop the password of a deleted account: {}",
+            e.message
+        );
+    }
+    Ok(())
+}
+
 /// Ask a server for its registration fields, before any login. `server` is as for `login`.
 #[tauri::command]
 pub async fn registration_form(domain: String, server: Option<String>) -> Res<RegistrationForm> {

@@ -1,7 +1,7 @@
 // Sign-in and connection state. In the browser preview this is sample behaviour.
 // Inside Tauri it calls open, login and logout of the bridge and follows the
 // connection events (see live.svelte.ts).
-import type { ConnectionState } from '$lib/chord/types';
+import type { CertStatus, ConnectionState } from '$lib/chord/types';
 import { authFailureText, connectErrorText, plainError } from './adapt';
 import { api, live } from './bridge';
 import { settings } from './local';
@@ -47,6 +47,8 @@ class Session {
   address = $state('');
   /** The keychain holds a password for the account (live only). */
   hasSavedPassword = $state(false);
+  /** The certificate of the server stopped the sign-in: the login screen asks about it. */
+  certProblem = $state<CertStatus | null>(null);
 
   private lastAddress = '';
   private everConnected = false;
@@ -129,6 +131,18 @@ class Session {
     this.state = 'connecting';
     this.host = c.server.trim() || address.split('@')[1];
     await new Promise((r) => setTimeout(r, 900));
+    if (this.host.startsWith('selfsigned')) {
+      // A preview of the question about a certificate that the system refuses.
+      this.state = 'signed-out';
+      this.error = `The certificate of ${this.host} is not valid, so Chord did not connect.`;
+      this.certProblem = {
+        pinned: null,
+        trustUntrusted: false,
+        observed: '3F:9A:0C:55:B2:7E:41:D8:6C:1B:E0:94:AA:27:5D:F3:08:C6:71:2B:9D:E4:50:1A:83:BF:66:D1:39:7C:0E:A5',
+        problem: 'untrusted'
+      };
+      return;
+    }
     if (this.host.startsWith('offline')) {
       this.state = 'signed-out';
       this.error = `Can't reach ${this.host}. Check the address and your connection.`;
@@ -155,6 +169,7 @@ class Session {
   ): Promise<void> {
     this.state = restore ? 'restoring' : 'connecting';
     this.error = null;
+    this.certProblem = null;
     this.leaving = false;
     this.cancelled = false;
     this.everConnected = false;
@@ -176,8 +191,51 @@ class Session {
       if (this.state === 'connecting' || this.state === 'restoring') this.state = 'connected';
       this.everConnected = true;
     } catch (e) {
-      if (!this.cancelled) await this.fail(plainError(e));
+      if (!this.cancelled) {
+        await this.fail(plainError(e));
+        if ((e as { code?: string } | null)?.code === 'tlsInvalid') await this.loadCertProblem();
+      }
     }
+  }
+
+  /** Ask Rust what is wrong with the certificate, so that the login screen can show it. */
+  private async loadCertProblem(): Promise<void> {
+    if (!live || !this.address) return;
+    try {
+      const status = await (await api()).certStatus(this.address);
+      this.certProblem = status.problem === 'none' ? null : status;
+    } catch {
+      /* the plain error text is enough */
+    }
+  }
+
+  /**
+   * The user saw the fingerprint and trusts the certificate. Pin it, then sign in again. With
+   * no password typed, the saved one is used (a sign-in at start-up that the certificate stopped).
+   */
+  async trustCertificate(c: Credentials): Promise<void> {
+    if (!this.certProblem) return;
+    if (!live) {
+      this.certProblem = null;
+      this.error = null;
+      this.state = 'connected';
+      return;
+    }
+    try {
+      await (await api()).certTrust(this.address || c.address.trim());
+    } catch (e) {
+      this.error = plainError(e);
+      return;
+    }
+    this.certProblem = null;
+    if (c.password) await this.signIn(c);
+    else await this.connect(this.address, { password: undefined, server: c.server, remember: false });
+  }
+
+  /** The user turns the certificate down. */
+  declineCertificate() {
+    this.certProblem = null;
+    this.error = null;
   }
 
   /** Back to the login screen, with the reason. */
@@ -211,7 +269,9 @@ class Session {
         break;
       case 'loginFailed':
         if (s.data.type === 'authFailed' || !this.everConnected) {
-          void this.fail(connectErrorText(s.data, this.host));
+          void this.fail(connectErrorText(s.data, this.host)).then(() =>
+            s.data.type === 'tlsInvalid' ? this.loadCertProblem() : undefined
+          );
         } else {
           this.state = 'reconnecting';
         }

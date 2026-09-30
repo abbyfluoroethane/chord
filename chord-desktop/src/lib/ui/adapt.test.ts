@@ -4,6 +4,7 @@ vi.mock('$lib/chord/avatars', () => ({ avatarUrl: (key: string) => `avatar://${k
 
 import type { ChannelItem, MemberItem, TimelineItem } from '$lib/chord/types';
 import {
+  authFailureText,
   connectErrorText,
   isMuted,
   levelToBridge,
@@ -261,6 +262,18 @@ describe('errors and login', () => {
     expect(plainError({ code: 'registrationRequired', message: 'x' })).toContain('members');
     expect(plainError({ code: 'conflict', message: 'x' })).toContain('nickname');
     expect(connectErrorText({ type: 'timeout' }, 'foid.space')).toBe('foid.space did not answer in time. Try again.');
+  });
+
+  it('names a disabled account and an expired password', () => {
+    expect(authFailureText({ type: 'sasl', data: 'NotAuthorized' })).toBe('Wrong address or password.');
+    expect(authFailureText({ type: 'sasl', data: 'AccountDisabled' })).toContain('disabled');
+    expect(authFailureText({ type: 'sasl', data: 'CredentialsExpired' })).toContain('expired');
+    expect(authFailureText({ type: 'sasl', data: 'MechanismTooWeak' })).toContain('mechanism too weak');
+    expect(plainError({ code: 'accountDisabled', message: 'x' })).toContain('disabled');
+    expect(plainError({ code: 'credentialsExpired', message: 'x' })).toContain('expired');
+    expect(
+      connectErrorText({ type: 'authFailed', data: { type: 'sasl', data: 'AccountDisabled' } }, 'foid.space')
+    ).toContain('disabled');
   });
 
   it('builds the server argument', () => {

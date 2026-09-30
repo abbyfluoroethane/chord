@@ -35,13 +35,28 @@ export type ErrorCode =
   | 'unsupported' // the server lacks the service
   | 'actorGone'
   | 'authFailed' // login: wrong credentials
+  | 'accountDisabled' // login: the server disabled the account
+  | 'credentialsExpired' // login: the password expired
   | 'unreachable' // login: no connection
   | 'tlsInvalid' // login: bad server certificate
   | 'timeout' // login: no answer
   | 'store' // the database
   | 'keychain'
   | 'settings'
+  | 'certPin' // a stored certificate pin is damaged
   | 'io';
+
+/** What the app knows about the certificate of the server of an account (certpin.rs). */
+export interface CertStatus {
+  /** The stored SHA-256 fingerprint, `AB:CD:...`, or null when nothing is pinned. */
+  pinned: string | null;
+  /** The pin lets this one certificate pass although the system refuses it. */
+  trustUntrusted: boolean;
+  /** The fingerprint that the last connection saw. */
+  observed: string | null;
+  /** `untrusted`: the system refuses the certificate. `changed`: it is not the pinned one. */
+  problem: 'none' | 'untrusted' | 'changed';
+}
 
 // ---------------------------------------------------------------- views
 

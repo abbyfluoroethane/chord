@@ -7,6 +7,7 @@
 
 mod avatars;
 mod badge;
+mod certpin;
 mod commands;
 mod emoji;
 mod error;
@@ -39,6 +40,7 @@ pub fn run() {
         .manage(state::AppState::default())
         .manage(files::Dropped::default())
         .manage(notify::NoticePrefs::default())
+        .manage(certpin::CertPins::default())
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -147,6 +149,10 @@ pub fn run() {
             forms::room_config_form,
             forms::submit_room_config_form,
             forms::change_password,
+            forms::delete_account,
+            certpin::cert_status,
+            certpin::cert_trust,
+            certpin::cert_clear,
             forms::registration_form,
             forms::register_account,
             link_preview::link_preview,

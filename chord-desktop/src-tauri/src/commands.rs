@@ -24,6 +24,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
+use crate::certpin;
 use crate::error::{ChordError, Res};
 use crate::keychain;
 use crate::notify;
@@ -197,9 +198,11 @@ pub async fn open(app: AppHandle, state: State<'_, AppState>, account: String) -
 /// a script in the page could use it to send the saved password to another host
 /// (BRIDGESECURITY-08). Otherwise `server` is empty for a SRV lookup, or
 /// `starttls://host:port`. With `remember`, a good login saves the password and the server
-/// in the system keychain.
+/// in the system keychain. The login carries the certificate pin of the account, if the
+/// user made one (certpin.rs). A refused certificate stops it before the password goes out.
 #[tauri::command]
 pub async fn login(
+    app: AppHandle,
     state: State<'_, AppState>,
     password: Option<String>,
     server: Option<String>,
@@ -211,8 +214,11 @@ pub async fn login(
         Ok((keychain::get(account)?, keychain::get_server(account)?))
     })?;
     let server = parse_server(Some(&server_text))?;
-    let config = SessionConfig::new(client.account.clone(), password.clone(), server);
-    client.handle.login(config).await?;
+    let pin = certpin::begin_login(&app, client.account.as_str())?;
+    let config = SessionConfig::new(client.account.clone(), password.clone(), server).with_pin(pin);
+    let outcome = client.handle.login(config).await.map_err(ChordError::from);
+    certpin::end_login(&app, client.account.as_str(), outcome.as_ref().err());
+    outcome?;
     if remember.unwrap_or(false) {
         keychain::set(client.account.as_str(), &password)?;
         keychain::set_server(client.account.as_str(), &server_text)?;

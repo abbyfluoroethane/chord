@@ -322,6 +322,10 @@ export function plainError(error: unknown): string {
   switch (e?.code) {
     case 'authFailed':
       return 'Wrong address or password.';
+    case 'accountDisabled':
+      return saslText('AccountDisabled');
+    case 'credentialsExpired':
+      return saslText('CredentialsExpired');
     case 'unreachable':
       return "Can't reach the server. Check the address and your connection.";
     case 'tlsInvalid':
@@ -347,9 +351,27 @@ export function plainError(error: unknown): string {
   }
 }
 
+/** Plain words for a SASL failure. `condition` is the Rust name, for example `AccountDisabled`. */
+export function saslText(condition: string): string {
+  switch (condition) {
+    case 'NotAuthorized':
+      return 'Wrong address or password.';
+    case 'AccountDisabled':
+      return 'This account is disabled. Ask the people who run your server.';
+    case 'CredentialsExpired':
+      return 'Your password has expired. Set a new one on your server, then sign in again.';
+    case 'TemporaryAuthFailure':
+      return 'The server could not sign you in now. Try again in a moment.';
+    default: {
+      const words = condition.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+      return `The server refused the sign-in (${words}).`;
+    }
+  }
+}
+
 export function authFailureText(f: AuthFailure): string {
   if (f.type === 'noMechanism') return 'The server offers no sign-in method that Chord can use.';
-  if (f.type === 'sasl') return 'Wrong address or password.';
+  if (f.type === 'sasl') return saslText(f.data);
   return `Sign-in failed. ${f.data}`;
 }
 

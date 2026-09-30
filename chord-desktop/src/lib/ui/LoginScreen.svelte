@@ -114,6 +114,52 @@
       </p>
     {/if}
 
+    {#if session.certProblem}
+      {@const cert = session.certProblem}
+      {@const host = address.split('@')[1] || 'the server'}
+      <div class="cert" role="alertdialog" aria-labelledby="cert-title">
+        <strong id="cert-title">
+          {cert.problem === 'changed'
+            ? `The certificate of ${host} changed`
+            : `Chord cannot verify the certificate of ${host}`}
+        </strong>
+        {#if cert.problem === 'changed'}
+          <p>
+            You pinned another certificate for this account. A server that renews its certificate
+            looks like this. So does someone who tries to read your messages. Ask the people who
+            run the server if you are not sure.
+          </p>
+          <span class="meta">Pinned</span>
+          <code class="print">{cert.pinned}</code>
+          <span class="meta">Now</span>
+          <code class="print">{cert.observed}</code>
+        {:else}
+          <p>
+            The server signed its own certificate, or the system does not know who signed it.
+            Someone who tries to read your messages would look the same. Trust it only if you
+            know this fingerprint, for example from the server owner.
+          </p>
+          <span class="meta">SHA-256 fingerprint</span>
+          <code class="print">{cert.observed ?? 'unknown'}</code>
+        {/if}
+        <div class="cert-actions">
+          <button type="button" class="btn btn-ghost" onclick={() => session.declineCertificate()}>
+            Cancel
+          </button>
+          {#if cert.observed}
+            <button
+              type="button"
+              class="btn btn-danger"
+              disabled={busy}
+              onclick={() => void session.trustCertificate({ address, password, remember, server })}
+            >
+              {cert.problem === 'changed' ? 'Trust the new certificate' : 'Trust this certificate'}
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
     <button class="btn btn-primary btn-lg" type="submit" disabled={busy}>
       {busy ? 'Connecting…' : 'Sign in'}
     </button>
@@ -128,6 +174,30 @@
 </main>
 
 <style>
+  .cert {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    background: var(--surface-200);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius-lg);
+  }
+  .cert p {
+    margin: 0;
+  }
+  .print {
+    font-family: var(--font-mono, monospace);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+  .cert-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
   .login {
     height: 100%;
     display: grid;

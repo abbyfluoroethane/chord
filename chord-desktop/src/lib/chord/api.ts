@@ -10,6 +10,7 @@ import type {
   ClientEvent,
   CommandAction,
   CommandItem,
+  CertStatus,
   CommandStep,
   Contact,
   DataForm,
@@ -81,6 +82,14 @@ export const login = (opts: { password?: string; server?: string; remember?: boo
 export const logout = () => invoke<void>('logout');
 export const savedPassword = (account: string) => invoke<boolean>('saved_password', { account });
 export const forgetPassword = (account: string) => invoke<void>('forget_password', { account });
+
+/** The pin of the account and the fingerprint that the last login saw. */
+export const certStatus = (account: string) => invoke<CertStatus>('cert_status', { account });
+/** Pin the certificate that the last login saw. Show its fingerprint and ask first. When the
+ * system refused it, the pin lets exactly that certificate pass. */
+export const certTrust = (account: string) => invoke<CertStatus>('cert_trust', { account });
+/** Remove the pin. The next login uses the normal checks alone. */
+export const certClear = (account: string) => invoke<CertStatus>('cert_clear', { account });
 
 // ---------------------------------------------------------------- events
 
@@ -453,6 +462,9 @@ export const submitRoomConfigForm = (room: string, form: DataForm) =>
   invoke<void>('submit_room_config_form', { room, form });
 /** Change the password. The keychain gets the new one when it holds a saved password. */
 export const changePassword = (password: string) => invoke<void>('change_password', { password });
+/** Delete the account on the server. It cannot be undone. `confirm` is the address that the
+ * user typed. The keychain loses the saved password. Log out afterwards. */
+export const deleteAccount = (confirm: string) => invoke<void>('delete_account', { confirm });
 /** Ask a server for its registration fields, before any login. */
 export const registrationForm = (domain: string, server?: string) =>
   invoke<RegistrationForm>('registration_form', { domain, server: server ?? null });

@@ -4,7 +4,7 @@
 //! The TypeScript type is `ChordError` in src/lib/chord/types.ts.
 
 use chord_core::actor::{ClientError, LoginError};
-use chord_core::session::ConnectError;
+use chord_core::session::{AuthFailure, ConnectError, SaslCondition};
 use chord_core::store::StoreError;
 use serde::Serialize;
 
@@ -62,6 +62,13 @@ impl From<ClientError> for ChordError {
 impl From<LoginError> for ChordError {
     fn from(error: LoginError) -> Self {
         let code = match &error {
+            // The UI names these two in plain words (SECURITYAUTH-24).
+            LoginError::Connect(ConnectError::AuthFailed(AuthFailure::Sasl(
+                SaslCondition::AccountDisabled,
+            ))) => "accountDisabled",
+            LoginError::Connect(ConnectError::AuthFailed(AuthFailure::Sasl(
+                SaslCondition::CredentialsExpired,
+            ))) => "credentialsExpired",
             LoginError::Connect(ConnectError::AuthFailed(_)) => "authFailed",
             LoginError::Connect(ConnectError::Unreachable(_)) => "unreachable",
             LoginError::Connect(ConnectError::TlsInvalid(_)) => "tlsInvalid",
@@ -117,6 +124,14 @@ mod tests {
         let error = ChordError::from(wrong);
         assert_eq!(error.code, "authFailed");
         assert!(error.message.contains("no common SASL mechanism"));
+        for (condition, code) in [
+            (SaslCondition::AccountDisabled, "accountDisabled"),
+            (SaslCondition::CredentialsExpired, "credentialsExpired"),
+            (SaslCondition::NotAuthorized, "authFailed"),
+        ] {
+            let login = LoginError::Connect(ConnectError::AuthFailed(AuthFailure::Sasl(condition)));
+            assert_eq!(ChordError::from(login).code, code);
+        }
         assert_eq!(
             ChordError::from(LoginError::Connect(ConnectError::Timeout)).code,
             "timeout"
