@@ -27,7 +27,7 @@
   {#if isHome}
     <button class="header find" onclick={() => (ui.switcherOpen = true)}>
       <Icon icon={Search} size={16} />
-      <span>Find or start a DM</span>
+      <span>Find or start a chat</span>
       <kbd>Ctrl K</kbd>
     </button>
   {:else if app.currentSpace}

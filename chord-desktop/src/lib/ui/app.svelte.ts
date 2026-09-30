@@ -29,6 +29,7 @@ import type {
 import { failureNote, runBatch } from './batch';
 import { canSetTopic, isModerator } from './rooms';
 import { roomIsMissing, sharePasswordQuestion } from './roomjoin';
+import { isRoomAnswer, roomByDomain } from './address';
 import { isGroup, spaceKey } from './types';
 import { totalUnread as sumUnread, unreadChannels } from './unread';
 import { ui } from './ui.svelte';
@@ -1385,6 +1386,28 @@ class AppState {
     if (!live || !room) return;
     const r = await this.call((b) => b.setRoomAffiliation(room, address, affiliation));
     if (r.ok) ui.say('Saved.');
+  }
+
+  /**
+   * Open what a typed address names: join a room, or open a DM with a person. A chat that
+   * the app knows opens at once. Maps to api.roomInfo(room), then joinRoomLink or openDm.
+   */
+  async openAddress(jid: string): Promise<void> {
+    if (this.channels.some((c) => c.jid === jid)) {
+      this.selectChannel(jid);
+      return;
+    }
+    let room = roomByDomain(jid);
+    if (live) {
+      try {
+        await (await api()).roomInfo(jid);
+        room = isRoomAnswer({ ok: true }, jid);
+      } catch (error) {
+        room = isRoomAnswer({ ok: false, error }, jid);
+      }
+    }
+    if (room) await this.joinRoomLink(jid);
+    else this.openDm(jid, jid.split('@')[0]);
   }
 
   /** Open a DM with a member. Creates the row when it is missing. */

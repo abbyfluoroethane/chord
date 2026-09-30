@@ -4,11 +4,14 @@
   import AtSign from 'lucide-svelte/icons/at-sign';
   import Circle from 'lucide-svelte/icons/circle-dot';
   import Hash from 'lucide-svelte/icons/hash';
+  import LogIn from 'lucide-svelte/icons/log-in';
+  import { typedAddress } from './address';
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
   import { score } from './fuzzy';
   import { switcherTargets, type Target } from './targets';
   import { ui } from './ui.svelte';
+  import { xmppLinks } from './xmpplinks.svelte';
 
   type Hit = Target & { go: () => void };
 
@@ -23,7 +26,32 @@
     }))
   );
 
+  // A typed address or xmpp: link that no chat matches: join the room or message the person.
+  const typed = $derived(typedAddress(query));
+  const addressHit = $derived.by((): Hit | null => {
+    if (!typed) return null;
+    if (typed.kind === 'link')
+      return {
+        id: 'typed-link',
+        kind: 'channel',
+        label: `Open ${typed.uri}`,
+        hint: 'xmpp: link',
+        go: () => xmppLinks.open(typed.uri)
+      };
+    const jid = typed.jid;
+    if (all.some((h) => h.jid === jid)) return null;
+    return {
+      id: 'typed-address',
+      kind: 'channel',
+      label: `Join or message ${jid}`,
+      hint: 'Room or person',
+      jid,
+      go: () => void app.openAddress(jid)
+    };
+  });
+
   const hits = $derived.by(() => {
+    const extra = addressHit ? [addressHit] : [];
     let q = query.trim();
     let only: Hit['kind'] | null = null;
     if (q.startsWith('#')) [only, q] = ['channel', q.slice(1)];
@@ -33,8 +61,9 @@
       .map((h) => ({ h, s: score(q, h.label) * (h.kind === 'circle' ? 1 : 1.05) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)
-      .slice(0, 10)
-      .map((x) => x.h);
+      .slice(0, 10 - extra.length)
+      .map((x) => x.h)
+      .reduce((list, h) => [...list, h], extra);
   });
 
   $effect(() => {
@@ -109,7 +138,7 @@
         onpointermove={() => (index = i)}
         onclick={() => pick(h)}
       >
-        <Icon icon={icons[h.kind]} size={16} />
+        <Icon icon={h.id.startsWith('typed-') ? LogIn : icons[h.kind]} size={16} />
         <span class="label">{h.label}</span>
         <span class="meta">{h.hint}</span>
       </li>
@@ -117,7 +146,7 @@
       <li class="none" role="presentation">Nothing matches. Try a shorter name.</li>
     {/each}
   </ul>
-  <p class="tip meta">Start with # for channels or @ for DMs.</p>
+  <p class="tip meta">Start with # for channels or @ for DMs. Type an address to join a room or message a person.</p>
 </dialog>
 
 <style>
