@@ -58,6 +58,8 @@
 //!   adhoc-list <jid> | adhoc-run <jid> <node> [name=value ...]   list, or run with all the steps
 //!   room-form <room> [name=value ...]   show the whole owner form (XEP-0045), or submit values
 //!   passwd                          change the password (XEP-0077). New one: CHORD_NEW_PASSWORD
+//!   delete-account <address>        DELETE the account on the server (XEP-0077). It cannot be
+//!                                   undone. The address must be the address of CHORD_JID.
 //!   register-form | register [name=value ...]   in-band registration of CHORD_JID (XEP-0077), no login
 //!   ice [--secrets]                 STUN and TURN servers of the server (XEP-0215)
 //!   call <jid> [audio|video] [--retract-after <secs>] [--finish]   propose a call (XEP-0353)
@@ -76,7 +78,10 @@
 //!                    print the fingerprint. The pin comes on top of the normal checks, for
 //!                    STARTTLS and for direct TLS. A server with another certificate is
 //!                    refused before any password goes out (exit code 3). `login` prints
-//!                    the fingerprint that it saw.
+//!                    the fingerprint that it saw. A certificate that the normal checks
+//!                    refuse (a self-signed server) stops the login too, and the error
+//!                    prints its fingerprint. "trust:<fingerprint>" trusts that one
+//!                    certificate although the checks refuse it, and nothing else.
 //!   SSL_CERT_FILE    optional PEM file of trusted CAs. It replaces the system trust store.
 //!   CHORD_DB         account database (default: ~/.local/share/chord/<jid>.sqlite3)
 //!   CHORD_SHARE_INFO "off" stops the answers to version (XEP-0092) and time (XEP-0202)
@@ -131,7 +136,7 @@ subject <room> <text> | room-role <room> <nick> <none|visitor|participant|modera
 decline <room> <from-jid> [reason] | room-destroy <room> [reason] [--alternate <room>] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
 adhoc <jid> <node> [name=value ...] | adhoc-list <jid> | adhoc-run <jid> <node> [name=value ...] | \
-room-form <room> [name=value ...] | passwd | register-form | register [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
+room-form <room> [name=value ...] | passwd | delete-account <address> | register-form | register [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
 call-answer accept|reject [reason] [--ring] | call-watch [--secs N] | \
 notify <jid> [all|mentions|none [--until <unix-ms>]] | \
 presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>] | \
@@ -267,6 +272,13 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
+            // The certificate that was refused: show its fingerprint, so that the user can
+            // pin it with CHORD_CERT_PIN=trust:<fingerprint>.
+            if matches!(&e, CliError::Connect(ConnectError::TlsInvalid(_)))
+                && let Some(seen) = PIN.get().and_then(CertPin::observed)
+            {
+                eprintln!("server certificate SHA-256: {seen}");
+            }
             ExitCode::from(e.exit_code())
         }
     }
@@ -344,6 +356,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "adhoc-run",
         "room-form",
         "passwd",
+        "delete-account",
         "register-form",
         "register",
         "call",
@@ -485,6 +498,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("adhoc-run", args) => forms::adhoc_run(opts, &client, args).await,
         ("room-form", args) => forms::room_form(opts, &client, args).await,
         ("passwd", args) => forms::passwd(&client, args).await,
+        ("delete-account", args) => forms::delete_account(&client, args).await,
         ("call", args) => calls::call(&mut client, args).await,
         ("call-answer", args) => calls::call_answer(&mut client, args).await,
         ("call-watch", args) => calls::call_watch(&mut client, args).await,
@@ -506,12 +520,14 @@ fn config() -> Result<SessionConfig, String> {
     {
         None | Some("") => Ok(config),
         Some(text) => {
-            let expected = if text.eq_ignore_ascii_case("learn") {
-                None
+            let pin = if text.eq_ignore_ascii_case("learn") {
+                CertPin::new(None)
+            } else if let Some(trusted) = text.strip_prefix("trust:") {
+                CertPin::trusting(trusted)
             } else {
-                Some(text)
-            };
-            let pin = CertPin::new(expected).map_err(|e| format!("bad CHORD_CERT_PIN: {e}"))?;
+                CertPin::new(Some(text))
+            }
+            .map_err(|e| format!("bad CHORD_CERT_PIN: {e}"))?;
             let _ = PIN.set(pin.clone());
             Ok(config.with_pin(pin))
         }

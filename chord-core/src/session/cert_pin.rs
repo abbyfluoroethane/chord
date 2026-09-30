@@ -49,6 +49,9 @@ pub fn parse_fingerprint(text: &str) -> Option<String> {
 #[derive(Clone, Debug, Default)]
 pub struct CertPin {
     expected: Option<String>,
+    /// The user chose to trust this one certificate, although the normal validation refuses
+    /// it (a self-signed server). See `CertPin::trusting`.
+    trust_untrusted: bool,
     observed: Arc<Mutex<Option<String>>>,
 }
 
@@ -65,8 +68,30 @@ impl CertPin {
         };
         Ok(Self {
             expected,
+            trust_untrusted: false,
             observed: Arc::default(),
         })
+    }
+
+    /// A pin that also lets this one certificate pass when the normal validation refuses it,
+    /// for a self-signed server (CORESESSION-15). The user must have seen the fingerprint and
+    /// agreed. `fingerprint` is required. Exactly that end-entity certificate passes, and
+    /// nothing else: the handshake signatures, and the rule that a changed certificate stops
+    /// the connection, stay as they are. Never call it with a fingerprint that the user did
+    /// not confirm.
+    pub fn trusting(fingerprint: &str) -> Result<Self, String> {
+        if fingerprint.trim().is_empty() {
+            return Err("a trusted certificate needs a fingerprint".to_owned());
+        }
+        let mut pin = Self::new(Some(fingerprint))?;
+        pin.trust_untrusted = true;
+        Ok(pin)
+    }
+
+    /// Whether `der` is the one certificate that the user chose to trust although the normal
+    /// validation refuses it. False for a pin that has no such choice.
+    pub fn trusts_untrusted(&self, der: &[u8]) -> bool {
+        self.trust_untrusted && self.expected.as_deref() == Some(fingerprint(der).as_str())
     }
 
     /// The fingerprint that the last handshake showed, if there was one.
@@ -155,6 +180,23 @@ mod tests {
         let copy = pin.clone();
         copy.check(b"c").unwrap();
         assert_eq!(pin.observed(), Some(fingerprint(b"c")));
+    }
+
+    #[test]
+    fn only_the_trusted_certificate_passes_the_exception() {
+        let stored = fingerprint(b"self signed");
+        let trusting = CertPin::trusting(&stored).unwrap();
+        assert!(trusting.trusts_untrusted(b"self signed"));
+        assert!(!trusting.trusts_untrusted(b"another"));
+        // A plain pin and a learning pin never give the exception.
+        assert!(
+            !CertPin::new(Some(&stored))
+                .unwrap()
+                .trusts_untrusted(b"self signed")
+        );
+        assert!(!CertPin::new(None).unwrap().trusts_untrusted(b"self signed"));
+        assert!(CertPin::trusting("").is_err());
+        assert!(CertPin::trusting("nonsense").is_err());
     }
 
     #[test]

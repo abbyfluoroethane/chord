@@ -693,6 +693,7 @@ dependencies = [
  "tokio-xmpp",
  "uuid",
  "xmpp-parsers",
+ "zeroize",
 ]
 
 [[package]]

@@ -305,6 +305,19 @@ pub async fn passwd(client: &Client, args: &[&str]) -> Result<(), CliError> {
     Ok(())
 }
 
+/// `delete-account <address>`: delete the account on the server (XEP-0077). The typed
+/// address must be the address of the account. There is no way back.
+pub async fn delete_account(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let [address] = args else {
+        return Err("usage: delete-account <address of the account>"
+            .to_owned()
+            .into());
+    };
+    client.handle.delete_account(address).await.map_err(err)?;
+    println!("account {} deleted on the server", client.account);
+    Ok(())
+}
+
 fn print_registration(opts: &Opts, domain: &str, form: &RegistrationForm) {
     if opts.json {
         let names = array(

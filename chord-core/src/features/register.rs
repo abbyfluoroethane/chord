@@ -1,7 +1,7 @@
 //! In-band registration (XEP-0077).
 //!
 //! On a bound stream this feature changes the password of the account (`change_password`,
-//! XEP-0077 section 3.3). Before login, `session::register` uses the parse and build
+//! XEP-0077 section 3.3) and deletes it (`delete_account`, section 3.2). Before login, `session::register` uses the parse and build
 //! functions of this file to read the registration form of a server and to submit it.
 //!
 //! A server asks for the fields in one of two ways: the legacy way (a child element for
@@ -129,6 +129,7 @@ pub fn submission_query(submission: &RegistrationSubmission) -> Element {
 
 pub(crate) enum Command {
     ChangePassword { password: String, reply: Reply },
+    DeleteAccount { confirm: String, reply: Reply },
 }
 
 #[derive(Debug)]
@@ -137,6 +138,8 @@ pub(crate) enum Pending {
     PasswordFields { password: String, reply: Reply },
     /// The answer to the change.
     PasswordSet { password: String, reply: Reply },
+    /// The answer to the removal of the account.
+    AccountRemoved { reply: Reply },
 }
 
 impl ClientHandle {
@@ -155,10 +158,31 @@ impl ClientHandle {
         }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
+
+    /// Delete the account on the server (XEP-0077, section 3.2). It cannot be undone: the
+    /// server drops the roster, the archive and the private data, and closes the stream.
+    ///
+    /// `confirm` must be the address of the account, typed by the user. A text that differs
+    /// (in case only is fine) fails with `Invalid` and sends nothing. Fails with `Server`
+    /// when the server refuses (for example `not-allowed`).
+    ///
+    /// The caller must then log out, forget the saved password and decide what to do with
+    /// the local data. The session cannot log in again.
+    pub async fn delete_account(&self, confirm: &str) -> Result<(), ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Register(Command::DeleteAccount {
+            confirm: confirm.to_owned(),
+            reply,
+        }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
-    let Command::ChangePassword { password, reply } = command;
+    let (password, reply) = match command {
+        Command::ChangePassword { password, reply } => (password, reply),
+        Command::DeleteAccount { confirm, reply } => return delete_account(ctx, &confirm, reply),
+    };
     if password.is_empty() {
         let _ = reply.send(Err(ClientError::Invalid("the password is empty".into())));
         return;
@@ -176,9 +200,31 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     );
 }
 
+/// Send the removal, after a check that the typed address is the address of the account.
+fn delete_account(ctx: &mut Ctx<'_>, confirm: &str, reply: Reply) {
+    if !confirm.trim().eq_ignore_ascii_case(ctx.account.as_str()) {
+        let _ = reply.send(Err(ClientError::Invalid(
+            "the typed address is not the address of the account".into(),
+        )));
+        return;
+    }
+    let iq = Iq::Set {
+        from: None,
+        to: None,
+        id: String::new(),
+        payload: Element::builder("query", NS_REGISTER)
+            .append(Element::builder("remove", NS_REGISTER).build())
+            .build(),
+    };
+    ctx.request(
+        iq,
+        FeaturePending::Register(Pending::AccountRemoved { reply }),
+    );
+}
+
 /// A command while no session is up.
 pub(crate) fn offline(command: Command) {
-    let Command::ChangePassword { reply, .. } = command;
+    let (Command::ChangePassword { reply, .. } | Command::DeleteAccount { reply, .. }) = command;
     let _ = reply.send(Err(ClientError::NotConnected));
 }
 
@@ -215,6 +261,16 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 iq,
                 FeaturePending::Register(Pending::PasswordSet { password, reply }),
             );
+        }
+        Pending::AccountRemoved { reply } => {
+            let outcome = match response {
+                IqResponse::Result(_) => Ok(()),
+                IqResponse::Error(e) => Err(ClientError::Server(describe(&e))),
+                // The server closes the stream when it removes the account, and it may do
+                // it before the answer arrives. Treat the loss as unknown, not as done.
+                IqResponse::Lost => Err(ClientError::NotConnected),
+            };
+            let _ = reply.send(outcome);
         }
         Pending::PasswordSet { password, reply } => {
             let outcome = match response {
@@ -407,6 +463,77 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::NewPassword(_)))
         );
+    }
+
+    fn delete(h: &mut Harness, confirm: &str) -> oneshot::Receiver<Result<(), ClientError>> {
+        let (reply, answer) = oneshot::channel();
+        let confirm = confirm.to_owned();
+        h.with_ctx(|ctx| {
+            features_command(
+                ctx,
+                FeatureCommand::Register(Command::DeleteAccount { confirm, reply }),
+            )
+        });
+        answer
+    }
+
+    #[test]
+    fn deleting_the_account_needs_the_typed_address() {
+        let mut h = Harness::new();
+        for wrong in [
+            "",
+            "alice",
+            "bob@chord.localhost",
+            "alice@chord.localhost.evil",
+        ] {
+            let mut answer = delete(&mut h, wrong);
+            assert!(
+                matches!(
+                    answer.try_recv().unwrap().unwrap(),
+                    Err(ClientError::Invalid(_))
+                ),
+                "{wrong}"
+            );
+        }
+        assert!(
+            h.sent_iqs().is_empty(),
+            "nothing goes out on a wrong address"
+        );
+    }
+
+    #[test]
+    fn the_account_is_removed_with_a_remove_element() {
+        let mut h = Harness::new();
+        let typed = format!("  {}  ", crate::features::testing::ACCOUNT.to_uppercase());
+        let mut answer = delete(&mut h, &typed);
+        let iqs = h.sent_iqs();
+        let Iq::Set { to, payload, .. } = &iqs[0] else {
+            panic!("not a set");
+        };
+        assert!(to.is_none());
+        assert!(payload.is("query", NS_REGISTER));
+        assert!(payload.get_child("remove", NS_REGISTER).is_some());
+        assert_eq!(payload.children().count(), 1);
+        assert!(answer.try_recv().unwrap().is_none(), "no answer yet");
+        respond(&mut h, IqResponse::Result(None));
+        assert!(matches!(answer.try_recv().unwrap(), Some(Ok(()))));
+    }
+
+    #[test]
+    fn a_refused_removal_is_a_server_error() {
+        let mut h = Harness::new();
+        let mut answer = delete(&mut h, crate::features::testing::ACCOUNT);
+        let error = StanzaError::new(
+            ErrorType::Cancel,
+            DefinedCondition::NotAllowed,
+            "en",
+            "no deletion here",
+        );
+        respond(&mut h, IqResponse::Error(error));
+        assert!(matches!(
+            answer.try_recv().unwrap().unwrap(),
+            Err(ClientError::Server(_))
+        ));
     }
 
     #[test]

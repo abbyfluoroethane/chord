@@ -41,6 +41,7 @@ use xmpp_parsers::message::{Message, MessageType};
 use xmpp_parsers::ns;
 use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stream_features::StreamFeatures;
+use zeroize::Zeroizing;
 
 use super::backoff::{Backoff, FIRST_DELAY, next_delay};
 use super::binding::choose_binding;
@@ -86,7 +87,7 @@ pub struct NativeSession {
     events: Option<NativeEvents>,
     task: JoinHandle<()>,
     /// The password that a reconnect uses. `set_password` changes it.
-    password: Option<Arc<Mutex<String>>>,
+    password: Option<Arc<Mutex<Zeroizing<String>>>>,
 }
 
 /// The event stream of a `NativeSession`.
@@ -114,7 +115,13 @@ impl Session for NativeSession {
         let jid = Jid::from(jid);
         // The pin check runs in the TLS handshake, before SASL sends anything, for STARTTLS
         // and for direct TLS.
-        let check = pin.map(|pin| CertCheck(Arc::new(move |der| pin.check(der))));
+        let check = pin.map(|pin| {
+            let trust = pin.clone();
+            CertCheck(
+                Arc::new(move |der| pin.check(der)),
+                Some(Arc::new(move |der| trust.trusts_untrusted(der))),
+            )
+        });
         match server {
             ServerAddr::Srv => {
                 start(Connector(Mode::Srv, check), jid, password, login_timeout).await
@@ -153,7 +160,8 @@ impl Session for NativeSession {
 
     fn set_password(&self, password: &str) {
         if let Some(current) = &self.password {
-            *current.lock().unwrap_or_else(|e| e.into_inner()) = password.to_owned();
+            *current.lock().unwrap_or_else(|e| e.into_inner()) =
+                Zeroizing::new(password.to_owned());
         }
     }
 
@@ -172,7 +180,7 @@ impl Session for NativeSession {
 async fn start<C: ServerConnector>(
     server: C,
     jid: Jid,
-    password: String,
+    password: Zeroizing<String>,
     login_timeout: Duration,
 ) -> Result<NativeSession, ConnectError> {
     let first = tokio::time::timeout(login_timeout, first_login(&server, &jid, &password))
@@ -184,7 +192,8 @@ async fn start<C: ServerConnector>(
     let shared = Arc::clone(&password);
     let attempt = move || {
         let (server, jid) = (server.clone(), jid.clone());
-        let password = password.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let password: Zeroizing<String> =
+            password.lock().unwrap_or_else(|e| e.into_inner()).clone();
         async move { login(server, &jid, &password).await }
     };
     let mut session = NativeSession::spawn(Some(first), attempt, login_timeout);

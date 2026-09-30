@@ -36,7 +36,13 @@ use {
     alloc::sync::Arc,
     tokio_rustls::{
         rustls::pki_types::ServerName,
-        rustls::{ClientConfig, RootCertStore},
+        rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+        rustls::client::WebPkiServerVerifier,
+        rustls::pki_types::{CertificateDer, UnixTime},
+        rustls::{
+            CertificateError, ClientConfig, DigitallySignedStruct, Error as RustlsError,
+            OtherError, RootCertStore, SignatureScheme,
+        },
         TlsConnector,
     },
 };
@@ -65,8 +71,17 @@ use sasl::common::ChannelBinding;
 /// The function gets the DER bytes of the end-entity certificate after the TLS handshake
 /// and the normal validation passed. An `Err` stops the connection with a certificate
 /// error. Upstream has no such hook.
+///
+/// The second field is the pinned-leaf exception (CORESESSION-15): a function that says
+/// whether the DER bytes are the one certificate that the user chose to trust. Only a
+/// certificate that failed the normal validation is tested with it, and only that exact
+/// certificate passes. `None` means no exception. The check in the first field also runs
+/// inside the verifier, so it sees a certificate that the normal validation refused.
 #[derive(Clone)]
-pub struct CertCheck(pub alloc::sync::Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>);
+pub struct CertCheck(
+    pub alloc::sync::Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>,
+    pub Option<alloc::sync::Arc<dyn Fn(&[u8]) -> bool + Send + Sync>>,
+);
 
 impl fmt::Debug for CertCheck {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
@@ -85,6 +100,74 @@ impl fmt::Display for CertCheckError {
 }
 
 impl StdError for CertCheckError {}
+
+/// CHORD PATCH (CORESESSION-15): the verifier behind a `CertCheck`.
+///
+/// It runs the normal `WebPkiServerVerifier` first. Every rule of it stays: chain, name,
+/// validity. Then:
+/// - it gives the DER bytes of the leaf to the check, so the pin sees the certificate even
+///   when the normal validation refuses it (the UI shows its fingerprint);
+/// - a pin mismatch is an error, with the text of the check;
+/// - only when the normal validation failed, the stored fingerprint is set, and the pinned
+///   leaf function says that the bytes are that one certificate, the certificate passes.
+///   Nothing else passes. There is no switch that turns the validation off.
+///
+/// The signature checks of the handshake go to the normal verifier, so the server has to
+/// hold the key of the pinned certificate.
+#[cfg(all(feature = "rustls-any-backend", not(feature = "native-tls")))]
+#[derive(Debug)]
+struct PinnedVerifier {
+    inner: Arc<WebPkiServerVerifier>,
+    check: CertCheck,
+}
+
+#[cfg(all(feature = "rustls-any-backend", not(feature = "native-tls")))]
+impl ServerCertVerifier for PinnedVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        let verdict = (self.check.0)(end_entity.as_ref());
+        let normal =
+            self.inner
+                .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
+        let pinned_leaf = self.check.1.as_ref().is_some_and(|f| f(end_entity.as_ref()));
+        match (normal, verdict) {
+            (_, Err(message)) => Err(RustlsError::InvalidCertificate(CertificateError::Other(
+                OtherError(Arc::new(CertCheckError(message))),
+            ))),
+            (Ok(ok), Ok(())) => Ok(ok),
+            (Err(_), Ok(())) if pinned_leaf => Ok(ServerCertVerified::assertion()),
+            (Err(error), Ok(())) => Err(error),
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+}
 
 /// Common TLS error type used by both direct_tls and starttls
 #[derive(Debug)]
@@ -217,9 +300,26 @@ pub async fn establish_tls_connection_with<S: TlsAsyncStream>(
     }
 
     #[allow(unused_mut, reason = "This config is mutable when using ktls")]
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let mut config = match check {
+        // CHORD PATCH: a verifier that wraps the normal one. See `PinnedVerifier`.
+        Some(check) => {
+            let inner = WebPkiServerVerifier::builder(Arc::new(root_store))
+                .build()
+                .map_err(|e| {
+                    Error::Io(std::io::Error::other(format!("cannot build the verifier: {e}")))
+                })?;
+            ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(PinnedVerifier {
+                    inner,
+                    check: check.clone(),
+                }))
+                .with_no_client_auth()
+        }
+        None => ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth(),
+    };
 
     config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
 

@@ -9,6 +9,7 @@ pub use futures_core::Stream;
 use jid::{BareJid, Jid};
 pub use xmpp_parsers::sasl::DefinedCondition as SaslCondition;
 use xmpp_parsers::stanza::Stanza;
+use zeroize::Zeroizing;
 
 #[cfg(feature = "native-session")]
 mod backoff;
@@ -50,7 +51,8 @@ pub enum ServerAddr {
 #[derive(Clone)]
 pub struct SessionConfig {
     pub jid: BareJid,
-    pub password: String,
+    /// Overwritten in memory when the config drops (SECURITYAUTH-15). It derefs to `String`.
+    pub password: Zeroizing<String>,
     pub server: ServerAddr,
     /// Time limit for each login attempt. `connect` returns `ConnectError::Timeout` after it.
     pub login_timeout: Duration,
@@ -63,7 +65,7 @@ impl SessionConfig {
     pub fn new(jid: BareJid, password: String, server: ServerAddr) -> Self {
         Self {
             jid,
-            password,
+            password: Zeroizing::new(password),
             server,
             login_timeout: DEFAULT_LOGIN_TIMEOUT,
             pin: None,

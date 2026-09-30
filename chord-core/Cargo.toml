@@ -21,6 +21,8 @@ xmpp-parsers.workspace = true
 sha1.workspace = true
 # The SHA-256 of an uploaded file (XEP-0446).
 sha2 = "0.10"
+# Overwrite the password in memory when the last copy drops. Already in the lock file.
+zeroize = "1"
 jid.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true
