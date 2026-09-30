@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  // Ctrl/Cmd+K. Fuzzy search over circles, channels, and DMs.
+  // Ctrl/Cmd+K. Fuzzy search over spaces, channels, and DMs.
   import AtSign from 'lucide-svelte/icons/at-sign';
   import Circle from 'lucide-svelte/icons/circle-dot';
   import Hash from 'lucide-svelte/icons/hash';

@@ -31,8 +31,8 @@
     contactsStore.loadLocal();
   });
 
-  // Load the rail layout once the circles are known. Before that the list is empty and
-  // the saved folders would look like they lost their circles.
+  // Load the rail layout once the spaces are known. Before that the list is empty and
+  // the saved folders would look like they lost their spaces.
   let railStarted = false;
   $effect(() => {
     if (!app.spacesReady || railStarted) return;
@@ -41,7 +41,7 @@
     void rail.init(ids);
   });
 
-  // Keep the rail in step when circles come and go.
+  // Keep the rail in step when spaces come and go.
   $effect(() => {
     const ids = app.spaces.map(spaceKey);
     if (app.spacesReady) rail.sync(ids);

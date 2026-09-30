@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Change your nickname in the circle you are in.
+  // Change your nickname in the space you are in.
   import { onMount } from 'svelte';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
@@ -17,7 +17,7 @@
   function save() {
     const v = value.trim();
     if (!v) return;
-    // Maps to api.changeNick(room, nick) for each room of the circle.
+    // Maps to api.changeNick(room, nick) for each room of the space.
     void app.changeNick(app.selectedSpace, v);
     onclose();
   }
@@ -31,9 +31,9 @@
     }}
   >
     <div class="field">
-      <label for="nick">Nickname in {app.currentSpace?.name ?? 'this circle'}</label>
+      <label for="nick">Nickname in {app.currentSpace?.name ?? 'this space'}</label>
       <input id="nick" class="input" maxlength="40" bind:this={input} bind:value />
-      <span class="meta">Only people in this circle see it.</span>
+      <span class="meta">Only people in this space see it.</span>
     </div>
   </form>
 

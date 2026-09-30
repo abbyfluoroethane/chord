@@ -104,7 +104,7 @@ class ContactsStore {
     return this.memberHere(address)?.role ?? null;
   }
 
-  /** Circles you and this address are both in. */
+  /** Spaces you and this address are both in. */
   sharedCircles(address: string) {
     return app.spaces.filter((s) => app.members[spaceKey(s)]?.some((m) => m.id === address));
   }
@@ -115,7 +115,7 @@ class ContactsStore {
     return this.contacts.filter((c) => list.includes(c.address));
   }
 
-  /** Circles where you are owner or admin. You can invite people to these. */
+  /** Spaces where you are owner or admin. You can invite people to these. */
   circlesYouAdmin() {
     return app.spaces.filter((s) => {
       const mine = app.members[spaceKey(s)]?.find((m) => m.id === app.me.address);

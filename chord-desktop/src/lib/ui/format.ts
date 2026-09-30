@@ -49,7 +49,7 @@ export function domainOf(address: string): string {
   return address.split('@')[1] ?? '';
 }
 
-/** One or two letters for an avatar or circle icon. */
+/** One or two letters for an avatar or space icon. */
 export function initials(name: string): string {
   const parts = name.trim().split(/[\s-]+/).filter(Boolean);
   if (!parts.length) return '?';

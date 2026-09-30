@@ -35,7 +35,7 @@ export function localPart(jid: string): string {
   return jid.split('/')[0].split('@')[0];
 }
 
-/** `service/node`, the key of a circle in the UI. */
+/** `service/node`, the key of a space in the UI. */
 export function splitSpaceKey(key: string): { service: string; node: string } {
   const i = key.indexOf('/');
   return { service: key.slice(0, i), node: key.slice(i + 1) };
@@ -77,7 +77,7 @@ export function toSpace(s: BSpace): SpaceItem {
 }
 
 export interface ChannelContext {
-  /** Key of the circle whose list holds the item, or null for Home. */
+  /** Key of the space whose list holds the item, or null for Home. */
   space: string | null;
   muted: boolean;
   mentions: number;

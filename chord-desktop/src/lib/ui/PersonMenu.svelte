@@ -75,7 +75,7 @@
     });
     if (!p.isMe && circles.length) {
       out.push({
-        label: 'Invite to circle',
+        label: 'Invite to space',
         icon: Users,
         submenu: circles.map((c) => ({
           label: c.name,

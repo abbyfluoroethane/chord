@@ -1,5 +1,5 @@
 <script lang="ts">
-  // A local folder on the rail. Closed: a 2x2 mini grid. Open: the circles below it.
+  // A local folder on the rail. Closed: a 2x2 mini grid. Open: the spaces below it.
   import Folder from 'lucide-svelte/icons/folder-open';
   import type { HTMLAttributes } from 'svelte/elements';
   import type { Snippet } from 'svelte';

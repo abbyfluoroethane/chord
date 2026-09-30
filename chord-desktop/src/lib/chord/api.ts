@@ -289,7 +289,7 @@ export const pushRegistrations = () => invoke<PushRegistration[]>('push_registra
 
 // ---------------------------------------------------------------- local settings
 
-/** The local settings (for example circle folders), or `{}`. */
+/** The local settings (for example space folders), or `{}`. */
 export const getSettings = () => invoke<Settings>('get_settings');
 /** Replace the local settings. Any JSON, 256 KB at most. */
 export const setSettings = (value: Settings) => invoke<void>('set_settings', { value });

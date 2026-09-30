@@ -157,7 +157,7 @@ export function messageMenu(
   };
 }
 
-// --- channels and circles ---------------------------------------------
+// --- channels and spaces ---------------------------------------------
 
 export function levelSubmenu(jid: string, current: NotificationLevel): MenuItem[] {
   return LEVELS.map((l) => ({
@@ -257,9 +257,9 @@ export function circleMenu(key: string): MenuItem[] {
     ],
     [
       { label: 'Invite people', icon: UserPlus, onselect: dialog('invite') },
-      { label: 'Circle settings', icon: Settings, onselect: dialog('settings') }
+      { label: 'Space settings', icon: Settings, onselect: dialog('settings') }
     ],
-    [{ label: 'Leave circle', icon: LogOut, danger: true, onselect: dialog('leave') }]
+    [{ label: 'Leave space', icon: LogOut, danger: true, onselect: dialog('leave') }]
   );
 }
 

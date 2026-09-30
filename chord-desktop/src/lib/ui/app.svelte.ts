@@ -34,7 +34,7 @@ function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
-/** What the UI waits for before it selects something: a new circle or channel. */
+/** What the UI waits for before it selects something: a new space or channel. */
 interface Pending {
   space?: string;
   jid?: string;
@@ -59,7 +59,7 @@ class AppState {
   members = $state<Record<string, MemberItem[]>>(live ? {} : clone(fx.members));
   typing = $state<Record<string, string[]>>(live ? {} : clone(fx.typing));
   publicCircles = $state<PublicCircle[]>(live ? [] : fx.publicCircles);
-  /** Circles that wait for the owner to approve us (live). */
+  /** Spaces that wait for the owner to approve us (live). */
   pendingJoins = $state<{ service: string; node: string; name: string }[]>([]);
 
   /** The space list arrived (always true for sample data). */
@@ -109,7 +109,7 @@ class AppState {
 
   constructor() {
     if (live) return;
-    // Sample data: start in the first circle, on its first channel.
+    // Sample data: start in the first space, on its first channel.
     this.selectedSpace = spaceKey(this.spaces[0]);
     this.enterChannel();
   }
@@ -140,7 +140,7 @@ class AppState {
     return !!mine && (mine.affiliation === 'owner' || mine.affiliation === 'admin');
   });
 
-  /** Home: the chats and the rooms that are in no circle. */
+  /** Home: the chats and the rooms that are in no space. */
   private channelsOf(key: string): ChannelItem[] {
     return key === HOME
       ? this.channels.filter((c) => c.space === null && !this.hiddenDms.includes(c.jid))
@@ -151,7 +151,7 @@ class AppState {
     return this.spaces.find((s) => spaceKey(s) === key);
   }
 
-  /** My nickname in a circle. */
+  /** My nickname in a space. */
   myNick(space: string | null): string {
     return (space && this.nickname[space]) || this.me.name || this.me.address.split('@')[0];
   }
@@ -294,7 +294,7 @@ class AppState {
       this.selectedJid = '';
       this.showContacts = true;
     } else if (this.selectedSpace !== HOME && !this.spaceOf(this.selectedSpace) && this.spacesReady) {
-      // The circle is gone (left, or deleted).
+      // The space is gone (left, or deleted).
       this.selectedSpace = HOME;
       this.selectedJid = '';
       this.showContacts = true;
@@ -325,7 +325,7 @@ class AppState {
     if (first) this.newFrom[jid] = first.id;
   }
 
-  /** Step through the channels of the current circle. */
+  /** Step through the channels of the current space. */
   step(dir: 1 | -1) {
     const list = this.spaceChannels;
     if (!list.length) return;
@@ -334,7 +334,7 @@ class AppState {
     this.selectChannel(next.jid);
   }
 
-  /** Step to the next channel with unread messages. Looks at all circles. */
+  /** Step to the next channel with unread messages. Looks at all spaces. */
   stepUnread(dir: 1 | -1) {
     const all = this.channels.filter((c) => !c.muted);
     const i = all.findIndex((c) => c.jid === this.selectedJid);
@@ -383,7 +383,7 @@ class AppState {
     if (live) void this.call((b) => b.markUnread(m.id));
   }
 
-  /** Mark every channel of a circle as read. */
+  /** Mark every channel of a space as read. */
   markSpaceRead(key: string) {
     for (const c of this.channels.filter((x) => (key === HOME ? x.space === null : x.space === key))) {
       if (c.unread > 0 || c.mentions > 0) this.markRead(c.jid);
@@ -764,7 +764,7 @@ class AppState {
     return this.notifyLevel[jid] ?? 'all';
   }
 
-  /** The level of a circle: the level that all its channels share, or "all". */
+  /** The level of a space: the level that all its channels share, or "all". */
   async setCircleLevel(space: string, level: NotificationLevel) {
     this.notifyLevel[space] = level;
     if (!live) return;
@@ -773,7 +773,7 @@ class AppState {
     }
   }
 
-  // --- circles -----------------------------------------------------
+  // --- spaces -----------------------------------------------------
 
   /** Maps to api.setPresence(availability, status). Offline, the core only stores it. */
   setShow(show: Show) {
@@ -824,7 +824,7 @@ class AppState {
   }
 
   /**
-   * Create a circle. Maps to api.createSpace(name, access), then makes a "general"
+   * Create a space. Maps to api.createSpace(name, access), then makes a "general"
    * channel. Returns false when it fails.
    */
   async createCircleAsync(name: string, access: SpaceAccess): Promise<boolean> {
@@ -841,7 +841,7 @@ class AppState {
     return true;
   }
 
-  /** Join a public circle. Maps to api.joinSpace(service, node). */
+  /** Join a public space. Maps to api.joinSpace(service, node). */
   async joinCircleAsync(p: PublicCircle): Promise<boolean> {
     if (!live) {
       this.joinCircle(p);
@@ -903,7 +903,7 @@ class AppState {
   }
 
   /**
-   * Make a room in a circle. Maps to api.roomService (where rooms live), api.joinRoom
+   * Make a room in a space. Maps to api.roomService (where rooms live), api.joinRoom
    * (which makes it), api.configureRoom (its name), and api.addRoomToSpace.
    */
   private async makeRoom(space: string, name: string): Promise<boolean> {
@@ -912,7 +912,7 @@ class AppState {
     const { service, node } = splitSpaceKey(space);
     let room = '';
     const r = await this.call(async (b) => {
-      // The circle service holds the circle. Rooms live on the room service.
+      // The space service holds the space. Rooms live on the room service.
       const rooms = await b.roomService();
       if (!rooms) throw { code: 'unsupported', message: 'This server has no channel service.' };
       room = `${node}-${clean}@${rooms}`;
@@ -959,7 +959,7 @@ class AppState {
     this.selectSpace(HOME);
   }
 
-  /** Leave one channel. Maps to api.leaveRoom(room). The row stays in its circle. */
+  /** Leave one channel. Maps to api.leaveRoom(room). The row stays in its space. */
   leaveRoom(jid: string) {
     if (jid === this.selectedJid) {
       this.leaveChannel();
@@ -975,7 +975,7 @@ class AppState {
     if (c) c.joined = false;
   }
 
-  /** Change my nickname in every room of the circle. Maps to api.changeNick(room, nick). */
+  /** Change my nickname in every room of the space. Maps to api.changeNick(room, nick). */
   async changeNick(space: string, nick: string): Promise<void> {
     this.nickname[space] = nick;
     if (!live) return;
@@ -987,8 +987,8 @@ class AppState {
   }
 
   /**
-   * Invite a person to a circle. Maps to api.addSpaceMember(service, node, jid), then
-   * api.inviteToRoom(room, jid) for each room of the circle that we know.
+   * Invite a person to a space. Maps to api.addSpaceMember(service, node, jid), then
+   * api.inviteToRoom(room, jid) for each room of the space that we know.
    */
   async inviteToCircle(space: string, address: string): Promise<boolean> {
     if (!live) return true;

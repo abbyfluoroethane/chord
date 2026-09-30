@@ -163,7 +163,7 @@ export interface Person {
   isMe: boolean;
   isContact: boolean;
   isBlocked: boolean;
-  /** Set when the person is a member of the circle you are in. */
+  /** Set when the person is a member of the space you are in. */
   affiliation: Affiliation | null;
   role: string | null;
 }

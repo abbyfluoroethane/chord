@@ -3,7 +3,7 @@
   <img alt="Chord" src="docs/brand/chord-lockup.svg" width="218">
 </picture>
 
-Chat with circles, channels, and DMs, on XMPP. Your account works with any server, and no company owns the network.
+Chat with spaces, channels, and DMs, on XMPP. Your account works with any server, and no company owns the network.
 
 [Website](https://bigaouette.com/chord-site/) · [Features](https://bigaouette.com/chord-site/features) · [Style guide](https://bigaouette.com/chord-site/style-guide)
 

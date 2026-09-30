@@ -9,8 +9,8 @@
 </script>
 
 <script lang="ts">
-  // Dialogs opened from the circle menu. Bridge calls: setNotificationLevel (each channel
-  // of the circle), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
+  // Dialogs opened from the space menu. Bridge calls: setNotificationLevel (each channel
+  // of the space), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
   // createChannel, and leaveSpace.
   import { splitSpaceKey } from './adapt';
   import Modal from './Modal.svelte';
@@ -25,7 +25,7 @@
   let level = $state<NotificationLevel>('all');
   let copied = $state(false);
   let mute = $state(false);
-  /** Join requests of the circle. Only an owner gets them. */
+  /** Join requests of the space. Only an owner gets them. */
   let requests = $state<{ jid: string; subid: string | null }[]>([]);
   let requestsNote = $state('');
 
@@ -39,7 +39,7 @@
         if (r.ok) {
           requests = r.value;
           requestsNote = r.value.length ? '' : 'Nobody is waiting to join.';
-        } else requestsNote = 'Only the owner of a circle sees join requests.';
+        } else requestsNote = 'Only the owner of a space sees join requests.';
       });
   });
 
@@ -64,21 +64,21 @@
     mute = level === 'nothing';
   });
 
-  const link = $derived(circle ? `chord:join?circle=${circle.node}@${circle.service}` : '');
+  const link = $derived(circle ? `xmpp:${circle.service}?pubsub;action=subscribe;node=${encodeURIComponent(circle.node)}` : '');
   const titles: Record<DialogKind, string> = {
     invite: 'Invite people',
-    settings: 'Circle settings',
+    settings: 'Space settings',
     'create-channel': 'Create a channel',
     notifications: 'Notification settings',
     nickname: 'Change nickname',
-    leave: 'Leave this circle'
+    leave: 'Leave this space'
   };
 
   function save() {
     if (kind === 'create-channel') app.createChannel(space, text);
     else if (kind === 'nickname' && text.trim()) void app.changeNick(space, text.trim());
     else if (kind === 'notifications') void app.setCircleLevel(space, mute ? 'nothing' : level);
-    // The bridge cannot rename a circle yet, so the name is read-only inside the app.
+    // The bridge cannot rename a space yet, so the name is read-only inside the app.
     else if (kind === 'settings' && circle && text.trim() && !live) circle.name = text.trim();
     else if (kind === 'leave') app.leaveCircle(space);
     onclose();
@@ -121,7 +121,7 @@
           <label class="radio"><input type="radio" name="level" value={l.v} bind:group={level} /> {l.label}</label>
         {/each}
       </fieldset>
-      <label class="radio"><input type="checkbox" bind:checked={mute} /> Mute this circle</label>
+      <label class="radio"><input type="checkbox" bind:checked={mute} /> Mute this space</label>
     {:else if kind === 'leave'}
       <p class="hint">
         You will leave {circle?.name} and lose its channels. You can join again if it is public.
@@ -129,7 +129,7 @@
     {:else}
       <div class="field">
         <label for="dlg-text">
-          {kind === 'create-channel' ? 'Channel name' : kind === 'nickname' ? 'Nickname' : 'Circle name'}
+          {kind === 'create-channel' ? 'Channel name' : kind === 'nickname' ? 'Nickname' : 'Space name'}
         </label>
         <input
           id="dlg-text"
@@ -139,7 +139,7 @@
           readonly={live && kind === 'settings'}
         />
         {#if live && kind === 'settings'}
-          <span class="hint">Renaming a circle comes later.</span>
+          <span class="hint">Renaming a space comes later.</span>
         {/if}
       </div>
       {#if live && kind === 'settings'}
@@ -168,7 +168,7 @@
         type="submit"
         form="circle-dialog"
       >
-        {kind === 'leave' ? 'Leave circle' : kind === 'create-channel' ? 'Create channel' : 'Save'}
+        {kind === 'leave' ? 'Leave space' : kind === 'create-channel' ? 'Create channel' : 'Save'}
       </button>
     {/if}
   {/snippet}

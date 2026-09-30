@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Channel sidebar: circle header, channel list (or DMs on Home), user panel.
+  // Channel sidebar: space header, channel list (or DMs on Home), user panel.
   import Plus from 'lucide-svelte/icons/plus';
   import Search from 'lucide-svelte/icons/search';
   import ChannelRow from './ChannelRow.svelte';

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Face of a circle: its picture, or initials on a tint.
+  // Face of a space: its picture, or initials on a tint.
   import { initials, tint } from './format';
 
   let { name, src = null, fill = false }: { name: string; src?: string | null; fill?: boolean } =

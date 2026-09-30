@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 48px header of the channel sidebar. Opens the circle menu.
+  // 48px header of the channel sidebar. Opens the space menu.
   import Bell from 'lucide-svelte/icons/bell';
   import ChevronDown from 'lucide-svelte/icons/chevron-down';
   import LogOut from 'lucide-svelte/icons/log-out';
@@ -20,11 +20,11 @@
 
   const items: MenuItem[] = [
     { label: 'Invite people', icon: UserPlus, onselect: () => dialog('invite') },
-    { label: 'Circle settings', icon: Settings, onselect: () => dialog('settings') },
+    { label: 'Space settings', icon: Settings, onselect: () => dialog('settings') },
     { label: 'Create channel', icon: Plus, onselect: () => dialog('create-channel') },
     { label: 'Notification settings', icon: Bell, separator: true, onselect: () => dialog('notifications') },
     { label: 'Change nickname', icon: Pencil, onselect: () => dialog('nickname') },
-    { label: 'Leave circle', icon: LogOut, danger: true, separator: true, onselect: () => dialog('leave') }
+    { label: 'Leave space', icon: LogOut, danger: true, separator: true, onselect: () => dialog('leave') }
   ];
 </script>
 

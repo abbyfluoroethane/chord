@@ -1,5 +1,5 @@
 <script lang="ts">
-  // "Create a circle" and "Join a circle". Bridge calls: createSpace(name, access),
+  // "Create a space" and "Join a space". Bridge calls: createSpace(name, access),
   // browseSpaces, joinSpace, and pendingSpaceJoins.
   import type { SpaceAccess } from '$lib/chord/types';
   import Search from 'lucide-svelte/icons/search';
@@ -18,7 +18,7 @@
   let access = $state<SpaceAccess>('open');
   let busy = $state(false);
 
-  // The list of public circles comes from the server.
+  // The list of public spaces comes from the server.
   $effect(() => {
     if (tab === 'join') {
       void app.loadPublicCircles();
@@ -48,34 +48,34 @@
   }
 </script>
 
-<Modal title={tab === 'create' ? 'Create a circle' : 'Join a circle'} {onclose} size="medium">
-  <div class="tabs" role="tablist" aria-label="Add a circle">
+<Modal title={tab === 'create' ? 'Create a space' : 'Join a space'} {onclose} size="medium">
+  <div class="tabs" role="tablist" aria-label="Add a space">
     <button role="tab" aria-selected={tab === 'create'} class:on={tab === 'create'} onclick={() => (tab = 'create')}>
-      Create a circle
+      Create a space
     </button>
     <button role="tab" aria-selected={tab === 'join'} class:on={tab === 'join'} onclick={() => (tab = 'join')}>
-      Join a circle
+      Join a space
     </button>
   </div>
 
   {#if tab === 'create'}
     <form onsubmit={create} class="form">
-      <p class="hint">Anyone can make a circle. It lives on your server and you own it.</p>
+      <p class="hint">Anyone can make a space. It lives on your server and you own it.</p>
       <div class="field">
-        <label for="circle-name">Circle name</label>
-        <input id="circle-name" class="input" bind:value={name} placeholder="Launch Ops" autocomplete="off" />
+        <label for="space-name">Space name</label>
+        <input id="space-name" class="input" bind:value={name} placeholder="Launch Ops" autocomplete="off" />
       </div>
       {#if live}
         <div class="field">
-          <label for="circle-access">Who can join</label>
-          <select id="circle-access" class="input" bind:value={access}>
+          <label for="space-access">Who can join</label>
+          <select id="space-access" class="input" bind:value={access}>
             <option value="open">Anyone</option>
             <option value="authorize">People I approve</option>
             <option value="whitelist">Only people I invite</option>
           </select>
         </div>
       {/if}
-      <button class="btn btn-primary" type="submit" disabled={!name.trim() || busy}>Create circle</button>
+      <button class="btn btn-primary" type="submit" disabled={!name.trim() || busy}>Create space</button>
     </form>
   {:else}
     <div class="form">
@@ -83,8 +83,8 @@
         <Icon icon={Search} size={16} />
         <input
           class="bare"
-          aria-label="Search public circles"
-          placeholder="Search public circles"
+          aria-label="Search public spaces"
+          placeholder="Search public spaces"
           bind:value={query}
         />
       </div>
@@ -111,7 +111,7 @@
             {/if}
           </li>
         {:else}
-          <li class="empty">No circle matches. Try an address instead.</li>
+          <li class="empty">No space matches. Try an address instead.</li>
         {/each}
       </ul>
       {#if live && app.pendingJoins.length}

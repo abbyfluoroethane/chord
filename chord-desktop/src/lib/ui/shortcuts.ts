@@ -9,7 +9,7 @@ export interface Shortcut {
 }
 
 export const shortcuts: Shortcut[] = [
-  { keys: [mod, 'K'], what: 'Jump to a circle, channel, or DM' },
+  { keys: [mod, 'K'], what: 'Jump to a space, channel, or DM' },
   { keys: ['Alt', 'Up'], what: 'Previous channel' },
   { keys: ['Alt', 'Down'], what: 'Next channel' },
   { keys: ['Alt', 'Shift', 'Up'], what: 'Previous channel with unread messages' },

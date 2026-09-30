@@ -3,7 +3,7 @@
 //
 // It keeps these subscriptions, each with applyDiff:
 //   - the space list and the Home channel list, for the whole session
-//   - the channel list of each circle (for the rail badges and the quick switcher)
+//   - the channel list of each space (for the rail badges and the quick switcher)
 //   - the timeline of the open channel, or its private timeline
 //   - the member list of the open room (or the two people of the open chat)
 // The view effects unsubscribe when the selection changes.
@@ -174,7 +174,7 @@ class LiveController {
   // --- effects -----------------------------------------------------
 
   private effects() {
-    // One channel list for each circle.
+    // One channel list for each space.
     $effect(() => {
       const keys = app.spaces.map(spaceKey);
       untrack(() => this.reconcileSpaces(keys));

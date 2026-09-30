@@ -1,4 +1,4 @@
-// Rail layout: circles in order, plus local folders.
+// Rail layout: spaces in order, plus local folders.
 // Folders are a UI setting. The core has no support for them. The store
 // exposes load and save hooks so the bridge can keep the layout in
 // get_settings and set_settings. Until then localStorage does the job.
@@ -57,14 +57,14 @@ export class RailStore {
     this.persistence = persistence;
   }
 
-  /** Load the saved layout and fit it to the circles that exist now. */
+  /** Load the saved layout and fit it to the spaces that exist now. */
   async init(circleIds: string[]) {
     const saved = (await this.persistence.load()) ?? [];
     this.layout = this.reconcile(saved, circleIds);
     this.ready = true;
   }
 
-  /** Drop circles that are gone. Append new circles at the end. */
+  /** Drop spaces that are gone. Append new spaces at the end. */
   reconcile(saved: RailEntry[], circleIds: string[]): RailEntry[] {
     const known = new Set(circleIds);
     const seen = new Set<string>();
@@ -85,7 +85,7 @@ export class RailStore {
     return out;
   }
 
-  /** Call when circles are added or removed. */
+  /** Call when spaces are added or removed. */
   sync(circleIds: string[]) {
     if (!this.ready) return;
     const next = this.reconcile($state.snapshot(this.layout) as RailEntry[], circleIds);
@@ -126,8 +126,8 @@ export class RailStore {
   }
 
   /**
-   * Move a circle or folder next to a target, or put a circle into a
-   * folder. ids are circle ids or folder ids.
+   * Move a space or folder next to a target, or put a space into a
+   * folder. ids are space ids or folder ids.
    */
   drop(dragId: string, targetId: string, zone: DropZone) {
     if (dragId === targetId) return;
@@ -188,7 +188,7 @@ export class RailStore {
     this.persist();
   }
 
-  /** Take a circle out of its folder and put it at the end of the rail. */
+  /** Take a space out of its folder and put it at the end of the rail. */
   release(circleId: string) {
     if (!this.folderOf(circleId)) return;
     this.removeCircle(circleId);

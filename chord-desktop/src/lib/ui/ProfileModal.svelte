@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Full profile, 600px. Header, then tabs: Info, Shared circles, Shared contacts.
+  // Full profile, 600px. Header, then tabs: Info, Shared spaces, Shared contacts.
   import { onMount } from 'svelte';
   import Ban from 'lucide-svelte/icons/ban';
   import Ellipsis from 'lucide-svelte/icons/ellipsis';
@@ -22,7 +22,7 @@
   type Tab = 'info' | 'circles' | 'contacts';
   const tabs: { id: Tab; label: string }[] = [
     { id: 'info', label: 'Info' },
-    { id: 'circles', label: 'Shared circles' },
+    { id: 'circles', label: 'Shared spaces' },
     { id: 'contacts', label: 'Shared contacts' }
   ];
 
@@ -150,7 +150,7 @@
           {/each}
         </ul>
       {:else}
-        <p class="empty">You share no circles.</p>
+        <p class="empty">You share no spaces.</p>
       {/if}
     {:else if mutual.length}
       <ul>

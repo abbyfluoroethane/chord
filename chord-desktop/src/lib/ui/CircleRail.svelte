@@ -1,6 +1,6 @@
 <script lang="ts">
-  // The circle rail: Home, circles, local folders, add button.
-  // Drag a circle onto another to make a folder. Drop near an edge to reorder.
+  // The space rail: Home, spaces, local folders, add button.
+  // Drag a space onto another to make a folder. Drop near an edge to reorder.
   import Plus from 'lucide-svelte/icons/plus';
   import ChordMark from './ChordMark.svelte';
   import { contextMenu } from './contextmenu.svelte';
@@ -90,7 +90,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<nav class="rail" aria-label="Circles" ondragover={(e) => dragId && e.preventDefault()} ondrop={dropOnRail}>
+<nav class="rail" aria-label="Spaces" ondragover={(e) => dragId && e.preventDefault()} ondrop={dropOnRail}>
   <RailItem
     name="Home and direct messages"
     variant="home"
@@ -153,7 +153,7 @@
     {/if}
   {/each}
 
-  <RailItem name="Add a circle" variant="add" onclick={() => (ui.addCircleOpen = true)}>
+  <RailItem name="Add a space" variant="add" onclick={() => (ui.addCircleOpen = true)}>
     <Icon icon={Plus} size={24} />
   </RailItem>
 </nav>
