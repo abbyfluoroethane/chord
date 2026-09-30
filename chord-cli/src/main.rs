@@ -464,11 +464,7 @@ fn config() -> Result<SessionConfig, String> {
     let jid = std::env::var("CHORD_JID").map_err(|_| "set CHORD_JID".to_owned())?;
     let jid = BareJid::new(&jid).map_err(|e| format!("CHORD_JID is not a bare JID: {e}"))?;
     let password = std::env::var("CHORD_PASSWORD").map_err(|_| "set CHORD_PASSWORD".to_owned())?;
-    let server = match std::env::var("CHORD_SERVER").ok().as_deref() {
-        None | Some("srv") => ServerAddr::Srv,
-        Some(s) => parse_server(s)?,
-    };
-    let config = SessionConfig::new(jid, password, server);
+    let config = SessionConfig::new(jid, password, server_addr()?);
     match std::env::var("CHORD_CERT_PIN")
         .ok()
         .as_deref()
@@ -485,7 +481,7 @@ fn config() -> Result<SessionConfig, String> {
             let _ = PIN.set(pin.clone());
             Ok(config.with_pin(pin))
         }
-    Ok(SessionConfig::new(jid, password, server_addr()?))
+    }
 }
 
 /// The server of `CHORD_SERVER`: SRV lookup by default.

@@ -14,7 +14,7 @@ use core::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use jid::Jid;
-use tokio_xmpp::connect::{DnsConfig, ServerConnector, StartTlsServerConnector};
+use tokio_xmpp::connect::ServerConnector;
 use tokio_xmpp::xmlstream::{
     FallibleStreamElement, RecvFeaturesError, Timeouts, XmppStreamElement,
 };
@@ -25,6 +25,7 @@ use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stanza_error::StanzaError;
 
 use super::ServerAddr;
+use super::connector::{Connector, Mode};
 use super::native::is_certificate_error;
 use crate::features::register::{
     NS_REGISTER, RegistrationForm, RegistrationSubmission, parse_form, submission_query,
@@ -111,19 +112,20 @@ async fn run(
         .map_err(|e| RegisterError::Protocol(format!("bad server name {domain}: {e}")))?;
     let work = async {
         match server {
-            ServerAddr::Srv => {
-                let connector =
-                    StartTlsServerConnector::from(DnsConfig::srv_default_client(domain));
-                exchange(connector, &jid, iq).await
-            }
+            // The same connector as a login: XEP-0368 SRV order, direct TLS or STARTTLS.
+            // No certificate pin: a new account has none yet.
+            ServerAddr::Srv => exchange(Connector(Mode::Srv, None), &jid, iq).await,
             ServerAddr::StartTls { host, port } => {
-                let connector = StartTlsServerConnector::from(DnsConfig::no_srv(&host, port));
-                exchange(connector, &jid, iq).await
+                exchange(Connector(Mode::StartTls { host, port }, None), &jid, iq).await
+            }
+            ServerAddr::DirectTls { host, port } => {
+                exchange(Connector(Mode::DirectTls { host, port }, None), &jid, iq).await
             }
             #[cfg(feature = "dev-insecure")]
             ServerAddr::InsecureTcp { host, port } => {
-                let connector =
-                    tokio_xmpp::connect::TcpServerConnector::from(DnsConfig::no_srv(&host, port));
+                let connector = tokio_xmpp::connect::TcpServerConnector::from(
+                    tokio_xmpp::connect::DnsConfig::no_srv(&host, port),
+                );
                 exchange(connector, &jid, iq).await
             }
         }
