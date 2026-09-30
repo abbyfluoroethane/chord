@@ -35,6 +35,8 @@ A theme is CSS. Add it in Settings > Appearance > Import theme. You can give a l
 - Each `[data-accent="id"]` rule is an accent. `@accent id Name` names it and sets the order.
 - A token that the theme does not set keeps its Chord Dark value.
 - The rest of the CSS can style any part of the app.
+- An imported theme cannot load a file from outside the app. Chord removes `@import`, `image-set()`, `image()`, `src()`, `cross-fade()`, `expression()`, `attr()` that builds a `url`, and every `url()` that is not a `data:` URL or a `#fragment`. A `url()` that Chord removes becomes an empty one. Without this, a theme could send requests to its author and learn which links and file names are on your screen. The import dialog and the update question tell you how many requests Chord blocked. The built-in themes are not checked.
+- A theme cannot hide, move or cover the buttons of a question such as "Open this link?".
 
 The built-in themes are in `chord-desktop/src/lib/theme/themes/`.
 
@@ -46,7 +48,7 @@ The Import dialog opens on the "From a link" tab. Give the https link of a CSS f
 - Links to `raw.githubusercontent.com`, gist raw files, `cdn.jsdelivr.net` and other https hosts work as they are.
 - Chord downloads the file in the app, not in the webview. The file must be text and 256 KB at most.
 - A linked theme shows a link icon and the host name on its card.
-- At each launch Chord shows the stored CSS first. Then it fetches each linked theme again. If the new CSS is valid, it replaces the old CSS. An active theme changes at once.
+- At each launch Chord shows the stored CSS first. Then it fetches each linked theme again. If the new CSS is valid and different, Chord does not use it yet. The theme card shows how many lines changed, with Update and Skip. Update applies the new CSS. Skip keeps the old CSS until the link changes again. The author of a file can change it at any time, so the update always waits for you.
 - If a fetch fails, Chord keeps the old CSS. It writes a line in the log and shows no error.
 - To stop the updates, remove the theme. Then paste the CSS if you want a fixed copy.
 

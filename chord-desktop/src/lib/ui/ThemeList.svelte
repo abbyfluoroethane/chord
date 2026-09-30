@@ -5,7 +5,8 @@
   import LinkIcon from 'lucide-svelte/icons/link';
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import { theme } from '$lib/theme/theme.svelte';
-  import { hostOf } from '$lib/theme/themelink';
+  import { hostOf, lineChange } from '$lib/theme/themelink';
+  import { sanitizeThemeCss } from '$lib/theme/themesafe';
   import type { ThemeMode } from '$lib/theme/themecss';
   import Icon from './Icon.svelte';
 
@@ -47,6 +48,22 @@
         </span>
         {#if on}<span class="check"><Icon icon={Check} size={16} /></span>{/if}
       </button>
+      {#if t.pending !== undefined}
+        {@const change = lineChange(t.css, t.pending)}
+        {@const blocked = sanitizeThemeCss(t.pending).blocked.length}
+        <div class="update" role="status">
+          <span>
+            New version from {t.url ? hostOf(t.url) : 'the link'}: {change.added} lines added,
+            {change.removed} removed.
+            {#if blocked}It asks for {blocked} {blocked === 1 ? 'request' : 'requests'} to other
+              hosts. Chord blocks {blocked === 1 ? 'it' : 'them'}.{/if}
+          </span>
+          <span class="actions">
+            <button class="btn" onclick={() => theme.acceptUpdate(t.id)}>Update</button>
+            <button class="btn btn-ghost" onclick={() => theme.dismissUpdate(t.id)}>Skip</button>
+          </span>
+        </div>
+      {/if}
       {#if !t.builtIn}
         <button class="remove" aria-label="Remove {t.info.name}" onclick={() => theme.remove(t.id)}>
           <Icon icon={Trash2} size={16} />
@@ -198,6 +215,20 @@
   .remove:hover {
     background: var(--hover);
     color: var(--danger);
+  }
+  .update {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--ink-muted);
+  }
+  .actions {
+    display: flex;
+    gap: var(--space-2);
   }
   .accents {
     display: flex;

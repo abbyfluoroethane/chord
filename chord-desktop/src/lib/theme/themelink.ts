@@ -11,6 +11,12 @@ export interface CustomTheme {
   url?: string;
   /** When Chord last stored CSS from `url`, in ms since 1970. */
   updated?: number;
+  /**
+   * CSS that the link gave after the user added the theme. It waits for the user: a linked
+   * theme never changes the look or the requests of the app without a yes
+   * (BRIDGESECURITY-05).
+   */
+  pending?: string;
 }
 
 export type UrlResult = { ok: true; url: string } | { ok: false; error: string };
@@ -69,9 +75,10 @@ export function checkFetched(
 }
 
 /**
- * Put fetched CSS in the library. A theme that is not there, or that has no link, stays
- * as it is. Invalid CSS leaves the old CSS. The function returns the same array when
- * nothing changes.
+ * Put fetched CSS in the library as an update that waits for the user (`pending`). The
+ * applied CSS stays as it is. A theme that is not there, or that has no link, stays as
+ * it is. Invalid CSS changes nothing. The same CSS as the applied one clears an old
+ * update. The function returns the same array when nothing changes.
  */
 export function mergeFetched(
   library: CustomTheme[],
@@ -82,10 +89,56 @@ export function mergeFetched(
   const checked = checkFetched(fetched);
   const at = library.findIndex((t) => t.id === id);
   if (!checked.ok || at < 0 || !library[at].url) return library;
-  if (library[at].css === checked.css) return library;
+  const theme = library[at];
   const next = library.slice();
-  next[at] = { ...library[at], css: checked.css, updated: now };
+  if (theme.css === checked.css) {
+    if (theme.pending === undefined) return library;
+    const { pending: _dropped, ...rest } = theme;
+    next[at] = rest;
+    return next;
+  }
+  if (theme.pending === checked.css) return library;
+  next[at] = { ...theme, pending: checked.css };
   return next;
+}
+
+/** Apply the waiting update of a theme. */
+export function acceptPending(library: CustomTheme[], id: string, now: number): CustomTheme[] {
+  const at = library.findIndex((t) => t.id === id);
+  if (at < 0 || library[at].pending === undefined) return library;
+  const { pending, ...rest } = library[at];
+  const next = library.slice();
+  next[at] = { ...rest, css: pending!, updated: now };
+  return next;
+}
+
+/** Throw away the waiting update of a theme. The next launch can offer it again. */
+export function dismissPending(library: CustomTheme[], id: string): CustomTheme[] {
+  const at = library.findIndex((t) => t.id === id);
+  if (at < 0 || library[at].pending === undefined) return library;
+  const { pending: _dropped, ...rest } = library[at];
+  const next = library.slice();
+  next[at] = rest;
+  return next;
+}
+
+/** How many lines an update adds and removes, for the question to the user. */
+export function lineChange(oldCss: string, newCss: string): { added: number; removed: number } {
+  const count = (text: string) => {
+    const m = new Map<string, number>();
+    for (const l of text.split('\n')) {
+      const k = l.trim();
+      if (k) m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return m;
+  };
+  const a = count(oldCss);
+  const b = count(newCss);
+  let added = 0;
+  let removed = 0;
+  for (const [k, n] of b) added += Math.max(0, n - (a.get(k) ?? 0));
+  for (const [k, n] of a) removed += Math.max(0, n - (b.get(k) ?? 0));
+  return { added, removed };
 }
 
 /** Read the stored library. A record with a bad field is dropped. */
@@ -97,6 +150,7 @@ export function readLibrary(raw: unknown): CustomTheme[] {
     const item: CustomTheme = { id: t.id, css: t.css };
     if (typeof t.url === 'string' && t.url) item.url = t.url;
     if (typeof t.updated === 'number') item.updated = t.updated;
+    if (typeof t.pending === 'string' && t.url) item.pending = t.pending;
     out.push(item);
   }
   return out;

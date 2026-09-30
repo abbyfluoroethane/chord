@@ -5,7 +5,9 @@
 //
 // The library holds the built-in themes and the themes that the user pasted in or linked.
 // A theme is plain CSS with a comment header: see themecss.ts. A linked theme keeps its
-// URL. Chord fetches it again at each launch and keeps the old CSS if the fetch fails.
+// URL. Chord fetches it again at each launch and keeps the old CSS if the fetch fails. New
+// CSS from the link waits until the user accepts it. CSS of an imported theme loses every
+// request to a host outside the app before it reaches the page (themesafe.ts).
 
 import catppuccinLatte from './themes/catppuccin-latte.css?raw';
 import catppuccinMocha from './themes/catppuccin-mocha.css?raw';
@@ -13,8 +15,11 @@ import chordDark from './themes/chord-dark.css?raw';
 import chordLight from './themes/chord-light.css?raw';
 import { api, live } from '$lib/ui/bridge';
 import { MAX_THEME_CHARS, parseTheme, type ThemeInfo, type ThemeMode } from './themecss';
+import { sanitizeThemeCss } from './themesafe';
 import {
+  acceptPending,
   checkFetched,
+  dismissPending,
   mergeFetched,
   normalizeThemeUrl,
   readLibrary,
@@ -31,7 +36,33 @@ export interface Theme {
   builtIn: boolean;
   /** The link of a linked theme. */
   url?: string;
+  /** New CSS from the link that the user has not accepted. */
+  pending?: string;
 }
+
+/**
+ * Rules after the theme that keep the buttons of a question ("Open this link?") where the
+ * user expects them: a theme cannot hide them, move them or cover them. They are
+ * `!important` and more specific than a normal rule, so a theme can only win with a rule
+ * of the same kind (BRIDGESECURITY-05).
+ */
+const GUARD_CSS = `
+:root:root:root [data-guard] button,
+:root:root:root [data-guard] a {
+  display: inline-flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: static !important;
+  transform: none !important;
+  translate: none !important;
+  scale: none !important;
+  rotate: none !important;
+  filter: none !important;
+  clip-path: none !important;
+  mask: none !important;
+  pointer-events: auto !important;
+}
+`;
 
 const KEY = 'chord.theme';
 const LIBRARY_KEY = 'chord.themes';
@@ -107,6 +138,7 @@ class ThemeStore {
   );
 
   private styleEl: HTMLStyleElement | null = null;
+  private guardEl: HTMLStyleElement | null = null;
 
   load() {
     try {
@@ -229,9 +261,8 @@ class ThemeStore {
         const next = mergeFetched(this.custom, id, css, Date.now());
         if (next === this.custom) return;
         this.custom = next;
+        // The update waits. The page keeps the CSS that the user accepted.
         write(LIBRARY_KEY, this.custom);
-        // The active theme changes at once.
-        if (this.themeFor(this.mode).id === id) this.apply();
       },
       (message) => console.warn(message)
     );
@@ -252,6 +283,19 @@ class ThemeStore {
     this.apply();
   }
 
+  /** Apply the waiting update of a linked theme. */
+  acceptUpdate(id: string) {
+    this.custom = acceptPending(this.custom, id, Date.now());
+    write(LIBRARY_KEY, this.custom);
+    this.apply();
+  }
+
+  /** Drop the waiting update. The active CSS stays. */
+  dismissUpdate(id: string) {
+    this.custom = dismissPending(this.custom, id);
+    write(LIBRARY_KEY, this.custom);
+  }
+
   /** Put the active theme on the page. */
   private apply() {
     const root = document.documentElement;
@@ -261,7 +305,15 @@ class ThemeStore {
       this.styleEl.id = 'chord-theme';
       document.head.append(this.styleEl);
     }
-    this.styleEl.textContent = t.css;
+    // Built-in CSS is part of the app. The rest loses its requests to other hosts.
+    this.styleEl.textContent = t.builtIn ? t.css : sanitizeThemeCss(t.css).css;
+    if (!this.guardEl) {
+      this.guardEl = document.createElement('style');
+      this.guardEl.id = 'chord-theme-guard';
+      this.guardEl.textContent = GUARD_CSS;
+    }
+    // After the theme, each time: the last style element wins a tie.
+    document.head.append(this.guardEl);
     root.dataset.mode = this.mode;
     root.dataset.themeId = t.id;
     const accent = this.accentOf(t);

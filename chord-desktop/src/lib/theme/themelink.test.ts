@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  acceptPending,
+  dismissPending,
   hostOf,
+  lineChange,
   mergeFetched,
   normalizeThemeUrl,
   readLibrary,
@@ -66,10 +69,42 @@ const lib = (): CustomTheme[] => [
 ];
 
 describe('mergeFetched', () => {
-  it('replaces the CSS of a linked theme', () => {
+  it('keeps new CSS of a linked theme as an update that waits', () => {
     const next = mergeFetched(lib(), 'a', ' new ', 9);
-    expect(next[0]).toEqual({ id: 'a', css: 'new', url: 'https://example.org/a.css', updated: 9 });
+    expect(next[0]).toEqual({
+      id: 'a',
+      css: 'old',
+      url: 'https://example.org/a.css',
+      updated: 1,
+      pending: 'new'
+    });
     expect(next[1]).toEqual({ id: 'b', css: 'pasted' });
+  });
+
+  it('does not store the same update twice, and clears it when the link is back', () => {
+    const once = mergeFetched(lib(), 'a', 'new', 9);
+    expect(mergeFetched(once, 'a', 'new', 10)).toBe(once);
+    expect(mergeFetched(once, 'a', 'newer', 10)[0].pending).toBe('newer');
+    expect(mergeFetched(once, 'a', 'old', 10)[0]).toEqual(lib()[0]);
+  });
+
+  it('applies or drops an update only when asked', () => {
+    const once = mergeFetched(lib(), 'a', 'new', 9);
+    expect(acceptPending(once, 'a', 20)[0]).toEqual({
+      id: 'a',
+      css: 'new',
+      url: 'https://example.org/a.css',
+      updated: 20
+    });
+    expect(dismissPending(once, 'a')[0]).toEqual(lib()[0]);
+    const l = lib();
+    expect(acceptPending(l, 'a', 20)).toBe(l);
+    expect(dismissPending(l, 'zzz')).toBe(l);
+  });
+
+  it('counts the changed lines', () => {
+    expect(lineChange('a\nb\nc', 'a\nc\nd\ne')).toEqual({ added: 2, removed: 1 });
+    expect(lineChange('x', 'x')).toEqual({ added: 0, removed: 0 });
   });
 
   it('keeps the old CSS for an empty or a big file', () => {

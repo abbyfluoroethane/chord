@@ -3,6 +3,7 @@
   // @author, @mode, @accent), as on Vencord. A linked theme updates at each launch.
   import { theme } from '$lib/theme/theme.svelte';
   import { parseTheme } from '$lib/theme/themecss';
+  import { sanitizeThemeCss } from '$lib/theme/themesafe';
   import Modal from './Modal.svelte';
   import Segmented from './Segmented.svelte';
   import { ui } from './ui.svelte';
@@ -15,6 +16,7 @@
   let busy = $state(false);
   let error = $state<string | null>(null);
   const info = $derived(css.trim() ? parseTheme(css) : null);
+  const blocked = $derived(css.trim() ? sanitizeThemeCss(css).blocked.length : 0);
 
   function done(r: ReturnType<typeof theme.import>) {
     if (!r.ok) {
@@ -54,8 +56,8 @@
   </div>
   {#if tab === 'link'}
     <p class="note">
-      Give the link of a CSS file. A GitHub page link works too. Chord fetches the theme again
-      each time it starts, so it stays up to date.
+      Give the link of a CSS file. A GitHub page link works too. Chord checks the link each
+      time it starts. If the file changed, Chord asks before it uses the new version.
     </p>
     <form
       class="row"
@@ -95,12 +97,15 @@
       <p class="found" role="status">
         <b>{info.name}</b>{info.author ? ` by ${info.author}` : ''}: a {info.mode} theme with
         {info.accents.length === 1 ? '1 accent' : `${info.accents.length} accents`}.
+        {#if blocked}This CSS asks for {blocked} {blocked === 1 ? 'request' : 'requests'} to other
+          hosts. Chord blocks {blocked === 1 ? 'it' : 'them'}.{/if}
       </p>
     {/if}
   {/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <p class="note small">
-    A theme can change how any part of Chord looks. Import only CSS from people you trust.
+    A theme can change how any part of Chord looks. Chord blocks every request from a theme to
+    another host, but import only CSS from people you trust.
   </p>
   {#snippet footer()}
     <button class="btn" onclick={onclose}>Cancel</button>

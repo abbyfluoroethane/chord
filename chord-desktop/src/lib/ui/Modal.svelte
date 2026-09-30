@@ -58,7 +58,7 @@
     <button class="close" aria-label="Close" onclick={onclose}><Icon icon={X} size={18} /></button>
   </header>
   <div class="body">{@render children()}</div>
-  {#if footer}<footer>{@render footer()}</footer>{/if}
+  {#if footer}<footer data-guard>{@render footer()}</footer>{/if}
 </dialog>
 
 <style>
