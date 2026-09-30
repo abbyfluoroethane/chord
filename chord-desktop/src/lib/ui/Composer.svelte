@@ -14,6 +14,12 @@
   import { ui } from './ui.svelte';
   import { typingText } from './format';
   import { tooltip } from './tooltip';
+  import {
+    loadShortcodes,
+    replaceShortcodesOutsideCode,
+    mayHaveShortcode,
+    suggestShortcodes
+  } from './shortcodes';
 
   let box = $state<HTMLTextAreaElement>();
   let boxWrap = $state<HTMLDivElement>();
@@ -84,18 +90,81 @@
     const text = value;
     if (!text.trim()) return;
     value = '';
+    codeMatch = null;
     queueMicrotask(fit);
-    const ok = await app.send(text);
+    // Other clients do not know :shortcodes:, so the message goes out with real emoji.
+    const out = mayHaveShortcode(text)
+      ? replaceShortcodesOutsideCode(text, await loadShortcodes())
+      : text;
+    const ok = await app.send(out);
     // A message that did not go stays in the box, unless the user typed something new.
     if (!ok && !value) value = text;
   }
 
+  // Shortcode suggestions: after ":" and two letters, a list shows above the box.
+  let codeMatch = $state<{ start: number; text: string } | null>(null);
+  let suggestions = $state<{ name: string; emoji: string }[]>([]);
+  let chosen = $state(0);
+  const listOpen = $derived(codeMatch !== null && suggestions.length > 0);
+
+  function scanShortcode() {
+    const caret = box?.selectionStart ?? 0;
+    const m = /(?:^|\s):([a-z0-9_+-]{2,})$/i.exec(value.slice(0, caret));
+    if (!m) {
+      codeMatch = null;
+      suggestions = [];
+      return;
+    }
+    const text = m[1];
+    codeMatch = { start: caret - text.length - 1, text };
+    void loadShortcodes().then((map) => {
+      if (codeMatch?.text !== text) return;
+      suggestions = suggestShortcodes(map, text, 8);
+      chosen = 0;
+    });
+  }
+
+  function pickShortcode(i: number) {
+    const pick = suggestions[i];
+    if (!pick || !codeMatch) return;
+    const at = codeMatch.start;
+    const caret = box?.selectionStart ?? at + codeMatch.text.length + 1;
+    value = value.slice(0, at) + pick.emoji + value.slice(caret);
+    codeMatch = null;
+    suggestions = [];
+    queueMicrotask(() => {
+      box?.setSelectionRange(at + pick.emoji.length, at + pick.emoji.length);
+      box?.focus();
+      fit();
+    });
+  }
+
   function input() {
     fit();
+    scanShortcode();
     app.noteTyping(value.trim().length > 0);
   }
 
   function keydown(e: KeyboardEvent) {
+    if (listOpen && !e.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = suggestions.length;
+        chosen = (chosen + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pickShortcode(chosen);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        codeMatch = null;
+        suggestions = [];
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
@@ -162,6 +231,13 @@
       {placeholder}
       oninput={input}
       onkeydown={keydown}
+      onclick={scanShortcode}
+      onblur={() => (codeMatch = null)}
+      role="combobox"
+      aria-expanded={listOpen}
+      aria-controls="shortcode-list"
+      aria-autocomplete="list"
+      aria-activedescendant={listOpen ? `shortcode-${chosen}` : undefined}
     ></textarea>
     <div class="tools">
       {#if prefs.gifPicker}
@@ -187,6 +263,25 @@
         <Icon icon={Smile} size={20} />
       </button>
     </div>
+    {#if listOpen}
+      <ul class="codes" id="shortcode-list" role="listbox" aria-label="Emoji suggestions">
+        {#each suggestions as s, i (s.name)}
+          <li
+            id="shortcode-{i}"
+            role="option"
+            aria-selected={i === chosen}
+            class:on={i === chosen}
+            onmousedown={(e) => {
+              e.preventDefault();
+              pickShortcode(i);
+            }}
+          >
+            <span class="glyph" aria-hidden="true">{s.emoji}</span>
+            <span class="name">:{s.name}:</span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </div>
   {#if picker && boxWrap}
     <ExpressionPicker
@@ -245,6 +340,54 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
     transition: border-color var(--dur-fast);
+  }
+  .box {
+    position: relative;
+  }
+  /* The suggestion list: like the other popovers, with a 1px line and no shadow. */
+  .codes {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    z-index: 5;
+    min-width: 240px;
+    max-width: 100%;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    background: var(--surface-300);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+  .codes li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 32px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out);
+  }
+  .codes li:hover,
+  .codes li.on {
+    background: var(--hover);
+  }
+  .codes .glyph {
+    width: 24px;
+    font-size: 20px;
+    line-height: 24px;
+    text-align: center;
+  }
+  .codes .name {
+    color: var(--ink-muted);
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+  .codes li.on .name {
+    color: var(--ink);
   }
   .box.has-reply {
     border-radius: 0 0 var(--radius-md) var(--radius-md);

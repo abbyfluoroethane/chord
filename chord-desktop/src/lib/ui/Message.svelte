@@ -16,7 +16,7 @@
   import { clock, domainOf, stamp } from './format';
   import { linkPreviews } from './linkpreviews.svelte';
   import { prefs } from './prefs.svelte';
-  import { segments } from './richtext';
+  import { previewUrls } from './markdown';
   import type { TimelineItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -37,9 +37,7 @@
   // Up to three different links of the body. Code is not a link. The attachment has its own view.
   const wanted = $derived.by(() => {
     if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
-    const urls = segments(item.body, [])
-      .filter((s) => s.t === 'link' && s.v !== item.attachment?.url)
-      .map((s) => s.v);
+    const urls = previewUrls(item.body).filter((u) => u !== item.attachment?.url);
     return [...new Set(urls)].slice(0, 3);
   });
 

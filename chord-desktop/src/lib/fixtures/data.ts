@@ -386,7 +386,29 @@ const opsGeneral = build([
     ts: at(0, 13, 12),
     body: 'Heads up: the north door sticks. Push, do not pull.',
     reactions: [{ emoji: '😂', count: 1, mine: false }]
-  }
+  },
+  {
+    id: 'g15',
+    who: 'rin',
+    ts: at(0, 13, 20),
+    body:
+      '# Run plan\n' +
+      'Static fire is <t:' + Math.floor((at(0, 14, 0) + DAY) / 1000) + ':F>, which is <t:' + Math.floor((at(0, 14, 0) + DAY) / 1000) + ':R>.\n' +
+      '> Keep the **range** clear.\n' +
+      '- Igniter check\n' +
+      '  - Wire the *arming key*\n' +
+      '- Valve order\n' +
+      '-# The plan is a draft. Ask Jo for changes. :rocket:'
+  },
+  {
+    id: 'g16',
+    who: 'bay',
+    ts: at(0, 13, 24),
+    body:
+      'The log script:\n```python\nfor row in rows:\n    if row.pressure > 12:\n        print("high", row.id)\n```\n' +
+      'The fix is ||a loose fitting||. Full notes are in [the wiki](https://example.org/wiki/stand).'
+  },
+  { id: 'g17', who: 'jo', ts: at(0, 13, 30), body: ':tada: :fire:' }
 ]);
 
 function small(who: string[], base: number): TimelineItem[] {
