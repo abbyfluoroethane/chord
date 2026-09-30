@@ -3,6 +3,10 @@
 //! - A PEP event on `urn:xmpp:avatar:metadata` stores the hash and the type of the avatar
 //!   of its owner. If we lack the image, we fetch it from the data node of the owner and
 //!   check its SHA-1 against the hash.
+//! - An info with only a URL (no data node copy) is downloaded with `http_get`: https and
+//!   public hosts only, a size cap, the SHA-1 check, and the type from the bytes.
+//! - The type of the image is read from its bytes (`sniff_mime`): png, jpeg, gif or webp.
+//!   Anything else (an SVG, for example) is dropped.
 //! - An empty `<metadata/>`, a retract, a purge, or a deleted node removes the avatar.
 //! - At each new session we fetch our own metadata. Our caps ask for `+notify`, so the
 //!   metadata of our contacts arrives as events.
@@ -14,7 +18,8 @@
 //!   contact has no XEP-0084 avatar and we lack that image, we fetch the vCard (XEP-0054)
 //!   from the bare JID of the contact, check the SHA-1, and store the photo. A XEP-0084
 //!   avatar always wins. Only a contact that we see (subscription `to` or `both`) can
-//!   make us fetch, and a hash that failed once is not tried again in the session. An
+//!   make us fetch (a person with an open 1:1 chat also can, through the queue below),
+//!   and a hash that failed once is not tried again in the session. An
 //!   empty `<photo/>` removes only a photo that we took from a vCard in this session.
 //!   `on_presence` returns false, so the roster also sees the presence.
 //! - `ClientHandle::refresh_avatar` asks for XEP-0084 first. If the owner has no metadata
@@ -67,6 +72,11 @@ const PUBLISH_OPTIONS: &str = "http://jabber.org/protocol/pubsub#publish-options
 /// The largest image that we accept or publish, in bytes. Avatars are small.
 pub const MAX_AVATAR_BYTES: usize = 1024 * 1024;
 
+/// The largest image that we publish, in bytes. The UI resizes to 256 by 256 pixels, and
+/// that fits in a few tens of KiB as PNG or JPEG. A small item also passes the item size
+/// limit of a server (XEP-0084 4).
+pub const MAX_PUBLISH_BYTES: usize = 64 * 1024;
+
 /// The avatar of one owner, as stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Avatar {
@@ -110,6 +120,8 @@ const MAX_QUEUED: usize = 256;
 enum Job {
     /// The XEP-0084 metadata of a real JID. No metadata leads to the vCard.
     Metadata(BareJid),
+    /// The vCard photo of a bare JID that has an open 1:1 chat but is not a contact.
+    VCard { owner: BareJid, hash: String },
     /// The vCard of an occupant with no real JID.
     OccupantVCard { owner: Jid, hash: String },
 }
@@ -387,8 +399,9 @@ pub(crate) fn verify_image(hash: &str, data: &[u8]) -> Result<(), ClientError> {
 }
 
 /// The image type, from the first bytes of the image. XEP-0153 says to trust the data
-/// and not the `TYPE` hint.
-fn sniff_mime(data: &[u8]) -> Option<&'static str> {
+/// and not the `TYPE` hint. Only png, jpeg, gif and webp: never SVG. The avatar scheme of
+/// the desktop app serves nothing else.
+pub fn sniff_mime(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
@@ -485,7 +498,8 @@ fn apply_metadata(ctx: &mut Ctx<'_>, owner: &BareJid, element: Element, reply: O
             return;
         }
     };
-    // An info with a URL is an extra copy. Prefer an image that the data node holds.
+    // An info with a URL is an extra copy. Prefer an image that the data node holds. If
+    // every info has a URL, the image comes from the URL (XEP-0084 4.2).
     let info = metadata
         .infos
         .iter()
@@ -536,6 +550,15 @@ fn apply_metadata(ctx: &mut Ctx<'_>, owner: &BareJid, element: Element, reply: O
     {
         // A fetch of the same image runs already.
         done(reply, Ok(()));
+        return;
+    }
+    if let Some(url) = info.url.clone() {
+        ctx.download_avatar(UserDownload {
+            owner: owner.clone(),
+            hash,
+            url,
+            reply,
+        });
         return;
     }
     let items = Items {
@@ -800,17 +823,103 @@ fn accept_data(
     let Some(data) = data else {
         return Err(ClientError::Invalid("no avatar data in the answer".into()));
     };
-    if let Err(e) = verify_image(hash, &data) {
+    store_fetched(ctx, owner, hash, &data)
+}
+
+/// Check an image that we fetched for `owner` (size, SHA-1, and type from the bytes), and
+/// store it. The type in the metadata is what the peer wrote, so the stored type is the
+/// sniffed one. A file that is not png, jpeg, gif or webp (an SVG, for example) is dropped.
+fn store_fetched(
+    ctx: &mut Ctx<'_>,
+    owner: &BareJid,
+    hash: &str,
+    data: &[u8],
+) -> Result<(), ClientError> {
+    if let Err(e) = verify_image(hash, data) {
         log::warn!("avatar data of {owner} is not valid ({e}). Dropped.");
         return Err(e);
     }
-    match store_data(ctx.store, ctx.account_id, owner.as_str(), hash, &data) {
+    let Some(mime) = sniff_mime(data) else {
+        log::warn!("avatar data of {owner} is not a png, jpeg, gif or webp image. Dropped.");
+        return Err(ClientError::Invalid("the avatar is not an image".into()));
+    };
+    let key = owner.as_str();
+    let stored = store_metadata(ctx.store, ctx.account_id, key, hash, Some(mime))
+        .and_then(|_| store_data(ctx.store, ctx.account_id, key, hash, data));
+    match stored {
         Ok(true) => mark_changed(ctx, owner),
         // The owner changed the avatar while we fetched.
         Ok(false) => {}
         Err(e) => ctx.store_error("store avatar data", e),
     }
     Ok(())
+}
+
+/// An HTTP GET for the image of an avatar whose only info has a URL (XEP-0084 4.2). The
+/// runtime runs it. It has the checks of a space avatar: https and public hosts only, a
+/// size cap, the SHA-1 of the info, and the type from the bytes.
+#[derive(Debug)]
+pub(crate) struct UserDownload {
+    pub owner: BareJid,
+    /// The lower case SHA-1 hex of the image.
+    pub hash: String,
+    pub url: String,
+    pub reply: Option<Reply>,
+}
+
+/// The result of a `UserDownload`.
+#[derive(Debug)]
+pub(crate) struct UserDownloadDone {
+    pub request: UserDownload,
+    pub result: Result<Vec<u8>, String>,
+}
+
+/// Run a download. Send the result to `done` as `Internal::AvatarDownloaded`.
+#[cfg(feature = "native-session")]
+pub(crate) fn start_download(
+    request: UserDownload,
+    done: futures_channel::mpsc::UnboundedSender<super::Internal>,
+) {
+    crate::runtime::spawn(async move {
+        let result = crate::runtime::http_get(&request.url, MAX_AVATAR_BYTES).await;
+        // An error means that the actor stopped. Nobody waits for the result.
+        let _ = done.unbounded_send(super::Internal::AvatarDownloaded(UserDownloadDone {
+            request,
+            result,
+        }));
+    });
+}
+
+/// Without the native session there is no HTTP client yet. Fail at once.
+#[cfg(not(feature = "native-session"))]
+pub(crate) fn start_download(
+    request: UserDownload,
+    done: futures_channel::mpsc::UnboundedSender<super::Internal>,
+) {
+    let _ = done.unbounded_send(super::Internal::AvatarDownloaded(UserDownloadDone {
+        request,
+        result: Err("HTTP download is not available in this build".into()),
+    }));
+}
+
+/// A download finished. Check the image and store it.
+pub(crate) fn on_download_done(ctx: &mut Ctx<'_>, finished: UserDownloadDone) {
+    let UserDownloadDone { request, result } = finished;
+    let UserDownload {
+        owner, hash, reply, ..
+    } = request;
+    ctx.state
+        .avatars
+        .fetching
+        .remove(&(owner.clone(), hash.clone()));
+    let result = match result {
+        Ok(data) => store_fetched(ctx, &owner, &hash, &data),
+        Err(e) => {
+            log::warn!("avatar download for {owner}: {e}");
+            Err(ClientError::Invalid(format!("the download failed: {e}")))
+        }
+    };
+    done(reply, result);
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
@@ -826,11 +935,11 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 None => None,
                 Some((mime, data)) => {
                     if data.is_empty()
-                        || data.len() > MAX_AVATAR_BYTES
+                        || data.len() > MAX_PUBLISH_BYTES
                         || !mime.starts_with("image/")
                     {
                         let _ = reply.send(Err(ClientError::Invalid(
-                            "a photo is an image of 1 byte to 1 MiB".into(),
+                            "a photo is an image of 1 byte to 64 KiB".into(),
                         )));
                         return;
                     }
@@ -857,9 +966,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             height,
             reply,
         } => {
-            if data.is_empty() || data.len() > MAX_AVATAR_BYTES || !mime.starts_with("image/") {
+            if data.is_empty() || data.len() > MAX_PUBLISH_BYTES || !mime.starts_with("image/") {
                 let _ = reply.send(Err(ClientError::Invalid(
-                    "an avatar is an image of 1 byte to 1 MiB".into(),
+                    "an avatar is an image of 1 byte to 64 KiB".into(),
                 )));
                 return;
             }
@@ -1047,8 +1156,10 @@ fn on_vcard_hint(ctx: &mut Ctx<'_>, presence: &Presence) {
     let Some(photo) = update.photo else {
         return;
     };
-    // The hash is a hint from a peer. Only a contact that we see can make us fetch.
-    if !sees_contact(ctx, &owner) {
+    // The hash is a hint from a peer. Only a contact that we see, or a person with an open
+    // 1:1 chat, can make us fetch. The second case waits in the queue, which has a limit.
+    let contact = sees_contact(ctx, &owner);
+    if !contact && !has_chat(ctx, &owner) {
         return;
     }
     let Some(hash) = photo.data.as_ref().map(|d| hex(d)) else {
@@ -1075,6 +1186,10 @@ fn on_vcard_hint(ctx: &mut Ctx<'_>, presence: &Presence) {
         .avatars
         .fetching
         .insert((owner.clone(), hash.clone()));
+    if !contact {
+        enqueue(ctx, Job::VCard { owner, hash });
+        return;
+    }
     // XEP-0153: the request goes to the bare JID.
     let iq = Iq::from_get("", VCardQuery).with_to(Jid::from(owner.clone()));
     ctx.request(
@@ -1085,6 +1200,19 @@ fn on_vcard_hint(ctx: &mut Ctx<'_>, presence: &Presence) {
             reply: None,
         }),
     );
+}
+
+/// True if we have a 1:1 chat with `owner`: a chat message, in or out.
+fn has_chat(ctx: &Ctx<'_>, owner: &BareJid) -> bool {
+    ctx.store
+        .conn()
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM messages
+             WHERE account_id = ?1 AND peer = ?2 AND kind = 'chat')",
+            params![ctx.account_id, owner.as_str()],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
 }
 
 /// A room presence of an occupant. `real` is the real bare JID, if the room gave it.
@@ -1149,11 +1277,17 @@ pub(crate) fn on_occupant(ctx: &mut Ctx<'_>, presence: &Presence, real: Option<B
 fn enqueue(ctx: &mut Ctx<'_>, job: Job) {
     if ctx.state.avatars.queue.len() >= MAX_QUEUED {
         log::debug!("too many avatar requests for occupants: {job:?} dropped");
-        if let Job::OccupantVCard { owner, hash } = job {
-            ctx.state
-                .avatars
-                .occupant_fetching
-                .remove(&(owner.to_string(), hash));
+        match job {
+            Job::OccupantVCard { owner, hash } => {
+                ctx.state
+                    .avatars
+                    .occupant_fetching
+                    .remove(&(owner.to_string(), hash));
+            }
+            Job::VCard { owner, hash } => {
+                ctx.state.avatars.fetching.remove(&(owner, hash));
+            }
+            Job::Metadata(_) => {}
         }
         return;
     }
@@ -1177,6 +1311,19 @@ fn pump(ctx: &mut Ctx<'_>) {
                 let (reply, _) = oneshot::channel();
                 let reply = Some(reply);
                 (iq, Pending::Metadata { owner, reply })
+            }
+            Job::VCard { owner, hash } => {
+                // XEP-0153: the request goes to the bare JID.
+                let iq = Iq::from_get("", VCardQuery).with_to(Jid::from(owner.clone()));
+                let hash = Some(hash);
+                (
+                    iq,
+                    Pending::VCard {
+                        owner,
+                        hash,
+                        reply: None,
+                    },
+                )
             }
             Job::OccupantVCard { owner, hash } => {
                 // XEP-0054: the request goes to the full JID. The room forwards it.
@@ -1359,7 +1506,7 @@ mod tests {
     #[test]
     fn metadata_event_stores_hash_and_asks_for_the_data() {
         let mut h = Harness::new();
-        let image = b"image bytes";
+        let image = b"\x89PNG\r\n\x1a\nimage bytes";
         deliver(&mut h, event(Some(metadata_element(image, "image/png"))));
         let avatar = stored(&h).unwrap();
         assert_eq!(avatar.hash, sha1_hex(image));
@@ -1385,7 +1532,7 @@ mod tests {
     #[test]
     fn data_with_the_right_hash_is_stored() {
         let mut h = Harness::new();
-        let image = b"image bytes";
+        let image = b"\x89PNG\r\n\x1a\nimage bytes";
         deliver(&mut h, event(Some(metadata_element(image, "image/png"))));
         h.take_dirty();
         h.answer(is_data, Some(data_result(image)));
@@ -1404,7 +1551,7 @@ mod tests {
     #[test]
     fn same_hash_with_data_is_not_fetched_again() {
         let mut h = Harness::new();
-        let image = b"image bytes";
+        let image = b"\x89PNG\r\n\x1a\nimage bytes";
         deliver(&mut h, event(Some(metadata_element(image, "image/png"))));
         h.answer(is_data, Some(data_result(image)));
         h.take_dirty();
@@ -2113,7 +2260,7 @@ mod tests {
         let mut h = Harness::new();
         let mut answer = refresh(&mut h);
         h.sent_iqs();
-        let image = b"pep image";
+        let image = b"\x89PNG\r\n\x1a\npep image";
         h.answer(
             is_metadata,
             Some(metadata_result(Some(metadata_element(image, "image/png")))),
@@ -2459,6 +2606,14 @@ mod tests {
         )
     }
 
+    fn is_queued_bare_vcard(p: &FeaturePending) -> bool {
+        matches!(
+            p,
+            FeaturePending::Avatars(Pending::Queued(inner))
+                if matches!(**inner, Pending::VCard { .. })
+        )
+    }
+
     fn is_queued_vcard(p: &FeaturePending) -> bool {
         matches!(
             p,
@@ -2471,7 +2626,7 @@ mod tests {
     fn an_occupant_with_a_real_jid_gets_the_avatar_of_that_jid() {
         let mut h = Harness::new();
         occupant_row(&h, "bobby", Some(BOB));
-        let image = b"image bytes";
+        let image = b"\x89PNG\r\n\x1a\nimage bytes";
         occupant(&mut h, &room_presence("bobby", None), Some(BOB));
         let sent = h.sent_iqs();
         assert_eq!(sent.len(), 1);
@@ -2616,5 +2771,288 @@ mod tests {
         assert_eq!(h.sent_iqs().len(), 1);
         h.respond(is_queued_vcard, IqResponse::Lost);
         assert_eq!(h.sent_iqs().len(), 1);
+    }
+
+    // The type from the bytes, and the avatars that have only a URL.
+
+    const URL_IMAGE: &[u8] = b"\x89PNG\r\n\x1a\nurl image";
+    const IMAGE_URL: &str = "https://example.org/a.png";
+
+    fn url_metadata(data: &[u8], url: &str) -> Element {
+        Metadata {
+            infos: vec![Info {
+                bytes: data.len() as u32,
+                width: Some(8),
+                height: Some(8),
+                id: sha1_hex(data).parse().unwrap(),
+                type_: "image/png".into(),
+                url: Some(url.into()),
+            }],
+        }
+        .into()
+    }
+
+    fn take_downloads(h: &mut Harness) -> Vec<UserDownload> {
+        let mut found = Vec::new();
+        for effect in std::mem::take(&mut h.effects) {
+            match effect {
+                crate::features::Effect::AvatarDownload { request } => found.push(request),
+                other => h.effects.push(other),
+            }
+        }
+        found
+    }
+
+    fn finish(h: &mut Harness, request: UserDownload, result: Result<Vec<u8>, String>) {
+        h.with_ctx(|ctx| on_download_done(ctx, UserDownloadDone { request, result }));
+    }
+
+    #[test]
+    fn data_that_is_not_an_image_is_dropped() {
+        let mut h = Harness::new();
+        let svg = b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>";
+        deliver(&mut h, event(Some(metadata_element(svg, "image/png"))));
+        h.answer(is_data, Some(data_result(svg)));
+        assert_eq!(stored(&h).unwrap().data, None);
+    }
+
+    #[test]
+    fn the_stored_type_comes_from_the_bytes_not_from_the_metadata() {
+        let mut h = Harness::new();
+        let image = b"\x89PNG\r\n\x1a\nreally a png";
+        deliver(
+            &mut h,
+            event(Some(metadata_element(image, "image/svg+xml"))),
+        );
+        h.answer(is_data, Some(data_result(image)));
+        let avatar = stored(&h).unwrap();
+        assert_eq!(avatar.mime.as_deref(), Some("image/png"));
+        assert_eq!(avatar.data.as_deref(), Some(&image[..]));
+    }
+
+    #[test]
+    fn sniff_mime_knows_four_types_and_not_svg() {
+        assert_eq!(sniff_mime(b"\x89PNG\r\n\x1a\n"), Some("image/png"));
+        assert_eq!(sniff_mime(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
+        assert_eq!(sniff_mime(b"GIF89a.."), Some("image/gif"));
+        assert_eq!(sniff_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(
+            sniff_mime(b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+            None
+        );
+        assert_eq!(sniff_mime(b"<?xml version='1.0'?><svg/>"), None);
+        assert_eq!(sniff_mime(b""), None);
+    }
+
+    #[test]
+    fn an_info_with_only_a_url_starts_a_download() {
+        let mut h = Harness::new();
+        deliver(&mut h, event(Some(url_metadata(URL_IMAGE, IMAGE_URL))));
+        // No data node request.
+        assert!(h.sent_iqs().is_empty());
+        let mut downloads = take_downloads(&mut h);
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].url, IMAGE_URL);
+        assert_eq!(downloads[0].hash, sha1_hex(URL_IMAGE));
+        assert_eq!(downloads[0].owner, bob());
+        // The same event again: the download runs already.
+        deliver(&mut h, event(Some(url_metadata(URL_IMAGE, IMAGE_URL))));
+        assert!(take_downloads(&mut h).is_empty());
+        h.take_dirty();
+        finish(&mut h, downloads.remove(0), Ok(URL_IMAGE.to_vec()));
+        let avatar = stored(&h).unwrap();
+        assert_eq!(avatar.data.as_deref(), Some(URL_IMAGE));
+        assert_eq!(avatar.mime.as_deref(), Some("image/png"));
+        assert!(h.take_dirty().contains(&ViewKey::Timeline(bob())));
+    }
+
+    #[test]
+    fn an_info_with_a_data_copy_wins_over_a_url_info() {
+        let mut h = Harness::new();
+        let element: Element = Metadata {
+            infos: vec![
+                Info {
+                    bytes: 3,
+                    width: None,
+                    height: None,
+                    id: sha1_hex(URL_IMAGE).parse().unwrap(),
+                    type_: "image/png".into(),
+                    url: Some(IMAGE_URL.into()),
+                },
+                Info {
+                    bytes: 3,
+                    width: None,
+                    height: None,
+                    id: sha1_hex(PNG).parse().unwrap(),
+                    type_: "image/png".into(),
+                    url: None,
+                },
+            ],
+        }
+        .into();
+        deliver(&mut h, event(Some(element)));
+        assert!(take_downloads(&mut h).is_empty());
+        assert_eq!(h.sent_iqs().len(), 1);
+    }
+
+    #[test]
+    fn a_url_download_with_a_wrong_hash_a_wrong_type_or_an_error_is_dropped() {
+        for result in [
+            Ok(b"\x89PNG\r\n\x1a\nforged".to_vec()),
+            Ok(b"<svg xmlns='http://www.w3.org/2000/svg'/>".to_vec()),
+            Ok(vec![0x89; MAX_AVATAR_BYTES + 1]),
+            Err("the download failed".to_string()),
+        ] {
+            let mut h = Harness::new();
+            deliver(&mut h, event(Some(url_metadata(URL_IMAGE, IMAGE_URL))));
+            let request = take_downloads(&mut h).remove(0);
+            finish(&mut h, request, result);
+            assert_eq!(stored(&h).unwrap().data, None);
+            // The fetch is over: a new event can start it again.
+            deliver(&mut h, event(Some(url_metadata(URL_IMAGE, IMAGE_URL))));
+            assert_eq!(take_downloads(&mut h).len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_url_info_that_is_too_big_is_not_downloaded() {
+        let mut h = Harness::new();
+        let element: Element = Metadata {
+            infos: vec![Info {
+                bytes: (MAX_AVATAR_BYTES + 1) as u32,
+                width: None,
+                height: None,
+                id: sha1_hex(URL_IMAGE).parse().unwrap(),
+                type_: "image/png".into(),
+                url: Some(IMAGE_URL.into()),
+            }],
+        }
+        .into();
+        deliver(&mut h, event(Some(element)));
+        assert!(take_downloads(&mut h).is_empty());
+    }
+
+    #[test]
+    fn a_refresh_waits_for_the_url_download() {
+        let mut h = Harness::new();
+        let mut answer = refresh(&mut h);
+        h.sent_iqs();
+        h.answer(
+            is_metadata,
+            Some(metadata_result(Some(url_metadata(URL_IMAGE, IMAGE_URL)))),
+        );
+        assert_eq!(answer.try_recv().unwrap(), None);
+        let request = take_downloads(&mut h).remove(0);
+        finish(&mut h, request, Ok(URL_IMAGE.to_vec()));
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+    }
+
+    #[test]
+    fn the_publish_limit_is_64_kib() {
+        let mut h = Harness::new();
+        let mut big = PNG.to_vec();
+        big.resize(MAX_PUBLISH_BYTES + 1, 0);
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, set_command(reply, "image/png", big.clone())));
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        assert!(h.sent_iqs().is_empty());
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::VCardPhoto {
+                    image: Some(("image/png".into(), big)),
+                    reply,
+                },
+            )
+        });
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        assert!(h.sent_iqs().is_empty());
+        // The limit itself passes.
+        let mut fit = PNG.to_vec();
+        fit.resize(MAX_PUBLISH_BYTES, 0);
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, set_command(reply, "image/png", fit)));
+        assert_eq!(h.sent_iqs().len(), 1);
+    }
+
+    // XEP-0153 from a person with an open 1:1 chat.
+
+    fn chat_message(h: &Harness, peer: &str) {
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO messages (account_id, key_kind, key, direction, peer, sender, body,
+                                       timestamp, kind)
+                 VALUES (?1, 'origin-id', ?2, 'in', ?3, ?3, 'hi', 1, 'chat')",
+                params![h.account_id, format!("k-{peer}"), peer],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_person_with_an_open_chat_who_is_no_contact_gets_a_vcard_fetch() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        // No chat yet: nothing.
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        assert!(h.sent_iqs().is_empty());
+        chat_message(&h, BOB);
+        hear(&mut h, &presence_with(bob_phone(), &update(&hash)));
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to().unwrap().as_str(), BOB);
+        h.answer(is_queued_bare_vcard, Some(vcard_result(PNG)));
+        let avatar = stored(&h).unwrap();
+        assert_eq!(avatar.hash, hash);
+        assert_eq!(avatar.data.as_deref(), Some(PNG));
+    }
+
+    #[test]
+    fn a_group_chat_message_does_not_open_a_chat() {
+        let mut h = Harness::new();
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO messages (account_id, key_kind, key, direction, peer, sender, body,
+                                       timestamp, kind)
+                 VALUES (?1, 'origin-id', 'g', 'in', ?2, ?2, 'hi', 1, 'groupchat')",
+                params![h.account_id, BOB],
+            )
+            .unwrap();
+        hear(&mut h, &presence_with(bob_phone(), &update(&sha1_hex(PNG))));
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn the_chat_peer_fetches_keep_the_queue_limit() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        for i in 0..(MAX_IN_FLIGHT + MAX_QUEUED + 5) {
+            let peer = format!("p{i}@chord.localhost");
+            chat_message(&h, &peer);
+            hear(
+                &mut h,
+                &presence_with(&format!("{peer}/phone"), &update(&hash)),
+            );
+        }
+        // Only MAX_IN_FLIGHT went out. The queue took MAX_QUEUED. The rest were dropped.
+        assert_eq!(h.sent_iqs().len(), MAX_IN_FLIGHT);
+        assert_eq!(h.with_ctx(|ctx| ctx.state.avatars.queue.len()), MAX_QUEUED);
+        // A dropped one can be asked again later.
+        let last = format!("p{}@chord.localhost", MAX_IN_FLIGHT + MAX_QUEUED + 4);
+        let last_jid = BareJid::new(&last).unwrap();
+        assert!(!h.with_ctx(|ctx| {
+            ctx.state
+                .avatars
+                .fetching
+                .contains(&(last_jid, hash.clone()))
+        }));
     }
 }

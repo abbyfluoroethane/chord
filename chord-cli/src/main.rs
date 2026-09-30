@@ -50,6 +50,8 @@
 //!   --wait <secs>                   anywhere in the arguments: stay online that long before the command runs
 //!   profile [jid]                   nickname and vCard4 name of an account (XEP-0172, XEP-0292)
 //!   set-nickname <text>|--remove    publish our nickname (XEP-0172)
+//!   avatar-set <file>               publish an image as our avatar (XEP-0084, vCard)
+//!   avatar-get <jid>                fetch the avatar of a JID and print what we stored
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!   adhoc <jid> <node> [name=value ...]   run a one-step ad-hoc command (XEP-0050)
@@ -133,7 +135,7 @@ room-form <room> [name=value ...] | passwd | register-form | register [name=valu
 call-answer accept|reject [reason] [--ring] | call-watch [--secs N] | \
 notify <jid> [all|mentions|none [--until <unix-ms>]] | \
 presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>] | \
-profile [jid] | set-nickname <text>|--remove";
+profile [jid] | set-nickname <text>|--remove | avatar-set <file> | avatar-get <jid>";
 
 /// Global options.
 pub struct Opts {
@@ -349,6 +351,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "call-watch",
         "profile",
         "set-nickname",
+        "avatar-set",
+        "avatar-get",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
@@ -435,6 +439,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         }
         ("profile", args) => actions::profile(opts, &client, args).await,
         ("set-nickname", args) => actions::set_nickname(&client, args).await,
+        ("avatar-set", args) => actions::avatar_set(&client, args).await,
+        ("avatar-get", args) => actions::avatar_get(&client, args).await,
         ("contacts", []) => actions::contacts(opts, &client).await,
         ("block", args) => actions::block(&client, args).await,
         ("unblock", args) => actions::unblock(&client, args).await,

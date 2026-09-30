@@ -78,6 +78,10 @@ pub(crate) enum Effect {
     Download {
         request: spaces::DownloadRequest,
     },
+    /// Run an HTTP GET for the image of a user avatar that has only a URL (XEP-0084).
+    AvatarDownload {
+        request: avatars::UserDownload,
+    },
     /// The password of the account changed. The session uses it for the next login.
     NewPassword(String),
 }
@@ -87,6 +91,7 @@ pub(crate) enum Effect {
 pub(crate) enum Internal {
     UploadDone(upload::PutDone),
     DownloadDone(spaces::DownloadDone),
+    AvatarDownloaded(avatars::UserDownloadDone),
 }
 
 /// What to do with the answer to an IQ that a feature sent. One variant per feature, so
@@ -242,6 +247,10 @@ impl Ctx<'_> {
 
     pub(crate) fn download(&mut self, request: spaces::DownloadRequest) {
         self.effects.push(Effect::Download { request });
+    }
+
+    pub(crate) fn download_avatar(&mut self, request: avatars::UserDownload) {
+        self.effects.push(Effect::AvatarDownload { request });
     }
 
     /// Log a store error. A store error must not stop the actor.
@@ -586,6 +595,7 @@ pub(crate) fn on_internal(ctx: &mut Ctx<'_>, internal: Internal) {
     match internal {
         Internal::UploadDone(done) => upload::on_put_done(ctx, done),
         Internal::DownloadDone(done) => spaces::on_download_done(ctx, done),
+        Internal::AvatarDownloaded(done) => avatars::on_download_done(ctx, done),
     }
 }
 

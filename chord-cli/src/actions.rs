@@ -1264,6 +1264,60 @@ pub async fn set_nickname(client: &Client, args: &[&str]) -> Result<(), CliError
     Ok(())
 }
 
+/// `avatar-set <file>`: publish the image as our avatar (XEP-0084 and the vCard photo).
+/// The type comes from the bytes of the file. The core accepts up to 64 KiB.
+pub async fn avatar_set(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let [path] = args else {
+        return Err("usage: avatar-set <file>".to_owned().into());
+    };
+    let data = std::fs::read(path).map_err(|e| err(format!("cannot read {path}: {e}")))?;
+    let mime = chord_core::features::avatars::sniff_mime(&data).ok_or_else(|| {
+        CliError::from("the file is not a png, jpeg, gif or webp image".to_owned())
+    })?;
+    // The size is in the IHDR of a PNG. Other types send 0 by 0.
+    let size = |at: usize| {
+        data.get(at..at + 4).map_or(0, |b| {
+            u16::try_from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0)
+        })
+    };
+    let (width, height) = if mime == "image/png" {
+        (size(16), size(20))
+    } else {
+        (0, 0)
+    };
+    let hash = chord_core::features::avatars::sha1_hex(&data);
+    client
+        .handle
+        .set_avatar(mime.to_owned(), data, width, height)
+        .await
+        .map_err(err)?;
+    println!("avatar set {hash} {mime}");
+    Ok(())
+}
+
+/// `avatar-get <jid>`: fetch the avatar of a JID from the server, and print what we stored.
+pub async fn avatar_get(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let [jid] = args else {
+        return Err("usage: avatar-get <jid>".to_owned().into());
+    };
+    let jid = bare(jid)?;
+    client
+        .handle
+        .refresh_avatar(jid.clone())
+        .await
+        .map_err(err)?;
+    match client.handle.avatar(jid.clone()).await.map_err(err)? {
+        Some(a) => println!(
+            "{jid} avatar {} {} {}",
+            a.hash,
+            a.mime.as_deref().unwrap_or("-"),
+            a.data.as_ref().map_or(0, Vec::len)
+        ),
+        None => println!("{jid} has no avatar"),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::content_type;
