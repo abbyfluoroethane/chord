@@ -44,6 +44,9 @@ pub(crate) struct State {
 /// The stream feature for subscription pre-approval (RFC 6121, 3.4).
 pub const NS_PRE_APPROVAL: &str = "urn:xmpp:features:pre-approval";
 
+/// The stream feature for roster versioning (RFC 6121, 2.6).
+pub const NS_ROSTER_VER: &str = "urn:xmpp:features:rosterver";
+
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -194,22 +197,34 @@ impl ClientHandle {
     }
 }
 
-/// Ask for the roster. The version of the stored roster lets the server send only a
-/// change, or nothing.
+/// Ask for the roster. When the server offers roster versioning, the version of the
+/// stored roster lets it send only a change, or nothing. Without the stream feature we
+/// send no `ver` (RFC 6121, 2.6.3), so the answer is the whole roster and replaces ours.
 pub(crate) fn on_connected(ctx: &mut Ctx<'_>, stream_features: &[String]) {
     ctx.state.roster.pre_approval = stream_features.iter().any(|f| f == NS_PRE_APPROVAL);
-    let version = match stored_version(ctx.store.conn(), ctx.account_id) {
-        Ok(version) => version,
-        Err(e) => {
-            ctx.store_error("read the roster version", e);
-            None
+    let versioning = stream_features.iter().any(|f| f == NS_ROSTER_VER);
+    let ver = if versioning {
+        let version = match stored_version(ctx.store.conn(), ctx.account_id) {
+            Ok(version) => version,
+            Err(e) => {
+                ctx.store_error("read the roster version", e);
+                None
+            }
+        };
+        // An empty `ver` tells the server that we support versioning, but hold no roster.
+        Some(version.unwrap_or_default())
+    } else {
+        None
+    };
+    log::debug!(
+        "roster get: {}",
+        match &ver {
+            Some(v) if v.is_empty() => "versioning, empty ver".to_owned(),
+            Some(v) => format!("versioning, ver={v}"),
+            None => "no versioning offered, plain get".to_owned(),
         }
-    };
-    // An empty `ver` tells the server that we support versioning, but hold no roster.
-    let query = Roster {
-        ver: Some(version.unwrap_or_default()),
-        items: vec![],
-    };
+    );
+    let query = Roster { ver, items: vec![] };
     ctx.request(
         Iq::from_get("", query),
         FeaturePending::Roster(Pending::Get),
@@ -852,7 +867,7 @@ mod tests {
     }
 
     fn connect_with(h: &mut Harness, roster_xml: &str) {
-        h.with_ctx(|ctx| on_connected(ctx, &[]));
+        h.with_ctx(|ctx| on_connected(ctx, &[NS_ROSTER_VER.to_owned()]));
         h.answer(is_get, Some(el(roster_xml)));
     }
 
@@ -863,13 +878,37 @@ mod tests {
     #[test]
     fn get_asks_with_an_empty_ver_at_first() {
         let mut h = Harness::new();
-        h.with_ctx(|ctx| on_connected(ctx, &[]));
+        h.with_ctx(|ctx| on_connected(ctx, &[NS_ROSTER_VER.to_owned()]));
         let iqs = h.sent_iqs();
         let Iq::Get { payload, .. } = &iqs[0] else {
             panic!("{iqs:?}")
         };
         let roster = Roster::try_from(payload.clone()).unwrap();
         assert_eq!(roster.ver, Some(String::new()));
+    }
+
+    #[test]
+    fn get_has_no_ver_when_the_server_does_not_offer_versioning() {
+        let mut h = Harness::new();
+        // A version from an earlier session must not go out.
+        connect_with(&mut h, FULL);
+        h.sent_iqs();
+        h.with_ctx(|ctx| on_connected(ctx, &[]));
+        let iqs = h.sent_iqs();
+        let Iq::Get { payload, .. } = &iqs[0] else {
+            panic!("{iqs:?}")
+        };
+        assert_eq!(Roster::try_from(payload.clone()).unwrap().ver, None);
+        // The answer has no `ver` and replaces the whole roster, and the old version goes.
+        h.answer(
+            is_get,
+            Some(el("<query xmlns='jabber:iq:roster'>\
+                <item jid='dave@chord.localhost' subscription='to'/></query>")),
+        );
+        let list = contacts(&h);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].jid, bare("dave@chord.localhost"));
+        assert_eq!(stored_version(h.store.conn(), h.account_id).unwrap(), None);
     }
 
     #[test]
@@ -900,7 +939,7 @@ mod tests {
         let mut h = Harness::new();
         connect_with(&mut h, FULL);
         h.sent_iqs();
-        h.with_ctx(|ctx| on_connected(ctx, &[]));
+        h.with_ctx(|ctx| on_connected(ctx, &[NS_ROSTER_VER.to_owned()]));
         let iqs = h.sent_iqs();
         let Iq::Get { payload, .. } = &iqs[0] else {
             panic!("{iqs:?}")
@@ -947,7 +986,7 @@ mod tests {
             )),
             IqResponse::Lost,
         ] {
-            h.with_ctx(|ctx| on_connected(ctx, &[]));
+            h.with_ctx(|ctx| on_connected(ctx, &[NS_ROSTER_VER.to_owned()]));
             h.respond(is_get, response);
             assert_eq!(contacts(&h).len(), 2);
         }
@@ -1427,7 +1466,7 @@ mod tests {
     #[test]
     fn preapprove_needs_the_stream_feature() {
         let mut h = Harness::new();
-        h.with_ctx(|ctx| on_connected(ctx, &[]));
+        h.with_ctx(|ctx| on_connected(ctx, &[NS_ROSTER_VER.to_owned()]));
         assert!(!h.state.roster.pre_approval);
         let (reply, mut answer) = oneshot::channel();
         h.with_ctx(|ctx| {
