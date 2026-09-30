@@ -51,11 +51,11 @@ No finding is Critical. Update the Done column when you tick boxes.
 
 ### Large features (weeks each)
 
-- [ ] End-to-end encryption: OMEMO 0.8 (XEP-0384) with XEP-0420 and XEP-0454, and trust management. About 3 to 5 weeks (SECURITYAUTH-01) Issue #194.
-- [ ] Voice and video calls: Jingle (XEP-0166, XEP-0167, XEP-0176, XEP-0320), XEP-0353 and XEP-0215. Several weeks for 1:1 audio (CALLSPUSHPRESENCE-01 to CALLSPUSHPRESENCE-03) Issue #195.
-- [ ] Modern sign-in: SASL2, Bind2, FAST and ISR (XEP-0388, XEP-0386, XEP-0484, XEP-0397). About 1 to 2 weeks (SECURITYAUTH-07 to SECURITYAUTH-12) Issue #196.
-- [ ] Accounts and invites: in-band registration and password change (XEP-0077), invites (XEP-0401, XEP-0379). About 1 week (SECURITYAUTH-18 to SECURITYAUTH-22) Issue #197.
-- [ ] Android push: connect the app to the XEP-0357 code in the core, and add presence calls to the FFI (CALLSPUSHPRESENCE-07, CALLSPUSHPRESENCE-13) Issue #198.
+- [ ] End-to-end encryption: OMEMO 0.8 (XEP-0384) with XEP-0420 and XEP-0454, and trust management. About 3 to 5 weeks (SECURITYAUTH-01). Issue #194.
+- [ ] Voice and video calls: Jingle (XEP-0166, XEP-0167, XEP-0176, XEP-0320), XEP-0353 and XEP-0215. Several weeks for 1:1 audio (CALLSPUSHPRESENCE-01 to CALLSPUSHPRESENCE-03). Issue #195.
+- [ ] Modern sign-in: SASL2, Bind2, FAST and ISR (XEP-0388, XEP-0386, XEP-0484, XEP-0397). About 1 to 2 weeks (SECURITYAUTH-07 to SECURITYAUTH-12). Issue #196.
+- [ ] Accounts and invites: in-band registration and password change (XEP-0077), invites (XEP-0401, XEP-0379). About 1 week (SECURITYAUTH-18 to SECURITYAUTH-22). Issue #197.
+- [ ] Android push: connect the app to the XEP-0357 code in the core, and add presence calls to the FFI (CALLSPUSHPRESENCE-07, CALLSPUSHPRESENCE-13). Issue #198.
 
 ## All findings
 
