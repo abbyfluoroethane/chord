@@ -24,10 +24,26 @@
   let request = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
+  /**
+   * The preview has no API key. It searches a snapshot of real KLIPY results if the
+   * published preview has one (preview-gifs.json, never in git), else the sample GIFs.
+   */
+  type SampleGif = Gif & { tags?: string[] };
+  let samples: Promise<SampleGif[]> | null = null;
+  function loadSamples(): Promise<SampleGif[]> {
+    samples ??= fetch('preview-gifs.json')
+      .then((r) => (r.ok ? (r.json() as Promise<SampleGif[]>) : fx.gifs))
+      .catch(() => fx.gifs);
+    return samples;
+  }
+
   async function fetchPage(q: string, n: number): Promise<{ items: Gif[]; hasNext: boolean }> {
     if (!live) {
+      const all = await loadSamples();
       const t = q.trim().toLowerCase();
-      const list = t ? fx.gifs.filter((g) => g.title.toLowerCase().includes(t)) : fx.gifs;
+      const list = t
+        ? all.filter((g) => [g.title, ...(g.tags ?? [])].join(' ').toLowerCase().includes(t))
+        : all;
       return { items: n === 1 ? list : [], hasNext: false };
     }
     return (await api()).gifSearch(q, n);
