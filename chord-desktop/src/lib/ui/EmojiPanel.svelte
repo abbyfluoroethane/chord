@@ -13,6 +13,7 @@
   import Trophy from 'lucide-svelte/icons/trophy';
   import Users from 'lucide-svelte/icons/users';
   import type { ComponentType } from 'svelte';
+  import Emoji from './Emoji.svelte';
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
   import {
@@ -166,7 +167,7 @@
         class="tone-button"
         aria-label="Skin tone"
         aria-expanded={choosingTone}
-        onclick={() => (choosingTone = !choosingTone)}>{TONES[tone]}</button
+        onclick={() => (choosingTone = !choosingTone)}><Emoji emoji={TONES[tone]} /></button
       >
       {#if choosingTone}
         <div class="tones" role="radiogroup" aria-label="Skin tone">
@@ -176,7 +177,7 @@
               aria-checked={tone === n}
               aria-label={n === 0 ? 'Default skin tone' : `Skin tone ${n}`}
               class:on={tone === n}
-              onclick={() => setTone(n)}>{t}</button
+              onclick={() => setTone(n)}><Emoji emoji={t} /></button
             >
           {/each}
         </div>
@@ -217,7 +218,7 @@
                     onclick={() => pick(e)}
                     onpointerenter={() => (hovered = { emoji: withTone(e, tone), label: e.label })}
                     onfocus={() => (hovered = { emoji: withTone(e, tone), label: e.label })}
-                    >{withTone(e, tone)}</button
+                    ><Emoji emoji={withTone(e, tone)} /></button
                   >
                 {/each}
               </div>
@@ -230,7 +231,7 @@
 
   <div class="foot" aria-hidden="true">
     {#if hovered}
-      <span class="big">{hovered.emoji}</span>
+      <span class="big"><Emoji emoji={hovered.emoji} /></span>
       <span class="name">{hovered.label}</span>
     {:else}
       <span class="name">Pick an emoji</span>

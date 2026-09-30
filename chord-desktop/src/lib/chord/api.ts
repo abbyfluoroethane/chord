@@ -9,6 +9,7 @@ import type {
   ChordError,
   ClientEvent,
   Contact,
+  EmojiPackStatus,
   GifPage,
   Jid,
   JoinOutcome,
@@ -306,3 +307,7 @@ export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_pre
 /** Search KLIPY GIFs, or get the trending ones for an empty query. `page` starts at 1. */
 export const gifSearch = (query: string, page: number) =>
   invoke<GifPage>('gif_search', { query, page });
+/** The emoji packs and whether each one is on this computer. */
+export const emojiPacks = () => invoke<EmojiPackStatus[]>('emoji_packs');
+/** Install an emoji pack. Noto and Fluent download from the npm registry. */
+export const emojiPackInstall = (id: string) => invoke<void>('emoji_pack_install', { id });

@@ -316,3 +316,11 @@ export interface GifPage {
   items: Gif[];
   hasNext: boolean;
 }
+
+/** One emoji pack on this computer. Matches emoji.rs PackStatus. */
+export interface EmojiPackStatus {
+  id: string;
+  installed: boolean;
+  /** The pack ships with the app and needs no download. */
+  bundled: boolean;
+}

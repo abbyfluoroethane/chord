@@ -1,5 +1,6 @@
 <script lang="ts">
   import SmilePlus from 'lucide-svelte/icons/smile-plus';
+  import Emoji from './Emoji.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
   import Icon from './Icon.svelte';
   import { tooltip } from './tooltip';
@@ -24,7 +25,7 @@
         aria-label="{r.emoji} {r.count}, {r.mine ? 'remove your reaction' : 'react too'}"
         onclick={() => ontoggle(r.emoji)}
       >
-        <span class="emoji">{r.emoji}</span>
+        <span class="emoji"><Emoji emoji={r.emoji} /></span>
         <span class="count">{r.count}</span>
       </button>
     {/each}

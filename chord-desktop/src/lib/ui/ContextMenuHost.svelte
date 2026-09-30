@@ -2,6 +2,7 @@
   // Draws the one open context menu (see contextmenu.svelte.ts). It closes on a scroll
   // outside the menu, on a resize, and when the window loses focus. Esc and a click
   // outside close it in Popover.
+  import Emoji from './Emoji.svelte';
   import Menu from './Menu.svelte';
   import { contextMenu } from './contextmenu.svelte';
 
@@ -37,7 +38,7 @@
         const pick = s?.quick?.onpick;
         contextMenu.close();
         pick?.(emoji);
-      }}>{emoji}</button
+      }}><Emoji {emoji} /></button
     >
   {/each}
 {/snippet}

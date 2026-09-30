@@ -49,6 +49,7 @@ import { session } from './session.svelte';
 import { settings } from './local';
 import { spaceKey, type ChannelItem } from './types';
 import { ui } from './ui.svelte';
+import { emojiPacks } from './emojipacks.svelte';
 
 class LiveController {
   rawSpaces = $state.raw<BSpace[]>([]);
@@ -93,6 +94,7 @@ class LiveController {
     const gen = ++this.generation;
     this.root = $effect.root(() => this.effects());
     void app.loadPresence();
+    void emojiPacks.load();
     const track = async <T extends ViewSubscription>(p: Promise<T>): Promise<T> => {
       const sub = await p;
       if (gen !== this.generation) {

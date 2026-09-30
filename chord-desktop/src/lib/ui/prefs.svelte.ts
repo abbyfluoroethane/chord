@@ -1,6 +1,7 @@
 // User settings that live on this device. One JSON blob in localStorage.
 // The bridge can move them to get_settings and set_settings later.
 import type { DisplayMode, NotificationLevel } from './types';
+import { EMOJI_PACK_IDS, type EmojiPackId } from './emojipackids';
 
 const KEY = 'chord.prefs';
 
@@ -14,6 +15,7 @@ interface Saved {
   display: DisplayMode;
   fontSize: number;
   gifPicker: boolean;
+  emojiPack: EmojiPackId;
 }
 
 const LEVELS: NotificationLevel[] = ['all', 'mentions', 'nothing'];
@@ -29,6 +31,8 @@ class Prefs {
   fontSize = $state(15);
   /** The GIF picker sends the search text to KLIPY. On by default, off in Privacy. */
   gifPicker = $state(true);
+  /** The images for emoji. Twemoji ships with the app. */
+  emojiPack = $state<EmojiPackId>('twemoji');
 
   load() {
     try {
@@ -43,6 +47,7 @@ class Prefs {
         if (typeof v.autoApprove === 'boolean') this.autoApprove = v.autoApprove;
         if (v.display === 'cozy' || v.display === 'compact') this.display = v.display;
         if (typeof v.gifPicker === 'boolean') this.gifPicker = v.gifPicker;
+        if (v.emojiPack && EMOJI_PACK_IDS.includes(v.emojiPack)) this.emojiPack = v.emojiPack;
         if (typeof v.fontSize === 'number') this.fontSize = Math.min(20, Math.max(12, v.fontSize));
       }
     } catch {
@@ -64,7 +69,8 @@ class Prefs {
         autoApprove: this.autoApprove,
         display: this.display,
         fontSize: this.fontSize,
-        gifPicker: this.gifPicker
+        gifPicker: this.gifPicker,
+        emojiPack: this.emojiPack
       };
       localStorage.setItem(KEY, JSON.stringify(out));
     } catch {
