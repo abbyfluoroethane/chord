@@ -2,6 +2,7 @@
   // Hosts the person views: card, menu, full profile, nickname. Any row can open them through ui.
   import NicknameModal from './NicknameModal.svelte';
   import PersonMenu from './PersonMenu.svelte';
+  import RenameContactModal from './RenameContactModal.svelte';
   import ProfileModal from './ProfileModal.svelte';
   import ProfilePopout from './ProfilePopout.svelte';
   import { ui } from './ui.svelte';
@@ -15,5 +16,11 @@
 {/if}
 {#if ui.profile}
   {#key ui.profile}<ProfileModal address={ui.profile} onclose={() => (ui.profile = null)} />{/key}
+{/if}
+{#if ui.renaming}
+  {#key ui.renaming.address}<RenameContactModal
+      target={ui.renaming}
+      onclose={() => (ui.renaming = null)}
+    />{/key}
 {/if}
 {#if ui.nicknameOpen}<NicknameModal onclose={() => (ui.nicknameOpen = false)} />{/if}

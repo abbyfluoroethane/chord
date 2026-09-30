@@ -37,6 +37,10 @@
 //!   notify <jid> [all|mentions|none [--until <unix-ms>]]   also with --offline
 //!   presence [available|away|dnd|xa|invisible [status]]     show or set our presence (also with --offline)
 //!   search <text> [--in <jid>]      search the stored messages (also with --offline)
+//!   contact-approve <jid>           let a contact see our presence (answer to a request)
+//!   contact-rename <jid> [name]   rename a contact in the roster (no name: clear it)
+//!   idle <seconds-ago>|off [hold-secs]   send idle time (XEP-0319), then stay online for hold-secs (default 5)
+//!   --wait <secs>                   anywhere in the arguments: stay online that long before the command runs
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!   adhoc <jid> <node> [name=value ...]   run a one-step ad-hoc command (XEP-0050)
@@ -93,7 +97,8 @@ space-create <name> [--private | --authorize] | space-add-room <service> <node> 
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 block <jid> | unblock <jid|--all> | blocked | \
-contact-add <jid> [name] | contact-approve <jid> | edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
+contact-add <jid> [name] | contact-approve <jid> | contact-rename <jid> [name] | idle <seconds-ago>|off [hold-secs] | \
+edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
@@ -108,6 +113,8 @@ presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>]
 pub struct Opts {
     pub json: bool,
     pub offline: bool,
+    /// Seconds to wait after the login, before the command runs.
+    pub wait: u64,
 }
 
 /// A running actor, logged in or not.
@@ -196,6 +203,7 @@ async fn main() -> ExitCode {
     let mut opts = Opts {
         json: false,
         offline: false,
+        wait: 0,
     };
     let args: Vec<&str> = args
         .iter()
@@ -212,6 +220,20 @@ async fn main() -> ExitCode {
             _ => true,
         })
         .collect();
+    // `--wait N`: stay online for N seconds before the command runs, so that the roster,
+    // the presences, and the answers to the login IQs settle.
+    let mut wait = 0;
+    let mut stripped = Vec::new();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        if *word == "--wait" {
+            wait = words.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        } else {
+            stripped.push(*word);
+        }
+    }
+    opts.wait = wait;
+    let args = stripped;
     let result = run(&opts, &args).await;
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -257,6 +279,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "blocked",
         "contact-add",
         "contact-approve",
+        "contact-rename",
+        "idle",
         "edit",
         "retract",
         "pin",
@@ -312,6 +336,9 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         return Err(format!("{command} needs a session, not --offline").into());
     }
     let mut client = start_client(!opts.offline).await?;
+    if opts.wait > 0 && !opts.offline {
+        tokio::time::sleep(std::time::Duration::from_secs(opts.wait)).await;
+    }
     let result = match (*command, rest) {
         ("login", []) => {
             println!(
@@ -364,6 +391,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("blocked", []) => actions::blocked(opts, &client).await,
         ("contact-add", args) => actions::contact_add(&client, args).await,
         ("contact-approve", [jid]) => actions::contact_approve(&client, jid).await,
+        ("contact-rename", args) => actions::contact_rename(&client, args).await,
+        ("idle", args) => actions::idle(&client, args).await,
         ("edit", [item, text]) => actions::edit(&client, item, text).await,
         ("retract", [item]) => actions::retract(&client, item).await,
         ("pin", [item]) => actions::pin(&client, item).await,

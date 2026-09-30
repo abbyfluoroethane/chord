@@ -1,12 +1,15 @@
 //! Push notifications (XEP-0357): enable and disable an app server.
 //!
-//! The server keeps the registration for the account. So `on_connected` does nothing and
-//! Chord never enables a service again on its own. The store keeps the service and the
-//! node only. The publish-options form (with the app server secret) goes to the server
-//! and is never stored.
+//! The server keeps one registration for each account and resource, and XEP-0357 has no
+//! query to list them. So Chord does not trust its own table: after each new session and
+//! service discovery, `on_services_ready` sends `enable` again for every stored row.
+//! Enable is idempotent: the same service and node replace the old registration. The
+//! store keeps the service, the node, and the publish options (the app server secret, for
+//! example), because a new `enable` without the options would replace the registration
+//! and drop the secret.
 
 use futures_channel::oneshot;
-use jid::Jid;
+use jid::{BareJid, Jid};
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::push::{Disable, Enable};
@@ -40,8 +43,13 @@ pub(crate) enum Pending {
     Enable {
         service: String,
         node: String,
+        /// The publish options, to store with the registration.
+        options: Vec<(String, String)>,
         reply: Reply<()>,
     },
+    /// The enable that Chord sends again for a stored registration. Only an error needs
+    /// an action.
+    Reenable { service: String, node: String },
     Disable {
         service: String,
         node: Option<String>,
@@ -124,10 +132,19 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
         Pending::Enable {
             service,
             node,
+            options,
             reply,
         } => {
-            let outcome = outcome.and_then(|()| store_registration(ctx, &service, &node));
+            let outcome = outcome.and_then(|()| store_registration(ctx, &service, &node, &options));
             let _ = reply.send(outcome);
+        }
+        Pending::Reenable { service, node } => {
+            // Keep the row: a failure may be short, and the user did not ask to stop.
+            if let Err(e) = outcome {
+                log::warn!("push: enable again for {service} node {node} failed: {e}");
+            } else {
+                log::info!("push: enabled {service} node {node} again");
+            }
         }
         Pending::Disable {
             service,
@@ -235,40 +252,118 @@ fn start_enable(
         return Err((e, reply));
     }
     let service = service.to_bare();
-    let form = form.map(|fields| {
-        let fields = fields
-            .into_iter()
-            .map(|(var, value)| Field::new(&var, FieldType::TextSingle).with_value(&value))
-            .collect();
-        DataForm::new(DataFormType::Submit, NS_PUBLISH_OPTIONS, fields)
-    });
-    // xmpp-parsers 0.23, push.rs lines 15-27: `jid` is a bare JID, `node` and `form` are optional.
-    let payload = Enable {
-        jid: service.clone(),
-        node: Some(node.clone()),
-        form,
-    };
+    let options = form.unwrap_or_default();
     ctx.request(
-        Iq::from_set("", payload),
+        enable_iq(&service, &node, &options),
         FeaturePending::Push(Pending::Enable {
             service: service.to_string(),
             node,
+            options,
             reply,
         }),
     );
     Ok(())
 }
 
-fn store_registration(ctx: &mut Ctx<'_>, service: &str, node: &str) -> Result<(), ClientError> {
-    ctx.store
-        .conn()
-        .execute(
+/// The enable IQ. Every publish option is a `text-single` field, which is what the
+/// standard `secret` field needs (XEP-0357, 5).
+fn enable_iq(service: &BareJid, node: &str, options: &[(String, String)]) -> Iq {
+    let form = (!options.is_empty()).then(|| {
+        let fields = options
+            .iter()
+            .map(|(var, value)| Field::new(var, FieldType::TextSingle).with_value(value))
+            .collect();
+        DataForm::new(DataFormType::Submit, NS_PUBLISH_OPTIONS, fields)
+    });
+    // xmpp-parsers 0.23, push.rs lines 15-27: `jid` is a bare JID, `node` and `form` are optional.
+    Iq::from_set(
+        "",
+        Enable {
+            jid: service.clone(),
+            node: Some(node.to_owned()),
+            form,
+        },
+    )
+}
+
+/// Service discovery finished: enable every stored registration again. The server may
+/// have dropped one, for example after an account reset or a server restore.
+pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
+    let stored = match list(ctx.store, ctx.account_id) {
+        Ok(stored) => stored,
+        Err(e) => {
+            log::error!("push: read the registrations: {e}");
+            return;
+        }
+    };
+    if stored.is_empty() {
+        return;
+    }
+    if !ctx.state.disco.server_has(NS_PUSH) {
+        log::info!("push: the server has no push support, so no enable again");
+        return;
+    }
+    for registration in stored {
+        let Ok(service) = BareJid::new(&registration.service) else {
+            continue;
+        };
+        let options = stored_options(ctx, &registration.service, &registration.node);
+        ctx.request(
+            enable_iq(&service, &registration.node, &options),
+            FeaturePending::Push(Pending::Reenable {
+                service: registration.service,
+                node: registration.node,
+            }),
+        );
+    }
+}
+
+fn stored_options(ctx: &mut Ctx<'_>, service: &str, node: &str) -> Vec<(String, String)> {
+    let read = || -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = ctx.store.conn().prepare(
+            "SELECT var, value FROM push_options
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 ORDER BY var",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![ctx.account_id, service, node], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        rows.collect()
+    };
+    read().unwrap_or_else(|e| {
+        log::error!("push: read the options: {e}");
+        Vec::new()
+    })
+}
+
+fn store_registration(
+    ctx: &mut Ctx<'_>,
+    service: &str,
+    node: &str,
+    options: &[(String, String)],
+) -> Result<(), ClientError> {
+    let conn = ctx.store.conn();
+    let write = || -> rusqlite::Result<()> {
+        conn.execute(
             "INSERT OR REPLACE INTO push_registrations (account_id, service, node)
              VALUES (?1, ?2, ?3)",
             rusqlite::params![ctx.account_id, service, node],
-        )
-        .map(|_| ())
-        .map_err(|e| ClientError::Invalid(format!("store: {e}")))
+        )?;
+        // The new enable replaces the old registration, options included.
+        conn.execute(
+            "DELETE FROM push_options WHERE account_id = ?1 AND service = ?2 AND node = ?3",
+            rusqlite::params![ctx.account_id, service, node],
+        )?;
+        for (var, value) in options {
+            conn.execute(
+                "INSERT INTO push_options (account_id, service, node, var, value)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (account_id, service, node, var) DO UPDATE SET value = excluded.value",
+                rusqlite::params![ctx.account_id, service, node, var, value],
+            )?;
+        }
+        Ok(())
+    };
+    write().map_err(|e| ClientError::Invalid(format!("store: {e}")))
 }
 
 fn delete_registrations(
@@ -277,13 +372,18 @@ fn delete_registrations(
     node: Option<&str>,
 ) -> Result<(), ClientError> {
     // A NULL node matches every node of the service.
-    ctx.store
-        .conn()
-        .execute(
-            "DELETE FROM push_registrations
-             WHERE account_id = ?1 AND service = ?2 AND (?3 IS NULL OR node = ?3)",
+    let conn = ctx.store.conn();
+    let delete = |table: &str| {
+        conn.execute(
+            &format!(
+                "DELETE FROM {table}
+                 WHERE account_id = ?1 AND service = ?2 AND (?3 IS NULL OR node = ?3)"
+            ),
             rusqlite::params![ctx.account_id, service, node],
         )
+    };
+    delete("push_options")
+        .and_then(|_| delete("push_registrations"))
         .map(|_| ())
         .map_err(|e| ClientError::Invalid(format!("store: {e}")))
 }
@@ -373,7 +473,7 @@ mod tests {
     }
 
     fn store_direct(h: &mut Harness, service: &str, node: &str) {
-        h.with_ctx(|ctx| store_registration(ctx, service, node).unwrap());
+        h.with_ctx(|ctx| store_registration(ctx, service, node, &[]).unwrap());
     }
 
     #[test]
@@ -468,6 +568,63 @@ mod tests {
         assert_eq!(payload.attr("node"), None);
         respond(&mut h, IqResponse::Result(None));
         assert_eq!(stored(&h), vec![("other.example".into(), "n1".into())]);
+    }
+
+    #[test]
+    fn a_new_session_enables_the_stored_registrations_again_with_their_secret() {
+        let mut h = harness(true);
+        // A first enable with a secret stores the options with the row.
+        let form = vec![("secret".to_owned(), "s3".to_owned())];
+        let _answer = enable(&mut h, Some(form));
+        respond(&mut h, IqResponse::Result(None));
+        h.sent_iqs();
+
+        // A new session: discovery finishes, and Chord enables the row again.
+        h.with_ctx(on_services_ready);
+        let payload = payload_of(&mut h);
+        assert!(payload.is("enable", NS_PUSH));
+        assert_eq!(payload.attr("jid"), Some("push.example"));
+        assert_eq!(payload.attr("node"), Some("n1"));
+        let x = payload
+            .get_child("x", "jabber:x:data")
+            .expect("the options");
+        let secret = x.children().nth(1).unwrap();
+        assert_eq!(secret.attr("var"), Some("secret"));
+        assert_eq!(secret.children().next().unwrap().text(), "s3");
+
+        // An error keeps the row: the next login tries again.
+        let error = StanzaError::new(ErrorType::Cancel, DefinedCondition::ItemNotFound, "en", "");
+        respond(&mut h, IqResponse::Error(error));
+        assert_eq!(stored(&h), vec![("push.example".into(), "n1".into())]);
+    }
+
+    #[test]
+    fn no_enable_again_without_rows_or_without_server_support() {
+        let mut h = harness(true);
+        h.with_ctx(on_services_ready);
+        assert!(h.sent_iqs().is_empty(), "no rows, no IQ");
+
+        store_direct(&mut h, "push.example", "n1");
+        let mut h2 = harness(false);
+        store_direct(&mut h2, "push.example", "n1");
+        h2.with_ctx(on_services_ready);
+        assert!(h2.sent_iqs().is_empty(), "the server has no push");
+    }
+
+    #[test]
+    fn disable_removes_the_options_too() {
+        let mut h = harness(true);
+        let form = vec![("secret".to_owned(), "s3".to_owned())];
+        let _answer = enable(&mut h, Some(form));
+        respond(&mut h, IqResponse::Result(None));
+        let _answer = disable(&mut h, None);
+        respond(&mut h, IqResponse::Result(None));
+        let n: i64 = h
+            .store
+            .conn()
+            .query_row("SELECT count(*) FROM push_options", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]

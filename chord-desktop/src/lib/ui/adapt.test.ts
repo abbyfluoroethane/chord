@@ -193,7 +193,9 @@ describe('contacts and levels', () => {
       blocked: false,
       online: false,
       show: null,
-      status: null
+      status: null,
+      idleSince: null,
+      activity: null
     };
     const r = splitRoster([
       { ...c, jid: 'a@x.y', name: 'A', subscription: 'both', ask: false, online: true, show: 'dnd' },
@@ -204,6 +206,29 @@ describe('contacts and levels', () => {
     expect(r.contacts[0].online).toBe(true);
     expect(r.contacts[0].show).toBe('dnd');
     expect(r.outgoing.map((x) => x.name)).toEqual(['b']);
+  });
+
+  it('carries the idle time and the tune of an online contact only', () => {
+    const c = {
+      jid: 'a@x.y',
+      name: 'A',
+      subscription: 'both' as const,
+      ask: false,
+      groups: [],
+      approved: false,
+      blocked: false,
+      online: true,
+      show: null,
+      status: null,
+      idleSince: '2026-09-30T10:00:00Z',
+      activity: 'Yes - Roundabout'
+    };
+    const [online] = splitRoster([c]).contacts;
+    expect(online.idleSince).toBe('2026-09-30T10:00:00Z');
+    expect(online.activity).toBe('Yes - Roundabout');
+    const [offline] = splitRoster([{ ...c, online: false }]).contacts;
+    expect(offline.idleSince).toBeNull();
+    expect(offline.activity).toBeNull();
   });
 
   it('maps the levels', () => {

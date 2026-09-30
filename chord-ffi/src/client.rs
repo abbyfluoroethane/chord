@@ -686,6 +686,22 @@ impl ChordClient {
             .await
     }
 
+    /// How the server can hide us, or `None` when it cannot and `Invisible` does not work.
+    /// Waits for service discovery. Fails offline.
+    pub async fn invisible_method(&self) -> Result<Option<InvisibleMethod>, ChordError> {
+        let method = self
+            .call(|h| async move { h.invisible_method().await })
+            .await?;
+        Ok(method.map(Into::into))
+    }
+
+    /// Tell the contacts that we are idle since `since` (Unix seconds), or no more idle
+    /// (`None`), with XEP-0319. Fails offline: call it again after the next connect.
+    pub async fn set_idle(&self, since: Option<i64>) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.set_idle(since).await })
+            .await
+    }
+
     /// Our stored availability and status text. Works offline.
     pub async fn own_presence(&self) -> Result<OwnPresence, ChordError> {
         let presence = self.call(|h| async move { h.own_presence().await }).await?;
@@ -705,6 +721,18 @@ impl ChordClient {
     pub async fn remove_contact(&self, jid: String) -> Result<(), ChordError> {
         let jid = parse_bare(&jid)?;
         self.call(move |h| async move { h.remove_contact(jid).await })
+            .await
+    }
+
+    /// Give a contact a new name in the roster. `None` or an empty name removes it. The
+    /// groups stay.
+    pub async fn rename_contact(
+        &self,
+        jid: String,
+        name: Option<String>,
+    ) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.rename_contact(jid, name).await })
             .await
     }
 

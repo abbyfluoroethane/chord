@@ -514,6 +514,22 @@ pub async fn set_presence(
     Ok(state.handle()?.set_presence(availability, status).await?)
 }
 
+/// How the server can hide us: the invisible command (XEP-0186), a privacy list
+/// (XEP-0016), or `None` when it has no invisible mode. Fails offline.
+#[tauri::command]
+pub async fn invisible_method(
+    state: State<'_, AppState>,
+) -> Res<Option<chord_core::features::presence::InvisibleMethod>> {
+    Ok(state.handle()?.invisible_method().await?)
+}
+
+/// Tell the contacts that we are idle since `since` (Unix seconds), or no more idle
+/// (`None`), with XEP-0319. Fails offline.
+#[tauri::command]
+pub async fn set_idle(state: State<'_, AppState>, since: Option<i64>) -> Res<()> {
+    Ok(state.handle()?.set_idle(since).await?)
+}
+
 /// Our stored availability and status text.
 #[tauri::command]
 pub async fn own_presence(
@@ -756,6 +772,16 @@ pub async fn add_contact(state: State<'_, AppState>, jid: String, name: Option<S
 #[tauri::command]
 pub async fn remove_contact(state: State<'_, AppState>, jid: String) -> Res<()> {
     Ok(state.handle()?.remove_contact(bare(&jid)?).await?)
+}
+
+/// Give a contact a new name in the roster. `None` or an empty name removes it.
+#[tauri::command]
+pub async fn rename_contact(
+    state: State<'_, AppState>,
+    jid: String,
+    name: Option<String>,
+) -> Res<()> {
+    Ok(state.handle()?.rename_contact(bare(&jid)?, name).await?)
 }
 
 /// Accept the request of `ClientEvent::SubscriptionRequest`.

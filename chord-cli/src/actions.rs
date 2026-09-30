@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chord_core::features::muc::{RoomAffiliation, RoomSettings};
-use chord_core::features::presence::Availability;
+use chord_core::features::presence::{Availability, InvisibleMethod};
 use chord_core::features::roster::Subscription;
 use chord_core::features::spaces::{JoinOutcome, SpaceAccess};
 use chord_core::jid::{BareJid, Jid};
@@ -316,6 +316,8 @@ pub async fn contacts(opts: &Opts, client: &Client) -> Result<(), CliError> {
                 .str("subscription", sub(c.subscription))
                 .bool("ask", c.ask)
                 .bool("blocked", c.blocked)
+                .opt_str("idleSince", c.idle_since.as_deref())
+                .opt_str("activity", c.activity.as_deref())
                 .raw(
                     "groups",
                     &array(c.groups.iter().map(|g| Obj::new().str("name", g).finish())),
@@ -329,7 +331,20 @@ pub async fn contacts(opts: &Opts, client: &Client) -> Result<(), CliError> {
             let name = c.name.as_deref().unwrap_or("");
             let ask = if c.ask { ", asked" } else { "" };
             let blocked = if c.blocked { ", blocked" } else { "" };
-            println!("  {} {name} ({}{ask}{blocked})", c.jid, sub(c.subscription));
+            let idle = c
+                .idle_since
+                .as_deref()
+                .map_or(String::new(), |t| format!(", idle since {t}"));
+            let playing = c
+                .activity
+                .as_deref()
+                .map_or(String::new(), |t| format!(", playing {t}"));
+            let online = if c.online { ", online" } else { "" };
+            println!(
+                "  {} {name} ({}{ask}{blocked}{online}{idle}{playing})",
+                c.jid,
+                sub(c.subscription)
+            );
         }
     }
     Ok(())
@@ -362,6 +377,53 @@ pub async fn contact_approve(client: &Client, jid: &str) -> Result<(), CliError>
         .await
         .map_err(err)?;
     println!("approved {jid}");
+    Ok(())
+}
+
+/// `contact-rename <jid> [name]`: give the contact a new name. Without a name, clear it.
+pub async fn contact_rename(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (jid, name) = match args {
+        [jid] => (*jid, None),
+        [jid, name] => (*jid, Some((*name).to_owned())),
+        _ => return Err("usage: contact-rename <jid> [name]".to_owned().into()),
+    };
+    let jid = bare(jid)?;
+    client
+        .handle
+        .rename_contact(jid.clone(), name.clone())
+        .await
+        .map_err(err)?;
+    println!(
+        "renamed {jid} to {}",
+        name.as_deref().unwrap_or("(no name)")
+    );
+    Ok(())
+}
+
+/// `idle <seconds-ago>|off [hold-secs]`: tell the contacts that we are idle since that
+/// many seconds (XEP-0319), or not idle. Stay online afterwards, so that they see it.
+pub async fn idle(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || CliError::from("usage: idle <seconds-ago>|off [hold-secs]".to_owned());
+    let (what, hold) = match args {
+        [what] => (*what, 5),
+        [what, hold] => (*what, hold.parse::<u64>().map_err(|_| usage())?),
+        _ => return Err(usage()),
+    };
+    let since = if what == "off" {
+        None
+    } else {
+        let ago: i64 = what.parse().map_err(|_| usage())?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        Some(now - ago)
+    };
+    client.handle.set_idle(since).await.map_err(err)?;
+    match since {
+        Some(_) => println!("idle for {what} seconds"),
+        None => println!("not idle"),
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(hold)).await;
     Ok(())
 }
 
@@ -427,11 +489,21 @@ pub async fn presence(opts: &Opts, client: &Client, args: &[&str]) -> Result<(),
             other => return Err(format!("presence: unknown availability {other}").into()),
         };
         let status = (!status.is_empty()).then(|| status.join(" "));
-        client
-            .handle
-            .set_presence(availability, status)
-            .await
-            .map_err(err)?;
+        let invisible = availability == Availability::Invisible;
+        let set = client.handle.set_presence(availability, status).await;
+        // Say which mechanism hides us, or that the server has none.
+        if invisible && !opts.offline {
+            let method = client.handle.invisible_method().await.map_err(err)?;
+            println!(
+                "invisible via {}",
+                match method {
+                    Some(InvisibleMethod::Command) => "xep-0186 (invisible command)",
+                    Some(InvisibleMethod::PrivacyList) => "xep-0016 (privacy list)",
+                    None => "nothing (the server has no invisible mode)",
+                }
+            );
+        }
+        set.map_err(err)?;
     }
     let own = client.handle.own_presence().await.map_err(err)?;
     let name = match own.availability {

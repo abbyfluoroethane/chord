@@ -48,6 +48,8 @@ class UiState {
   settingsPage = $state<SettingsPage>('account');
   logoutOpen = $state(false);
   nicknameOpen = $state(false);
+  /** The contact that the rename dialog edits. */
+  renaming = $state<{ address: string; name: string } | null>(null);
   /** A space dialog (invite, settings, leave) opened from a menu. */
   circleDialog = $state<{ kind: DialogKind; space: string } | null>(null);
   confirm = $state<ConfirmState | null>(null);

@@ -282,4 +282,26 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, chat, key)
     );
     "#,
+    // 13: the publish options of a push registration (XEP-0357, for example the secret of
+    // the app server), so that Chord can enable the service again at each login. The
+    // idle time of a contact resource (XEP-0319). The tune of a contact (XEP-0118).
+    r#"
+    CREATE TABLE push_options (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        service    TEXT NOT NULL,
+        node       TEXT NOT NULL,
+        var        TEXT NOT NULL,
+        value      TEXT NOT NULL,
+        PRIMARY KEY (account_id, service, node, var)
+    );
+    ALTER TABLE presences ADD COLUMN idle_since TEXT;
+    -- The song that a contact plays now, as "Artist - Title". The actor clears it on each
+    -- new session, like the presences.
+    CREATE TABLE contact_tunes (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        bare       TEXT NOT NULL,
+        text       TEXT NOT NULL,
+        PRIMARY KEY (account_id, bare)
+    );
+    "#,
 ];

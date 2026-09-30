@@ -526,8 +526,27 @@ pub enum Availability {
     Dnd,
     /// Away for a longer time.
     ExtendedAway,
-    /// Contacts see us as offline. Needs privacy lists (XEP-0016) on the server.
+    /// Contacts see us as offline. Needs the invisible command (XEP-0186) or privacy
+    /// lists (XEP-0016) on the server.
     Invisible,
+}
+
+/// How the server can hide us.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum InvisibleMethod {
+    /// The invisible command, XEP-0186.
+    Command,
+    /// A privacy list, XEP-0016.
+    PrivacyList,
+}
+
+impl From<core_presence::InvisibleMethod> for InvisibleMethod {
+    fn from(m: core_presence::InvisibleMethod) -> Self {
+        match m {
+            core_presence::InvisibleMethod::Command => Self::Command,
+            core_presence::InvisibleMethod::PrivacyList => Self::PrivacyList,
+        }
+    }
 }
 
 impl From<Availability> for core_presence::Availability {
@@ -722,6 +741,10 @@ pub struct Contact {
     pub show: Option<String>,
     /// The status text of the best resource.
     pub status: Option<String>,
+    /// When the user of the best resource stopped interacting, as an xs:dateTime (XEP-0319).
+    pub idle_since: Option<String>,
+    /// The song that the contact plays now, as "Artist - Title" (XEP-0118).
+    pub activity: Option<String>,
 }
 
 impl From<CoreContact> for Contact {
@@ -737,6 +760,8 @@ impl From<CoreContact> for Contact {
             online: c.online,
             show: c.show,
             status: c.status,
+            idle_since: c.idle_since,
+            activity: c.activity,
         }
     }
 }
@@ -1015,6 +1040,8 @@ mod tests {
             online: true,
             show: Some("away".into()),
             status: Some("out".into()),
+            idle_since: Some("2026-09-30T10:00:00Z".into()),
+            activity: Some("A - B".into()),
         }
         .into();
         assert_eq!(c.jid, "a@b");
@@ -1022,5 +1049,7 @@ mod tests {
         assert!(c.blocked);
         assert!(c.online);
         assert_eq!(c.show.as_deref(), Some("away"));
+        assert_eq!(c.idle_since.as_deref(), Some("2026-09-30T10:00:00Z"));
+        assert_eq!(c.activity.as_deref(), Some("A - B"));
     }
 }

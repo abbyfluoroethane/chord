@@ -38,6 +38,8 @@ pub const FEATURES: &[&str] = &[
     "urn:xmpp:avatar:metadata+notify",
     // Pinned messages, in a private PEP node (pins.rs).
     "urn:chord:pins:0+notify",
+    // Tunes (XEP-0118): Chord shows what a contact plays. It publishes none.
+    "http://jabber.org/protocol/tune+notify",
     "http://jabber.org/protocol/chatstates",
     // Markers (XEP-0333): every message is markable, and `mark_read` sends displayed.
     "urn:xmpp:chat-markers:0",
@@ -286,7 +288,7 @@ mod tests {
         // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
         // not from the code under test. Update it when `FEATURES` changes.
         let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "be6df620223ad6f92d4e784a9583d1f5f7f5dcbd");
+        assert_eq!(hex, "2b6cb36ebcfd101a63d7a5e0872dc6ee71e51de5");
     }
 
     #[test]

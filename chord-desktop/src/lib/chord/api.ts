@@ -11,6 +11,7 @@ import type {
   Contact,
   EmojiPackStatus,
   GifPage,
+  InvisibleMethod,
   Jid,
   JoinOutcome,
   JoinRequest,
@@ -243,6 +244,10 @@ export const setPresence = (availability: Availability, status: string | null) =
   invoke<void>('set_presence', { availability, status });
 /** Our stored availability and status text. */
 export const ownPresence = () => invoke<OwnPresence>('own_presence');
+/** `null` when the server has no invisible mode. Fails offline. */
+export const invisibleMethod = () => invoke<InvisibleMethod | null>('invisible_method');
+/** XEP-0319. `since` is Unix seconds, or null when the user is active again. Fails offline. */
+export const setIdle = (since: number | null) => invoke<void>('set_idle', { since });
 /** The room service of the server (for example conference.example.org), or null. */
 export const roomService = () => invoke<string | null>('room_service');
 export const sendPrivate = (room: string, nick: string, body: string) =>
@@ -305,6 +310,9 @@ export const blockedContacts = () => invoke<Jid[]>('blocked_contacts');
 export const addContact = (jid: string, name?: string) =>
   invoke<void>('add_contact', { jid, name: name ?? null });
 export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });
+/** Rename a contact in the roster. An empty name or null clears it. The groups stay. */
+export const renameContact = (jid: string, name: string | null) =>
+  invoke<void>('rename_contact', { jid, name });
 /** Accept the request of a `subscriptionRequest` event. */
 export const approveSubscription = (jid: string) => invoke<void>('approve_subscription', { jid });
 export const denySubscription = (jid: string) => invoke<void>('deny_subscription', { jid });

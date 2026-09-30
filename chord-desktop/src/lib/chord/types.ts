@@ -296,7 +296,14 @@ export interface Contact {
   show: string | null;
   /** The status text of the best resource. */
   status: string | null;
+  /** When the user of the best resource stopped interacting, as an xs:dateTime (XEP-0319). */
+  idleSince: string | null;
+  /** The song that the contact plays now, as "Artist - Title" (XEP-0118). */
+  activity: string | null;
 }
+
+/** How the server can hide us: the invisible command (XEP-0186) or a privacy list (XEP-0016). */
+export type InvisibleMethod = 'command' | 'privacyList';
 
 /** Our availability. Matches chord-core presence::Availability. */
 export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway' | 'invisible';

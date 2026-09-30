@@ -13,7 +13,7 @@ We read the XEP and the project pages on 2026-09-30. A line that says "unverifie
 | List registrations | `push_registrations()`, FFI `pushRegistrations()` | Reads the store. Works offline. |
 | Register with the app server | `execute_command(to, node, fields)`, FFI `executeCommand(service, node, fields)` | New. One-step ad-hoc commands (XEP-0050). The app server registration needs it. |
 
-The core enables nothing by itself. The server keeps the registration for the account. So a new session does not need a new `enable`. The Kotlin code decides when to enable and disable.
+The Kotlin code decides when to enable and disable. The server keeps the registration, but XEP-0357 has no query to check it. So the core sends `enable` again for each stored registration after the login and service discovery of each new session (not after a resumed session). The store keeps the publish options, the secret included, for this.
 
 Kotlin names come from the generated bindings (`uniffi.chord_ffi`). We generated them and checked these names: `enablePush`, `disablePush`, `pushRegistrations`, `executeCommand`, `login`, `syncArchive`, `subscribeEvents`, and the record `FormField(name, value)`.
 
@@ -130,7 +130,7 @@ client.enablePush(
 )
 ```
 
-Call it after the login succeeded (the `Connected` event of `subscribeEvents`). The call waits for service discovery. Save the tuple (jid, node) with `pushRegistrations()`. Do not save the secret. The core does not store it, and the app does not need it again.
+Call it after the login succeeded (the `Connected` event of `subscribeEvents`). The call waits for service discovery. Save the tuple (jid, node) with `pushRegistrations()`. The core stores the secret in its database to send `enable` again at each login. The app does not need to save it.
 
 ### 3. Refresh and remove
 

@@ -149,6 +149,10 @@ export interface ContactItem {
   status: string | null;
   /** Ms since epoch. Null when unknown. */
   since: number | null;
+  /** When the contact went idle, as an xs:dateTime (XEP-0319). */
+  idleSince?: string | null;
+  /** The song that the contact plays now, as "Artist - Title" (XEP-0118). */
+  activity?: string | null;
 }
 
 /** Everything the profile views need about one address. */

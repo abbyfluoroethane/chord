@@ -261,7 +261,13 @@ export function toContactItem(
   jid: string,
   name: string | null,
   since: number | null = null,
-  presence: { online: boolean; show: string | null; status: string | null } | null = null
+  presence: {
+    online: boolean;
+    show: string | null;
+    status: string | null;
+    idleSince?: string | null;
+    activity?: string | null;
+  } | null = null
 ): ContactItem {
   return {
     address: jid,
@@ -270,7 +276,9 @@ export function toContactItem(
     show: presence?.online ? toShow(presence.show) : null,
     online: presence?.online ?? false,
     status: presence?.status ?? null,
-    since
+    since,
+    idleSince: presence?.online ? (presence.idleSince ?? null) : null,
+    activity: presence?.online ? (presence.activity ?? null) : null
   };
 }
 

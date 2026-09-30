@@ -84,6 +84,13 @@
         onselect: () => {}
       });
     }
+    if (!p.isMe && p.isContact) {
+      out.push({
+        label: 'Rename contact',
+        icon: Pencil,
+        onselect: () => (ui.renaming = { address: p.address, name: p.name })
+      });
+    }
     if (!p.isMe) {
       out.push(
         p.isContact

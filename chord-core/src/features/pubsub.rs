@@ -4,6 +4,7 @@
 //! - node `urn:xmpp:bookmarks:1` from our own account: `bookmarks::on_event`,
 //! - node `urn:chord:pins:0` from our own account: `pins::on_event`,
 //! - node `urn:xmpp:avatar:metadata` (PEP of any contact): `avatars::on_metadata_event`,
+//! - node `http://jabber.org/protocol/tune` (PEP of any contact): `tune::on_event`,
 //! - a data form `subscribe_authorization` from the pubsub service: `spaces::on_authorization`,
 //! - anything else (a pubsub service, for example a space node): `spaces::on_event`.
 
@@ -11,7 +12,7 @@ use jid::Jid;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::pubsub::event::{Event, Payload};
 
-use super::{Ctx, avatars, bookmarks, pins, spaces};
+use super::{Ctx, avatars, bookmarks, pins, spaces, tune};
 
 pub const NODE_BOOKMARKS: &str = "urn:xmpp:bookmarks:1";
 pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
@@ -51,6 +52,7 @@ pub(crate) fn on_event(ctx: &mut Ctx<'_>, message: &Message) -> bool {
             }
         }
         NODE_AVATAR_METADATA => avatars::on_metadata_event(ctx, &from.to_bare(), event.payload),
+        tune::NODE_TUNE => tune::on_event(ctx, &from.to_bare(), event.payload),
         _ => spaces::on_event(ctx, &from, event.payload),
     }
     true

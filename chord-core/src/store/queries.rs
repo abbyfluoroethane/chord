@@ -310,6 +310,7 @@ pub fn mark_failed(
 pub fn clear_volatile(store: &crate::store::Store, account_id: i64) -> rusqlite::Result<()> {
     store.conn().execute_batch(&format!(
         "DELETE FROM presences WHERE account_id = {account_id};
+         DELETE FROM contact_tunes WHERE account_id = {account_id};
          DELETE FROM occupants WHERE account_id = {account_id};
          UPDATE rooms SET joined = 0 WHERE account_id = {account_id};"
     ))

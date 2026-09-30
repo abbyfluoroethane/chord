@@ -223,6 +223,14 @@ class ContactsStore {
     this.outgoing = this.outgoing.filter((c) => c.address !== address);
   }
 
+  /** Give a contact a new name, for you only. Maps to api.renameContact(jid, name). */
+  rename(address: string, name: string) {
+    const clean = name.trim();
+    this.act(async (b) => b.renameContact(address, clean || null));
+    const item = this.contacts.find((c) => c.address === address);
+    if (item) item.name = clean || address.split('@')[0];
+  }
+
   /** Maps to api.removeContact(jid). */
   remove(address: string) {
     this.act(async (b) => b.removeContact(address));

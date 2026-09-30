@@ -2,6 +2,7 @@
   // Our status: availability with its presence shape, and a status: an optional emoji and
   // a text. It saves as "$EMOJI $TEXT". It opens above the user panel and is as wide as
   // the channel list.
+  import { onMount } from 'svelte';
   import Check from 'lucide-svelte/icons/check';
   import SmilePlus from 'lucide-svelte/icons/smile-plus';
   import X from 'lucide-svelte/icons/x';
@@ -12,6 +13,7 @@
   import Popover from './Popover.svelte';
   import Presence from './Presence.svelte';
   import { app } from './app.svelte';
+  import { api, live } from './bridge';
   import { ownLabel, presenceKind, type Show } from './types';
 
   let { anchor, onclose }: { anchor: HTMLElement; onclose: () => void } = $props();
@@ -26,7 +28,22 @@
   let menuEl = $state<HTMLDivElement>();
   let picking = $state(false);
 
-  const choices: Show[] = ['chat', 'away', 'dnd', 'invisible'];
+  // Invisible needs the invisible command (XEP-0186) or privacy lists (XEP-0016) on the
+  // server. Hide the choice when the server has neither. Keep it while it is the current
+  // choice, so that the user can leave it.
+  let canHide = $state(true);
+  onMount(() => {
+    if (!live) return;
+    void api()
+      .then((b) => b.invisibleMethod())
+      .then((method) => (canHide = method !== null))
+      .catch(() => {
+        /* Offline or unknown: keep the choice. */
+      });
+  });
+  const choices = $derived<Show[]>(
+    canHide || app.me.show === 'invisible' ? ['chat', 'away', 'dnd', 'invisible'] : ['chat', 'away', 'dnd']
+  );
 
   function pick(show: Show) {
     app.setShow(show);

@@ -39,6 +39,7 @@ pub mod retraction;
 pub mod roster;
 pub mod search;
 pub mod spaces;
+pub mod tune;
 pub mod upload;
 
 #[cfg(test)]
@@ -141,6 +142,7 @@ pub(crate) struct FeatureState {
     pub csi: csi::State,
     pub extdisco: extdisco::State,
     pub jmi: jmi::State,
+    pub presence: presence::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -261,9 +263,11 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     // Commands that wait for service discovery stay: the new session runs discovery again.
     let deferred = std::mem::take(&mut ctx.state.deferred);
     let inactive = ctx.state.csi.inactive;
+    let idle_since = ctx.state.presence.idle_since.take();
     *ctx.state = FeatureState::default();
     ctx.state.muc = muc_state;
     ctx.state.csi.inactive = inactive;
+    ctx.state.presence.idle_since = idle_since;
     ctx.state.deferred = deferred;
     if let Err(e) = crate::store::queries::clear_volatile(ctx.store, ctx.account_id) {
         ctx.store_error("clear presence and occupants", e);
@@ -409,6 +413,16 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
             | FeatureCommand::Upload(_)
             | FeatureCommand::Push(push::Command::Enable { .. })
             | FeatureCommand::Extdisco(_)
+            | FeatureCommand::Presence(
+                presence::Command::InvisibleMethod { .. }
+                    | presence::Command::Set {
+                        presence: presence::OwnPresence {
+                            availability: presence::Availability::Invisible,
+                            ..
+                        },
+                        ..
+                    },
+            )
             | FeatureCommand::Muc(muc::Command::RoomService { .. })
             | FeatureCommand::Blocking(
                 blocking::Command::Block { .. }
@@ -427,6 +441,8 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
 pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
     blocking::on_services_ready(ctx);
     extdisco::on_services_ready(ctx);
+    push::on_services_ready(ctx);
+    presence::on_services_ready(ctx);
     for command in std::mem::take(&mut ctx.state.deferred) {
         dispatch(ctx, command);
     }

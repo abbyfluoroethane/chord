@@ -23,6 +23,7 @@
   import { watchClientState } from './clientstate';
   import { contactsStore } from './contacts.svelte';
   import { drafts } from './drafts.svelte';
+  import { watchIdle } from './idle';
   import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
   import { session } from './session.svelte';
@@ -38,14 +39,32 @@
     contactsStore.loadLocal();
     // Tell the server when nobody looks at the window (XEP-0352).
     if (live) {
-      return watchClientState((active) => {
+      // Tell the contacts when nobody used Chord for a while (XEP-0319).
+      idleWatch = watchIdle((since) => {
+        void api()
+          .then((b) => b.setIdle(since === null ? null : Math.floor(since / 1000)))
+          .catch(() => {
+            /* Offline: resend after the next connect. */
+          });
+      });
+      const stopState = watchClientState((active) => {
         void api()
           .then((b) => b.setClientActive(active))
           .catch(() => {
             /* A lost hint does no harm. */
           });
       });
+      return () => {
+        stopState();
+        idleWatch?.stop();
+      };
     }
+  });
+
+  let idleWatch: ReturnType<typeof watchIdle> | undefined;
+  // A new session starts with no idle time: send it again.
+  $effect(() => {
+    if (session.state === 'connected') idleWatch?.resend();
   });
 
   // Load the rail layout once the spaces are known. Before that the list is empty and

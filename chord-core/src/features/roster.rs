@@ -58,6 +58,8 @@ pub(crate) enum Pending {
     Add { jid: BareJid, reply: Reply },
     /// A roster set that removes a contact.
     Remove { reply: Reply },
+    /// The answer to a rename. The roster push that follows updates the store.
+    Rename { reply: Reply },
     /// The ping that follows a pre-approval. See the module comment.
     Preapprove { jid: BareJid },
 }
@@ -71,6 +73,11 @@ pub(crate) enum Command {
     },
     Remove {
         jid: BareJid,
+        reply: Reply,
+    },
+    Rename {
+        jid: BareJid,
+        name: Option<String>,
         reply: Reply,
     },
     Approve {
@@ -145,6 +152,12 @@ pub struct Contact {
     pub show: Option<String>,
     /// The status text of the resource with the highest priority.
     pub status: Option<String>,
+    /// When the user of the resource with the highest priority stopped interacting, as an
+    /// xs:dateTime (XEP-0319). `None` when the contact is not idle or offline.
+    pub idle_since: Option<String>,
+    /// The song that the contact plays now, as "Artist - Title" (XEP-0118). `None` when
+    /// the contact plays nothing or is offline.
+    pub activity: Option<String>,
 }
 
 impl ClientHandle {
@@ -158,6 +171,19 @@ impl ClientHandle {
     /// Remove a contact from the roster. The server also ends both subscriptions.
     pub async fn remove_contact(&self, jid: BareJid) -> Result<(), ClientError> {
         self.roster_call(|reply| Command::Remove { jid, reply })
+            .await
+    }
+
+    /// Give a contact a new name in the roster, for us only. `None` or an empty name
+    /// removes the name, so that Chord shows the address. The groups stay. Fails when the
+    /// contact is not in the roster. Answers after the server accepts the change, and the
+    /// roster push that follows updates the store.
+    pub async fn rename_contact(
+        &self,
+        jid: BareJid,
+        name: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.roster_call(|reply| Command::Rename { jid, name, reply })
             .await
     }
 
@@ -243,6 +269,13 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(Err(failure(other)));
             }
         },
+        Pending::Rename { reply } => {
+            let result = match response {
+                IqResponse::Result(_) => Ok(()),
+                other => Err(failure(other)),
+            };
+            let _ = reply.send(result);
+        }
         Pending::Remove { reply } => {
             let result = match response {
                 IqResponse::Result(_) => Ok(()),
@@ -353,6 +386,30 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             let iq = Iq::from_set("", roster_set(item));
             ctx.request(iq, FeaturePending::Roster(Pending::Remove { reply }));
         }
+        Command::Rename { jid, name, reply } => {
+            let known = read_contact(ctx.store.conn(), ctx.account_id, &jid)
+                .ok()
+                .flatten();
+            let Some(known) = known else {
+                let _ = reply.send(Err(ClientError::Invalid(format!(
+                    "{jid} is not in the roster"
+                ))));
+                return;
+            };
+            let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
+            // A roster set replaces the name and the groups. Send the groups that we know.
+            // The subscription in a set is ignored by the server, and there is no subscribe.
+            let item = Item {
+                jid,
+                name,
+                subscription: WireSubscription::None,
+                ask: Ask::None,
+                groups: known.groups.into_iter().map(Group).collect(),
+                approved: None,
+            };
+            let iq = Iq::from_set("", roster_set(item));
+            ctx.request(iq, FeaturePending::Roster(Pending::Rename { reply }));
+        }
         Command::Approve { jid, reply } => {
             ctx.state.roster.requests.remove(&jid);
             ctx.send(Presence::subscribed().with_to(jid));
@@ -427,6 +484,7 @@ pub(crate) fn offline(command: Command) {
     match command {
         Command::Add { reply, .. }
         | Command::Remove { reply, .. }
+        | Command::Rename { reply, .. }
         | Command::Approve { reply, .. }
         | Command::Deny { reply, .. }
         | Command::Preapprove { reply, .. } => {
@@ -486,19 +544,28 @@ fn store_presence(ctx: &mut Ctx<'_>, from: &Jid, presence: &Presence) {
         .next()
         .filter(|s| !s.is_empty())
         .cloned();
+    // XEP-0319: a bad `since` counts as no idle element.
+    let idle_since = presence
+        .payloads
+        .iter()
+        .find(|p| p.is("idle", super::presence::NS_IDLE))
+        .and_then(|p| p.attr("since"))
+        .filter(|since| since.parse::<xmpp_parsers::date::DateTime>().is_ok());
     let result = ctx.store.conn().execute(
-        "INSERT INTO presences (account_id, jid, bare, show, status, priority)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO presences (account_id, jid, bare, show, status, priority, idle_since)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (account_id, jid) DO UPDATE SET
              bare = excluded.bare, show = excluded.show,
-             status = excluded.status, priority = excluded.priority",
+             status = excluded.status, priority = excluded.priority,
+             idle_since = excluded.idle_since",
         params![
             ctx.account_id,
             from.as_str(),
             from.to_bare().as_str(),
             show,
             status,
-            presence.priority.0
+            presence.priority.0,
+            idle_since
         ],
     );
     if let Err(e) = result {
@@ -528,7 +595,7 @@ fn remove_presence(ctx: &mut Ctx<'_>, from: &Jid) {
 }
 
 /// Mark the views that show a contact: the home list, the members, and the timeline.
-fn mark(ctx: &mut Ctx<'_>, peer: BareJid) {
+pub(crate) fn mark(ctx: &mut Ctx<'_>, peer: BareJid) {
     ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
     ctx.changed(ViewKey::MemberList(peer.clone()));
     ctx.changed(ViewKey::Timeline(peer.clone()));
@@ -708,7 +775,14 @@ const CONTACT_COLUMNS: &str = "jid, name, subscription, ask, groups,
       ORDER BY p.priority DESC LIMIT 1),
      (SELECT p.status FROM presences p
       WHERE p.account_id = contacts.account_id AND p.bare = contacts.jid
-      ORDER BY p.priority DESC LIMIT 1)";
+      ORDER BY p.priority DESC LIMIT 1),
+     (SELECT p.idle_since FROM presences p
+      WHERE p.account_id = contacts.account_id AND p.bare = contacts.jid
+      ORDER BY p.priority DESC LIMIT 1),
+     (SELECT t.text FROM contact_tunes t
+      WHERE t.account_id = contacts.account_id AND t.bare = contacts.jid
+        AND EXISTS(SELECT 1 FROM presences p
+                   WHERE p.account_id = contacts.account_id AND p.bare = contacts.jid))";
 
 fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>> {
     let jid: String = row.get(0)?;
@@ -726,6 +800,8 @@ fn contact_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Contact>
         online: row.get::<_, i64>(6).unwrap_or(0) != 0,
         show: row.get(7).ok().flatten(),
         status: row.get(8).ok().flatten(),
+        idle_since: row.get(9).ok().flatten(),
+        activity: row.get(10).ok().flatten(),
     }))
 }
 
@@ -1139,6 +1215,52 @@ mod tests {
     }
 
     #[test]
+    fn a_contact_shows_its_idle_time_and_its_tune_while_online() {
+        let mut h = Harness::new();
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO contacts (account_id, jid, subscription, ask, groups)
+                 VALUES (?1, ?2, 'both', 0, '[]')",
+                params![h.account_id, BOB],
+            )
+            .unwrap();
+        let bob = |h: &Harness| {
+            list_contacts(h.store.conn(), h.account_id)
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap()
+        };
+        let idle = |since: &str| -> Element {
+            let xml = format!("<idle xmlns='urn:xmpp:idle:1' since='{since}'/>");
+            xml.parse().unwrap()
+        };
+        let mut p = presence("bob@chord.localhost/phone", Type::None);
+        p.payloads.push(idle("2026-09-30T10:00:00Z"));
+        h.with_ctx(|ctx| on_presence(ctx, &p));
+        assert_eq!(bob(&h).idle_since.as_deref(), Some("2026-09-30T10:00:00Z"));
+
+        // A bad `since` is no idle time.
+        let mut p = presence("bob@chord.localhost/phone", Type::None);
+        p.payloads.push(idle("yesterday"));
+        h.with_ctx(|ctx| on_presence(ctx, &p));
+        assert_eq!(bob(&h).idle_since, None);
+
+        // The tune shows while he is online only.
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO contact_tunes (account_id, bare, text) VALUES (?1, ?2, 'A - B')",
+                params![h.account_id, BOB],
+            )
+            .unwrap();
+        assert_eq!(bob(&h).activity.as_deref(), Some("A - B"));
+        h.with_ctx(|ctx| on_presence(ctx, &presence(BOB, Type::Unavailable)));
+        assert_eq!(bob(&h).activity, None);
+    }
+
+    #[test]
     fn presence_is_stored_and_cleared() {
         let mut h = Harness::new();
         let mut p = presence("bob@chord.localhost/phone", Type::None).with_show(Show::Dnd);
@@ -1316,6 +1438,83 @@ mod tests {
         let item = &Roster::try_from(payload.clone()).unwrap().items[0];
         assert_eq!(item.name.as_deref(), Some("Bob"));
         assert_eq!(item.groups.len(), 2);
+    }
+
+    fn is_rename(p: &FeaturePending) -> bool {
+        matches!(p, FeaturePending::Roster(Pending::Rename { .. }))
+    }
+
+    #[test]
+    fn rename_contact_sends_the_new_name_with_the_groups_and_no_subscribe() {
+        let mut h = Harness::new();
+        connect_with(&mut h, FULL);
+        h.sent_iqs();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Rename {
+                    jid: bare(BOB),
+                    name: Some("  Robert  ".into()),
+                    reply,
+                },
+            )
+        });
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!("{iqs:?}")
+        };
+        let item = &Roster::try_from(payload.clone()).unwrap().items[0];
+        assert_eq!(item.jid, bare(BOB));
+        assert_eq!(item.name.as_deref(), Some("Robert"));
+        assert_eq!(item.groups.len(), 2);
+        assert_eq!(answer.try_recv().unwrap(), None);
+        h.answer(is_rename, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(h.take_sent().is_empty(), "a rename does not subscribe");
+    }
+
+    #[test]
+    fn rename_with_an_empty_name_clears_it_and_an_unknown_contact_fails() {
+        let mut h = Harness::new();
+        connect_with(&mut h, FULL);
+        h.sent_iqs();
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Rename {
+                    jid: bare(BOB),
+                    name: Some(" ".into()),
+                    reply,
+                },
+            )
+        });
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!()
+        };
+        assert_eq!(
+            Roster::try_from(payload.clone()).unwrap().items[0].name,
+            None
+        );
+
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Rename {
+                    jid: bare("nobody@chord.localhost"),
+                    name: Some("X".into()),
+                    reply,
+                },
+            )
+        });
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+        assert!(h.sent_iqs().is_empty());
     }
 
     #[test]

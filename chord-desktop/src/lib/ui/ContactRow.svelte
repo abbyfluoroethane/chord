@@ -8,6 +8,7 @@
   import Avatar from './Avatar.svelte';
   import RoundButton from './RoundButton.svelte';
   import { contactsStore } from './contacts.svelte';
+  import { idleLabel } from './idle';
   import { presenceKind, presenceLabel, type ContactItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -17,6 +18,7 @@
   }: { item: ContactItem; kind: 'contact' | 'incoming' | 'outgoing' | 'blocked' } = $props();
 
   const presence = $derived(presenceKind(item.online, item.show));
+  const playing = $derived(item.activity ? `Listening to ${item.activity}` : null);
   const line = $derived(
     kind === 'incoming'
       ? 'Incoming request'
@@ -24,7 +26,9 @@
         ? 'Outgoing request'
         : kind === 'blocked'
           ? 'Blocked'
-          : (item.status ?? presenceLabel[presence])
+          : [item.status ?? presenceLabel[presence], idleLabel(item.idleSince ?? null), playing]
+              .filter(Boolean)
+              .join(' · ')
   );
   const more = $derived(ui.personMenu?.address === item.address);
 
