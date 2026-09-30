@@ -16,6 +16,8 @@ mod binding;
 mod connector;
 #[cfg(feature = "native-session")]
 pub mod native;
+#[cfg(feature = "native-session")]
+pub mod register;
 
 pub mod cert_pin;
 pub use cert_pin::CertPin;

@@ -7,7 +7,7 @@ license.workspace = true
 [features]
 default = ["native-session"]
 # The tokio-xmpp session. Turn it off for the wasm32 build.
-native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl", "dep:reqwest"]
+native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl", "dep:reqwest", "dep:futures-util"]
 # Plain TCP to a dev server (ServerAddr::InsecureTcp). Off by default.
 # chord-ffi and release builds must never enable it. CI checks this.
 dev-insecure = ["native-session", "tokio-xmpp/insecure-tcp"]
@@ -30,6 +30,8 @@ futures-channel.workspace = true
 uuid.workspace = true
 sasl = { workspace = true, optional = true }
 tokio-xmpp = { workspace = true, optional = true }
+# Sink and Stream helpers for the stream of session/register.rs.
+futures-util = { version = "0.3", optional = true, default-features = false, features = ["sink", "std"] }
 # Only session/native.rs and runtime.rs use tokio.
 tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time", "io-util"] }
 

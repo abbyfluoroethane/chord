@@ -596,7 +596,7 @@ fn map_error(error: tokio_xmpp::Error) -> LoginError {
     }
 }
 
-fn is_certificate_error(error: &io::Error) -> bool {
+pub(super) fn is_certificate_error(error: &io::Error) -> bool {
     error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<rustls::Error>())

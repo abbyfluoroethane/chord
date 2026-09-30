@@ -30,6 +30,7 @@ pub mod muc;
 pub mod notify;
 pub mod orphans;
 pub mod pins;
+pub mod owner_form;
 pub mod presence;
 pub mod pubsub;
 pub mod push;
@@ -104,6 +105,7 @@ pub(crate) enum Pending {
     Adhoc(adhoc::Pending),
     Pins(pins::Pending),
     Register(register::Pending),
+    OwnerForm(owner_form::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -177,6 +179,7 @@ pub(crate) enum FeatureCommand {
     Adhoc(adhoc::Command),
     Pins(pins::Command),
     Register(register::Command),
+    OwnerForm(owner_form::Command),
 }
 
 /// Everything a feature function can use.
@@ -407,6 +410,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Adhoc(p) => adhoc::on_response(ctx, p, response),
         Pending::Pins(p) => pins::on_response(ctx, p, response),
         Pending::Register(p) => register::on_response(ctx, p, response),
+        Pending::OwnerForm(p) => owner_form::on_response(ctx, p, response),
     }
 }
 
@@ -479,6 +483,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Adhoc(c) => adhoc::on_command(ctx, c),
         FeatureCommand::Pins(c) => pins::on_command(ctx, c),
         FeatureCommand::Register(c) => register::on_command(ctx, c),
+        FeatureCommand::OwnerForm(c) => owner_form::on_command(ctx, c),
     }
 }
 
@@ -527,6 +532,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Adhoc(c) => adhoc::offline(c),
         FeatureCommand::Pins(c) => pins::offline(store, account_id, c),
         FeatureCommand::Register(c) => register::offline(c),
+        FeatureCommand::OwnerForm(c) => owner_form::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.
