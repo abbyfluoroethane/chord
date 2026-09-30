@@ -3,14 +3,24 @@
 // style element after tokens.css. A switch of the system setting changes the theme at
 // once.
 //
-// The library holds the built-in themes and the themes that the user pasted in. A theme
-// is plain CSS with a comment header: see themecss.ts.
+// The library holds the built-in themes and the themes that the user pasted in or linked.
+// A theme is plain CSS with a comment header: see themecss.ts. A linked theme keeps its
+// URL. Chord fetches it again at each launch and keeps the old CSS if the fetch fails.
 
 import catppuccinLatte from './themes/catppuccin-latte.css?raw';
 import catppuccinMocha from './themes/catppuccin-mocha.css?raw';
 import chordDark from './themes/chord-dark.css?raw';
 import chordLight from './themes/chord-light.css?raw';
+import { api, live } from '$lib/ui/bridge';
 import { MAX_THEME_CHARS, parseTheme, type ThemeInfo, type ThemeMode } from './themecss';
+import {
+  checkFetched,
+  mergeFetched,
+  normalizeThemeUrl,
+  readLibrary,
+  refreshLinked,
+  type CustomTheme
+} from './themelink';
 
 export type ThemeChoice = 'system' | 'dark' | 'light';
 
@@ -19,6 +29,8 @@ export interface Theme {
   css: string;
   info: ThemeInfo;
   builtIn: boolean;
+  /** The link of a linked theme. */
+  url?: string;
 }
 
 const KEY = 'chord.theme';
@@ -56,10 +68,27 @@ function write(key: string, value: unknown) {
   }
 }
 
+/** Get the CSS of a link. The app does it in Rust. The static preview tries the browser. */
+async function fetchThemeCss(url: string): Promise<string> {
+  if (live) return (await api()).themeFetch(url);
+  const r = await fetch(url, { credentials: 'omit' });
+  if (!r.ok) throw new Error(`the server answered ${r.status}`);
+  return await r.text();
+}
+
+/** The text for the user when a fetch fails. */
+function fetchMessage(e: unknown): string {
+  const raw =
+    typeof e === 'string' ? e : ((e as { message?: string } | null)?.message ?? String(e));
+  return live
+    ? `Chord could not load this link: ${raw}`
+    : 'The browser could not load this link. The site may not allow other sites to read it. Use the app, or paste the CSS.';
+}
+
 class ThemeStore {
   choice = $state<ThemeChoice>('system');
-  /** The imported themes, as the user pasted them. */
-  custom = $state<{ id: string; css: string }[]>([]);
+  /** The imported themes: pasted CSS, or CSS from a link. */
+  custom = $state<CustomTheme[]>([]);
   pick = $state<Pick>({ dark: 'chord-dark', light: 'chord-light', accents: {} });
   /** The system setting, for the "system" choice. */
   systemLight = $state(false);
@@ -84,10 +113,7 @@ class ThemeStore {
     } catch {
       /* storage blocked, keep the default */
     }
-    const custom = read<{ id: string; css: string }[]>(LIBRARY_KEY);
-    if (Array.isArray(custom)) {
-      this.custom = custom.filter((t) => typeof t?.id === 'string' && typeof t?.css === 'string');
-    }
+    this.custom = readLibrary(read<unknown>(LIBRARY_KEY));
     const pick = read<Partial<Pick>>(PICK_KEY);
     if (pick) {
       this.pick = {
@@ -103,6 +129,8 @@ class ThemeStore {
       this.apply();
     });
     this.apply();
+    // The stored CSS is on the page now. The update runs after the first paint.
+    void this.refresh();
   }
 
   set(choice: ThemeChoice) {
@@ -160,6 +188,51 @@ class ThemeStore {
     write(LIBRARY_KEY, this.custom);
     this.use(id);
     return { ok: true, theme: this.library.find((t) => t.id === id)! };
+  }
+
+  /**
+   * Add a theme from a link and use it. A theme with the same link gets the new CSS
+   * instead of a second card.
+   */
+  async importLink(
+    input: string
+  ): Promise<{ ok: true; theme: Theme } | { ok: false; error: string }> {
+    const u = normalizeThemeUrl(input);
+    if (!u.ok) return u;
+    let fetched: string;
+    try {
+      fetched = await fetchThemeCss(u.url);
+    } catch (e) {
+      return { ok: false, error: fetchMessage(e) };
+    }
+    const checked = checkFetched(fetched);
+    if (!checked.ok) return checked;
+    const known = this.custom.find((t) => t.url === u.url);
+    const id = known?.id ?? `custom-${Date.now().toString(36)}`;
+    const item: CustomTheme = { id, css: checked.css, url: u.url, updated: Date.now() };
+    this.custom = known
+      ? this.custom.map((t) => (t.id === id ? item : t))
+      : [...this.custom, item];
+    write(LIBRARY_KEY, this.custom);
+    this.use(id);
+    return { ok: true, theme: this.library.find((t) => t.id === id)! };
+  }
+
+  /** Fetch each linked theme again. A failure keeps the old CSS and only writes a log. */
+  async refresh() {
+    await refreshLinked(
+      this.custom,
+      fetchThemeCss,
+      (id, css) => {
+        const next = mergeFetched(this.custom, id, css, Date.now());
+        if (next === this.custom) return;
+        this.custom = next;
+        write(LIBRARY_KEY, this.custom);
+        // The active theme changes at once.
+        if (this.themeFor(this.mode).id === id) this.apply();
+      },
+      (message) => console.warn(message)
+    );
   }
 
   /** Remove an imported theme. A slot that used it goes back to Chord. */

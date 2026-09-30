@@ -15,6 +15,7 @@ mod link_preview;
 mod notify;
 mod settings;
 mod state;
+mod theme_fetch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -94,6 +95,7 @@ pub fn run() {
             commands::push_registrations,
             link_preview::link_preview,
             link_preview::save_image,
+            theme_fetch::theme_fetch,
             gif::gif_search,
             emoji::emoji_packs,
             emoji::emoji_pack_install,

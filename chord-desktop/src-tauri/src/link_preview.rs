@@ -328,7 +328,7 @@ fn cached(key: &str) -> Option<Option<LinkPreview>> {
 // ---------------------------------------------------------------- the fetch
 
 /// The client for the page fetch: 10 seconds in all.
-fn client() -> Res<&'static reqwest::Client> {
+pub(crate) fn client() -> Res<&'static reqwest::Client> {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     shared_client(&CLIENT, Duration::from_secs(10))
 }

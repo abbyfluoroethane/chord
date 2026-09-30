@@ -2,8 +2,10 @@
   // The themes for one mode, as cards with a small preview, and the accents of the
   // picked theme as round swatches.
   import Check from 'lucide-svelte/icons/check';
+  import LinkIcon from 'lucide-svelte/icons/link';
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import { theme } from '$lib/theme/theme.svelte';
+  import { hostOf } from '$lib/theme/themelink';
   import type { ThemeMode } from '$lib/theme/themecss';
   import Icon from './Icon.svelte';
 
@@ -33,7 +35,15 @@
         </span>
         <span class="text">
           <span class="name">{t.info.name}</span>
-          <span class="meta">{t.builtIn ? 'Built in' : (t.info.author ?? 'Imported')}</span>
+          <span class="meta">
+            {#if t.url}
+              <span class="linked" title={t.url}>
+                <Icon icon={LinkIcon} size={12} />{hostOf(t.url)}
+              </span>
+            {:else}
+              {t.builtIn ? 'Built in' : (t.info.author ?? 'Imported')}
+            {/if}
+          </span>
         </span>
         {#if on}<span class="check"><Icon icon={Check} size={16} /></span>{/if}
       </button>
@@ -156,6 +166,12 @@
     letter-spacing: 0.02em;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .linked {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    max-width: 100%;
   }
   .check {
     display: grid;

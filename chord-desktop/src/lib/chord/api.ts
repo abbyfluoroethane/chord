@@ -304,6 +304,8 @@ export const setSettings = (value: Settings) => invoke<void>('set_settings', { v
 /** Download the image at `url` to `path`. Public addresses only, 50 MB at most. */
 export const saveImage = (url: string, path: string) => invoke<void>('save_image', { url, path });
 export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_preview', { url });
+/** Download the CSS of a linked theme. Https only, 256 KB at most. */
+export const themeFetch = (url: string) => invoke<string>('theme_fetch', { url });
 /** Search KLIPY GIFs, or get the trending ones for an empty query. `page` starts at 1. */
 export const gifSearch = (query: string, page: number) =>
   invoke<GifPage>('gif_search', { query, page });
