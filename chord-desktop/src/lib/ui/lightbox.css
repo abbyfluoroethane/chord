@@ -2,7 +2,8 @@
 .pswp {
   /* See-through: the blurred app shows behind the photo. */
   --pswp-bg: color-mix(in srgb, var(--surface-100) 60%, transparent);
-  --pswp-placeholder-bg: var(--surface-200);
+  /* No grey box while a photo loads: the thumbnail is the placeholder. */
+  --pswp-placeholder-bg: transparent;
   --pswp-icon-color: var(--ink);
   --pswp-icon-color-secondary: var(--surface-100);
   --pswp-icon-stroke-color: var(--surface-100);

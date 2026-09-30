@@ -14,6 +14,8 @@ export interface LightboxImage {
 const EASE_OUT = 'cubic-bezier(.2, 0, 0, 1)';
 const OPEN_MS = 150;
 const CLOSE_MS = 90;
+/** The longest wait for the full photo to decode before the viewer opens. */
+const DECODE_WAIT_MS = 150;
 /** A size for an image that is not measured yet. PhotoSwipe fits it to the screen. */
 const FALLBACK = { w: 1600, h: 1200 };
 
@@ -50,6 +52,18 @@ async function measure(src: string): Promise<{ w: number; h: number }> {
   return size;
 }
 
+/**
+ * Decode the full photo, so that PhotoSwipe can show it on its first frame. Without this,
+ * the viewer shows its placeholder until the decode ends, and the photo flickers in. It
+ * waits `DECODE_WAIT_MS` at most: a slow photo then shows its thumbnail first.
+ */
+function decodeSoon(src: string): Promise<void> {
+  const img = new Image();
+  img.src = src;
+  const decoded = img.decode().catch(() => undefined);
+  return Promise.race([decoded, new Promise<void>((r) => setTimeout(r, DECODE_WAIT_MS))]);
+}
+
 /** Load PhotoSwipe before the first open, for example when the pointer is over a photo. */
 export function preloadLightbox(): void {
   void import('photoswipe');
@@ -63,11 +77,14 @@ export async function openLightbox(images: LightboxImage[], index: number): Prom
   // screen, so it has its size already. The others get their size in the background.
   const [{ default: PhotoSwipe }] = await Promise.all([
     import('photoswipe'),
-    measure(images[start].src)
+    measure(images[start].src),
+    decodeSoon(images[start].src)
   ]);
   const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const pswp = new PhotoSwipe({
-    dataSource: images.map((i) => ({ src: i.src, alt: i.alt })),
+    // The placeholder is the thumbnail on screen (`msrc`), not an empty box. The file is
+    // the same, so the browser has it already.
+    dataSource: images.map((i) => ({ src: i.src, msrc: i.src, alt: i.alt })),
     index: start,
     // The see-through colour and the blur are in lightbox.css.
     bgOpacity: 1,
