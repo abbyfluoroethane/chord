@@ -36,6 +36,8 @@ export interface Theme {
 const KEY = 'chord.theme';
 const LIBRARY_KEY = 'chord.themes';
 const PICK_KEY = 'chord.themePick';
+/** Read by the inline splash in src/app.html. */
+const SPLASH_KEY = 'chord.splash';
 
 const BUILT_IN: Theme[] = [
   ['chord-dark', chordDark],
@@ -265,6 +267,23 @@ class ThemeStore {
     const accent = this.accentOf(t);
     if (accent) root.dataset.accent = accent;
     else delete root.dataset.accent;
+    this.saveSplash();
+  }
+
+  /**
+   * Keep the background and text colour of each mode for the first paint. The inline
+   * splash in app.html reads them before any script loads, so the window opens in the
+   * user's theme and not in the colours of the system setting.
+   */
+  private saveSplash() {
+    const cs = getComputedStyle(document.documentElement);
+    const saved = read<Record<string, unknown>>(SPLASH_KEY) ?? {};
+    saved.choice = this.choice;
+    saved[this.mode] = {
+      bg: cs.getPropertyValue('--surface-100').trim(),
+      ink: cs.getPropertyValue('--ink').trim()
+    };
+    write(SPLASH_KEY, saved);
   }
 }
 

@@ -10,7 +10,7 @@
       html,
       body {
         margin: 0;
-        background: #111316;
+        background: var(--boot-bg, #111316);
       }
       #boot-splash {
         position: fixed;
@@ -19,8 +19,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #111316;
-        color: #ece8e1;
+        background: var(--boot-bg, #111316);
+        color: var(--boot-ink, #ece8e1);
       }
       #boot-splash svg {
         animation: boot-pulse 2400ms cubic-bezier(0.2, 0, 0, 1) infinite;
@@ -38,8 +38,8 @@
         html,
         body,
         #boot-splash {
-          background: #f6f4ef;
-          color: #1a1c20;
+          background: var(--boot-bg, #f6f4ef);
+          color: var(--boot-ink, #1a1c20);
         }
       }
       @media (prefers-reduced-motion: reduce) {
@@ -48,6 +48,19 @@
         }
       }
     </style>
+    <script>
+      // The colours of the user's theme for this first paint, saved by theme.svelte.ts.
+      try {
+        var s = JSON.parse(localStorage.getItem('chord.splash') || '{}');
+        var light = window.matchMedia('(prefers-color-scheme: light)').matches;
+        var mode = s.choice === 'dark' || s.choice === 'light' ? s.choice : light ? 'light' : 'dark';
+        var c = s[mode];
+        if (c && c.bg) document.documentElement.style.setProperty('--boot-bg', c.bg);
+        if (c && c.ink) document.documentElement.style.setProperty('--boot-ink', c.ink);
+      } catch (e) {
+        /* no saved colours: the defaults stay */
+      }
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
