@@ -649,6 +649,8 @@ fn owner_commands_send_the_right_requests() {
     );
     h.answer(is_done, None);
     assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    // The client also asks the node for its members.
+    h.take_sent();
     assert_eq!(
         column(
             &h,
@@ -2006,4 +2008,123 @@ fn adding_a_member_grants_membership_after_the_service_accepts() {
         granted_rooms(&mut h, "bob@chord.localhost"),
         ["room1@rooms.chord.localhost"]
     );
+}
+
+fn is_members(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::NodeMembers { .. }))
+}
+
+/// Add the room `new` to the space `dev`, and answer the publish.
+fn add_new_room(h: &mut Harness) -> oneshot::Receiver<Result<(), ClientError>> {
+    let room = BareJid::new("new@rooms.chord.localhost").unwrap();
+    let rx = owner_call(h, |reply| Command::AddRoom {
+        service: service_bare(),
+        node: "dev".into(),
+        room,
+        name: "New".into(),
+        reply,
+    });
+    h.take_sent();
+    h.answer(is_done, None);
+    rx
+}
+
+fn owner_answer(inner: &str) -> Option<Element> {
+    Some(xml(&format!(
+        "<pubsub xmlns='{}'>{inner}</pubsub>",
+        ns::PUBSUB_OWNER
+    )))
+}
+
+/// The texts of the member grants among the sent requests.
+fn grant_texts(h: &mut Harness) -> Vec<String> {
+    h.sent_iqs()
+        .iter()
+        .map(payload_of)
+        .filter(|t| t.contains("muc#admin"))
+        .collect()
+}
+
+#[test]
+fn adding_a_room_asks_the_node_for_its_members() {
+    let mut h = followed();
+    let mut rx = add_new_room(&mut h);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    let sent = h.sent_iqs();
+    let [iq] = &sent[..] else {
+        panic!("expected one request: {sent:?}")
+    };
+    let text = payload_of(iq);
+    assert!(text.contains("<affiliations node='dev'/>"), "{text}");
+    assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+}
+
+#[test]
+fn the_affiliations_of_the_node_are_granted_and_the_owner_is_skipped() {
+    let mut h = followed();
+    let _rx = add_new_room(&mut h);
+    h.take_sent();
+    h.answer(
+        is_members,
+        owner_answer(
+            "<affiliations node='dev'>
+               <affiliation jid='alice@chord.localhost' affiliation='owner'/>
+               <affiliation jid='bob@chord.localhost' affiliation='member'/>
+               <affiliation jid='eve@chord.localhost' affiliation='outcast'/>
+               <affiliation jid='zed@chord.localhost' affiliation='none'/>
+             </affiliations>",
+        ),
+    );
+    let sent = h.sent_iqs();
+    let texts: Vec<String> = sent.iter().map(payload_of).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("<subscriptions node='dev'/>")),
+        "{texts:?}"
+    );
+    let grants: Vec<&String> = texts.iter().filter(|t| t.contains("muc#admin")).collect();
+    assert_eq!(grants.len(), 1, "{grants:?}");
+    assert!(grants[0].contains("bob@chord.localhost"), "{grants:?}");
+    assert!(grants[0].contains("affiliation='member'"), "{grants:?}");
+}
+
+#[test]
+fn the_subscriptions_of_the_node_add_the_members_without_a_repeat() {
+    let mut h = followed();
+    let _rx = add_new_room(&mut h);
+    h.answer(
+        is_members,
+        owner_answer(
+            "<affiliations node='dev'>
+               <affiliation jid='bob@chord.localhost' affiliation='member'/>
+             </affiliations>",
+        ),
+    );
+    h.take_sent();
+    h.answer(
+        is_members,
+        owner_answer(
+            "<subscriptions node='dev'>
+               <subscription jid='alice@chord.localhost' subscription='subscribed'/>
+               <subscription jid='bob@chord.localhost' subscription='subscribed'/>
+               <subscription jid='carol@chord.localhost' subscription='subscribed'/>
+               <subscription jid='dave@chord.localhost' subscription='pending'/>
+             </subscriptions>",
+        ),
+    );
+    let grants = grant_texts(&mut h);
+    assert_eq!(grants.len(), 1, "{grants:?}");
+    assert!(grants[0].contains("carol@chord.localhost"), "{grants:?}");
+}
+
+#[test]
+fn a_refused_member_list_grants_nothing_and_the_add_succeeds() {
+    let mut h = followed();
+    let mut rx = add_new_room(&mut h);
+    h.take_sent();
+    h.respond(is_members, forbidden());
+    h.respond(is_members, forbidden());
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert!(grant_texts(&mut h).is_empty());
 }

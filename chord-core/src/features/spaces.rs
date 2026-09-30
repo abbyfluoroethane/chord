@@ -40,6 +40,8 @@
 //!   must also be a member of each room, or the room refuses the join. `approve_space_join`
 //!   and `add_space_member` set the room affiliation `member` in each room of the space.
 //!   It works where we own the rooms. Other rooms refuse, and we ignore that.
+//!   `add_room_to_space` does the same for a new room: it reads the affiliations and the
+//!   subscriptions of the node, and it grants each member except the owner.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -323,6 +325,16 @@ pub(crate) enum Pending {
         service: BareJid,
         node: String,
         hash: String,
+    },
+    /// The members of a space node, for a room that the owner just added. The client
+    /// asks for the affiliations first, then for the subscriptions. `seen` holds the
+    /// people that already got a grant.
+    NodeMembers {
+        service: BareJid,
+        node: String,
+        room: BareJid,
+        subscriptions: bool,
+        seen: HashSet<BareJid>,
     },
     /// The answer does not matter.
     Ignore,
@@ -1260,6 +1272,32 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 list
             }));
         }
+        Pending::NodeMembers {
+            service,
+            node,
+            room,
+            subscriptions,
+            mut seen,
+        } => {
+            match &result {
+                Ok(Some(payload)) => {
+                    log::debug!(
+                        "members of {node} ({subscriptions}): {}",
+                        String::from(payload)
+                    );
+                    for jid in node_members(payload, &node, subscriptions) {
+                        if jid != *ctx.account && seen.insert(jid.clone()) {
+                            super::muc::grant_membership(ctx, &room, &jid);
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => log::info!("cannot list the members of {service} {node}: {e}"),
+            }
+            if !subscriptions && !matches!(result, Err(ClientError::NotConnected)) {
+                request_node_members(ctx, service, node, room, true, seen);
+            }
+        }
         Pending::Done { action, reply } => match result {
             Ok(_) => {
                 apply_action(ctx, action);
@@ -1287,6 +1325,75 @@ fn grant_rooms(ctx: &mut Ctx<'_>, service: &BareJid, node: &str, member: &Jid) {
     }
 }
 
+/// Ask the owner view of a space node for its members. A room that the owner adds later
+/// must accept the people who already joined, so the client grants each of them. The
+/// affiliations and the subscriptions can differ by access model, so we read both.
+fn request_node_members(
+    ctx: &mut Ctx<'_>,
+    service: BareJid,
+    node: String,
+    room: BareJid,
+    subscriptions: bool,
+    seen: HashSet<BareJid>,
+) {
+    let element = if subscriptions {
+        "subscriptions"
+    } else {
+        "affiliations"
+    };
+    let Ok(iq) = owner_iq(
+        false,
+        &service,
+        &format!("<{element} node='{}'/>", xml_escape(&node)),
+    ) else {
+        return;
+    };
+    ctx.request(
+        iq,
+        FeaturePending::Spaces(Pending::NodeMembers {
+            service,
+            node,
+            room,
+            subscriptions,
+            seen,
+        }),
+    );
+}
+
+/// The JIDs in an owner answer that count as members of the node. Outcasts, people with
+/// no affiliation, and pending or unconfigured subscriptions do not count.
+fn node_members(payload: &Element, node: &str, subscriptions: bool) -> Vec<BareJid> {
+    let (name, item, attr, good): (_, _, _, &[&str]) = if subscriptions {
+        (
+            "subscriptions",
+            "subscription",
+            "subscription",
+            &["subscribed"],
+        )
+    } else {
+        (
+            "affiliations",
+            "affiliation",
+            "affiliation",
+            &["member", "publisher", "publish-only"],
+        )
+    };
+    let Some(list) = payload
+        .get_child(name, ns::PUBSUB_OWNER)
+        .or_else(|| payload.get_child(name, ns::PUBSUB))
+    else {
+        return Vec::new();
+    };
+    if list.attr("node").is_some_and(|n| n != node) {
+        return Vec::new();
+    }
+    list.children()
+        .filter(|c| c.name() == item && c.attr(attr).is_some_and(|a| good.contains(&a)))
+        .filter(|c| c.attr("node").is_none_or(|n| n == node))
+        .filter_map(|c| BareJid::new(c.attr("jid")?).ok())
+        .collect()
+}
+
 fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
     match action {
         Action::Leave { service, node } | Action::DeleteSpace { service, node } => {
@@ -1301,6 +1408,7 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             let s = service.to_string();
             store_item(ctx, &s, &node, room.as_str(), Some(&payload), None);
             changed(ctx, &s, &node);
+            request_node_members(ctx, service, node, room, false, HashSet::new());
         }
         Action::RemoveRoom {
             service,
