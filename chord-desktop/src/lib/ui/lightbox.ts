@@ -20,10 +20,23 @@ const FALLBACK = { w: 1600, h: 1200 };
 /** Pixel sizes of the images seen so far, by URL. */
 const sizes = new Map<string, { w: number; h: number }>();
 
+/** The size of an image that is on screen already, without a new decode. */
+function onScreen(src: string): { w: number; h: number } | null {
+  for (const img of document.images) {
+    if (img.src === src && img.complete && img.naturalWidth && img.naturalHeight) {
+      return { w: img.naturalWidth, h: img.naturalHeight };
+    }
+  }
+  return null;
+}
+
 /** The pixel size of an image. The browser cache keeps the file after the first load. */
 async function measure(src: string): Promise<{ w: number; h: number }> {
-  const known = sizes.get(src);
-  if (known) return known;
+  const known = sizes.get(src) ?? onScreen(src);
+  if (known) {
+    sizes.set(src, known);
+    return known;
+  }
   const img = new Image();
   img.src = src;
   let size = FALLBACK;
@@ -46,8 +59,8 @@ export function preloadLightbox(): void {
 export async function openLightbox(images: LightboxImage[], index: number): Promise<void> {
   if (images.length === 0) return;
   const start = Math.max(0, Math.min(index, images.length - 1));
-  // Only the clicked image is measured before the viewer opens. It is on screen, so the
-  // decode is quick. The others get their size in the background.
+  // Only the clicked image is measured before the viewer opens. Its thumbnail is on
+  // screen, so it has its size already. The others get their size in the background.
   const [{ default: PhotoSwipe }] = await Promise.all([
     import('photoswipe'),
     measure(images[start].src)
@@ -74,10 +87,12 @@ export async function openLightbox(images: LightboxImage[], index: number): Prom
   });
   // Blur the app behind the viewer. A backdrop-filter inside the viewer does not work:
   // PhotoSwipe fades its root with opacity, and that stops a backdrop blur in any child.
-  const root = document.documentElement;
-  pswp.on('openingAnimationStart', () => root.classList.add('lightbox-open'));
-  pswp.on('close', () => root.classList.remove('lightbox-open'));
-  pswp.on('destroy', () => root.classList.remove('lightbox-open'));
+  const scrim = document.createElement('div');
+  scrim.className = 'lightbox-scrim';
+  document.body.append(scrim);
+  pswp.on('openingAnimationStart', () => scrim.classList.add('shown'));
+  pswp.on('close', () => scrim.classList.remove('shown'));
+  pswp.on('destroy', () => setTimeout(() => scrim.remove(), CLOSE_MS));
   pswp.init();
   // Measure the other images, and redraw each slide when its size arrives.
   images.forEach((image, i) => {

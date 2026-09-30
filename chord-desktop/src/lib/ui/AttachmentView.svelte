@@ -35,7 +35,13 @@
     onfocus={preloadLightbox}
     aria-label="View {file.name}"
   >
-    <img src={file.url} alt={file.name} loading="lazy" onerror={() => (broken = true)} />
+    <img
+      src={file.url}
+      alt={file.name}
+      loading="lazy"
+      decoding="async"
+      onerror={() => (broken = true)}
+    />
   </button>
 {:else if kind === 'video'}
   <media-controller class="player video">

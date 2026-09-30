@@ -9,12 +9,24 @@
   --pswp-transition-duration: 150ms;
 }
 
-/* The app behind an open viewer: blurred. Arrive in 150ms, leave in 90ms. */
-.app {
-  transition: filter 90ms cubic-bezier(0.2, 0, 0, 1);
+/* The app behind an open viewer: blurred. The blur radius stays fixed and only the
+   opacity of the layer changes, so the compositor does the work. An animated filter on
+   the app makes WebKit draw the whole window again on each frame. The layer is outside
+   PhotoSwipe, because the opacity of the PhotoSwipe root stops a backdrop blur in a child.
+   Arrive in 150ms, leave in 90ms. */
+.lightbox-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  pointer-events: none;
+  opacity: 0;
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  will-change: opacity;
+  transition: opacity 90ms cubic-bezier(0.2, 0, 0, 1);
 }
-.lightbox-open .app {
-  filter: blur(16px);
+.lightbox-scrim.shown {
+  opacity: 1;
   transition-duration: 150ms;
 }
 
@@ -22,8 +34,8 @@
   .pswp {
     --pswp-transition-duration: 0ms;
   }
-  .app,
-  .lightbox-open .app {
+  .lightbox-scrim,
+  .lightbox-scrim.shown {
     transition: none;
   }
 }
