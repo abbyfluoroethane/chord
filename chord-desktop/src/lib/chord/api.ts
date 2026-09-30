@@ -199,6 +199,8 @@ export const markReadPrivate = (room: string, nick: string) =>
 /** Tell the peer that we type. See `ClientEvent` `typing` for what `peer` is. */
 export const setTyping = (peer: string, typing: boolean) =>
   invoke<void>('set_typing', { peer, typing });
+/** Tell the peer that we closed the chat (XEP-0085 `gone`). A room gets nothing. */
+export const closeChat = (peer: string) => invoke<void>('close_chat', { peer });
 /**
  * Tell the server that the window is in use or not (XEP-0352). The server then holds back
  * presence and chat states. Resolves to true when the server got it. Core sends the state

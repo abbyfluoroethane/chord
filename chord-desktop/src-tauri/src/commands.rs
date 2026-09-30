@@ -425,6 +425,12 @@ pub async fn set_typing(state: State<'_, AppState>, peer: String, typing: bool) 
     Ok(state.handle()?.set_typing(peer, typing)?)
 }
 
+/// Tell a chat peer that we closed the chat (XEP-0085 `gone`). A room gets nothing.
+#[tauri::command]
+pub async fn close_chat(state: State<'_, AppState>, peer: String) -> Res<()> {
+    Ok(state.handle()?.close_chat(peer)?)
+}
+
 /// Tell the server that the window is in use (`true`) or not (`false`), with Client State
 /// Indication (XEP-0352). Returns whether the server got it. Chord sends it again after a
 /// reconnect, and keeps it while offline.

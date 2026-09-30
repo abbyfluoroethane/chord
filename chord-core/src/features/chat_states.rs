@@ -11,6 +11,8 @@
 //! a body carries `<active/>` (XEP-0085, section 5.4). We send states to a chat peer only
 //! after that peer sent us a state in this session, as XEP-0085 section 5.1 asks. We send
 //! them to a joined room at all times (section 5.5). We never send one state twice in a row.
+//! A state-only message has the hints `<no-store/>` and `<no-permanent-store/>` (XEP-0334),
+//! so a server does not archive it. `ClientHandle::close_chat` sends `gone` (section 5.1).
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -39,9 +41,13 @@ pub(crate) struct State {
     last_sent: HashMap<String, ChatState>,
 }
 
+/// XEP-0334 namespace, for the hints on a state-only message.
+const NS_HINTS: &str = "urn:xmpp:hints";
+
 /// A command from the public API.
 pub(crate) enum Command {
     SetTyping { peer: String, typing: bool },
+    CloseChat { peer: String },
 }
 
 impl ClientHandle {
@@ -63,17 +69,27 @@ impl ClientHandle {
             typing,
         }))
     }
+
+    /// The user closes the chat with `peer`, a bare JID (XEP-0085, section 5.1). This
+    /// sends `<gone/>` to a chat peer that sent us a state in this session and that got a
+    /// state or a message from us. A room and any other case send nothing and return no
+    /// error.
+    pub fn close_chat(&self, peer: String) -> Result<(), ClientError> {
+        Jid::new(&peer).map_err(|e| ClientError::Invalid(format!("bad JID {peer}: {e}")))?;
+        self.feature(FeatureCommand::ChatStates(Command::CloseChat { peer }))
+    }
 }
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
         Command::SetTyping { peer, typing } => set_typing(ctx, &peer, typing),
+        Command::CloseChat { peer } => close_chat(ctx, &peer),
     }
 }
 
 /// A command while no session is up: nothing to send.
 pub(crate) fn offline(command: Command) {
-    let Command::SetTyping { .. } = command;
+    let (Command::SetTyping { .. } | Command::CloseChat { .. }) = command;
 }
 
 /// The chat state of a message.
@@ -265,7 +281,39 @@ fn set_typing(ctx: &mut Ctx<'_>, peer: &str, typing: bool) {
         .chat_states
         .last_sent
         .insert(peer.to_owned(), state.clone());
-    ctx.send(message.with_payload(state));
+    ctx.send(with_hints(message).with_payload(state));
+}
+
+/// Add `<no-store/>` and `<no-permanent-store/>` to a message that carries only a state.
+fn with_hints(mut message: Message) -> Message {
+    for name in ["no-store", "no-permanent-store"] {
+        message
+            .payloads
+            .push(Element::builder(name, NS_HINTS).build());
+    }
+    message
+}
+
+/// The user closed the chat with `peer`: send `gone` once.
+fn close_chat(ctx: &mut Ctx<'_>, peer: &str) {
+    let Ok(jid) = Jid::new(peer) else {
+        return;
+    };
+    let bare = jid.to_bare();
+    if muc::is_room(ctx, &bare) || !ctx.state.chat_states.supported.contains(peer) {
+        return;
+    }
+    // Nothing went out, or `gone` went out already: nothing to end.
+    match ctx.state.chat_states.last_sent.get(peer) {
+        None | Some(ChatState::Gone) => return,
+        Some(_) => {}
+    }
+    ctx.state
+        .chat_states
+        .last_sent
+        .insert(peer.to_owned(), ChatState::Gone);
+    let message = Message::chat(Jid::from(bare));
+    ctx.send(with_hints(message).with_payload(ChatState::Gone));
 }
 
 #[cfg(test)]
@@ -567,6 +615,58 @@ mod tests {
         };
         assert_eq!(m.to.as_ref().unwrap().to_string(), occupant);
         assert!(m.payloads.iter().any(|p| p.is("x", muc::NS_MUC_USER)));
+    }
+
+    #[test]
+    fn a_state_message_has_the_no_store_hints() {
+        let mut h = Harness::new();
+        deliver(&mut h, from_bob(Some(ChatState::Active), None));
+        h.with_ctx(|ctx| set_typing(ctx, BOB, true));
+        let sent = h.take_sent();
+        let Stanza::Message(m) = &sent[0] else {
+            panic!("no message");
+        };
+        assert!(m.payloads.iter().any(|p| p.is("no-store", NS_HINTS)));
+        assert!(
+            m.payloads
+                .iter()
+                .any(|p| p.is("no-permanent-store", NS_HINTS))
+        );
+        // A message with a body has no such hint.
+        h.with_ctx(|ctx| chat::send(ctx, Jid::new(BOB).unwrap(), "hello".into()));
+        let sent = h.take_sent();
+        let Stanza::Message(m) = &sent[0] else {
+            panic!("no message");
+        };
+        assert!(!m.payloads.iter().any(|p| p.is("no-store", NS_HINTS)));
+    }
+
+    #[test]
+    fn closing_a_chat_sends_gone_once() {
+        let mut h = Harness::new();
+        // The peer has sent no state: nothing goes out.
+        h.with_ctx(|ctx| close_chat(ctx, BOB));
+        assert!(sent_states(&mut h).is_empty());
+        deliver(&mut h, from_bob(Some(ChatState::Active), None));
+        // We have sent nothing to bob yet.
+        h.with_ctx(|ctx| close_chat(ctx, BOB));
+        assert!(sent_states(&mut h).is_empty());
+        h.with_ctx(|ctx| set_typing(ctx, BOB, true));
+        sent_states(&mut h);
+        h.with_ctx(|ctx| close_chat(ctx, BOB));
+        assert_eq!(sent_states(&mut h), [(MessageType::Chat, ChatState::Gone)]);
+        h.with_ctx(|ctx| close_chat(ctx, BOB));
+        assert!(sent_states(&mut h).is_empty());
+    }
+
+    #[test]
+    fn closing_a_room_sends_nothing() {
+        let mut h = Harness::new();
+        add_room(&mut h, true);
+        h.with_ctx(|ctx| set_typing(ctx, ROOM, true));
+        sent_states(&mut h);
+        h.with_ctx(|ctx| close_chat(ctx, ROOM));
+        assert!(sent_states(&mut h).is_empty());
     }
 
     #[test]

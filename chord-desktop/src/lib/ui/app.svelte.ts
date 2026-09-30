@@ -247,6 +247,7 @@ class AppState {
         /* ignore */
       }
     }
+    if (live) void this.sendGone(jid);
     if (jid !== this.selectedJid) return;
     const next = this.spaceChannels[0];
     if (next) this.selectChannel(next.jid);
@@ -516,6 +517,16 @@ class AppState {
       await (await api()).setTyping(jid, typing);
     } catch {
       /* A lost typing hint does no harm. */
+    }
+  }
+
+  /** The user closed a chat: tell the peer (XEP-0085 `gone`). */
+  private async sendGone(jid: string) {
+    if (this.typingTo === jid) this.stopTyping();
+    try {
+      await (await api()).closeChat(jid);
+    } catch {
+      /* A lost state does no harm. */
     }
   }
 

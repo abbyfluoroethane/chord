@@ -77,6 +77,7 @@ pub fn run() {
             commands::mark_read_private,
             commands::mark_unread,
             commands::set_typing,
+            commands::close_chat,
             files::upload_files,
             files::upload_dropped,
             files::upload_pasted,
