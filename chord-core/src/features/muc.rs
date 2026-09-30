@@ -280,7 +280,8 @@ impl ClientHandle {
         .await
     }
 
-    /// Leave a room. A bookmark with autojoin stays: call `remove_bookmark` to remove it.
+    /// Leave a room. The bookmark of the room, if it has one, is retracted, so that the
+    /// room does not come back at the next login. The answer waits for the server.
     pub async fn leave_room(&self, room: BareJid) -> Result<(), ClientError> {
         self.room_command(|reply| Command::Leave { room, reply })
             .await
@@ -631,7 +632,15 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             reply,
         } => join_room(ctx, &room, Some(nick), password, Some(reply)),
         Command::Leave { room, reply } => {
-            let _ = reply.send(leave(ctx, &room));
+            // A bookmarked room would come back at the next login: retract the bookmark
+            // (XEP-0402, section 3) and answer when the server has done it.
+            let bookmarked = bookmarks::is_bookmarked(ctx, &room);
+            match leave(ctx, &room) {
+                Ok(()) if bookmarked => bookmarks::remove(ctx, room, reply),
+                result => {
+                    let _ = reply.send(result);
+                }
+            }
         }
         Command::ChangeNick { room, nick, reply } => {
             if ctx.state.muc.nicks.contains_key(&room) {

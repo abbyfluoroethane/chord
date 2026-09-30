@@ -266,11 +266,23 @@ class AppState {
     try {
       const b = await api();
       if (c.kind === 'channel' && !c.joined) {
-        await b.joinRoom(c.jid, this.myNick(c.space));
+        const nick = this.myNick(c.space);
+        await b.joinRoom(c.jid, nick);
+        // A room in a space is listed by the space. Only a room outside one is bookmarked.
+        if (!c.space) await this.bookmark(b, c.jid, nick);
       }
       await this.readOnBridge(c);
     } catch (e) {
       ui.say(plainError(e));
+    }
+  }
+
+  /** Bookmark a room with autojoin, so that the next login joins it. A failure is not fatal. */
+  private async bookmark(b: Awaited<ReturnType<typeof api>>, jid: string, nick: string) {
+    try {
+      await b.addBookmark(jid, nick);
+    } catch {
+      /* The room works without a bookmark. */
     }
   }
 
@@ -899,7 +911,11 @@ class AppState {
       this.selectChannel(jid);
       return true;
     }
-    const r = await this.call((b) => b.joinRoom(jid, this.myNick(null), password ?? undefined));
+    const nick = this.myNick(null);
+    const r = await this.call(async (b) => {
+      await b.joinRoom(jid, nick, password ?? undefined);
+      await this.bookmark(b, jid, nick);
+    });
     if (!r.ok) return false;
     this.pending = { jid };
     this.ensureSelection();

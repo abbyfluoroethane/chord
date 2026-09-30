@@ -410,9 +410,32 @@ pub async fn room_info(state: State<'_, AppState>, room: String) -> Res<RoomCard
     Ok(state.handle()?.room_info(bare(&room)?).await?)
 }
 
+/// Leave a room. The core retracts the bookmark of the room, if it has one.
 #[tauri::command]
 pub async fn leave_room(state: State<'_, AppState>, room: String) -> Res<()> {
     Ok(state.handle()?.leave_room(bare(&room)?).await?)
+}
+
+/// Save a room in the bookmarks of the account (XEP-0402). Only for a room that is in no
+/// space: a space keeps its channels in its own node.
+#[tauri::command]
+pub async fn add_bookmark(
+    state: State<'_, AppState>,
+    room: String,
+    name: Option<String>,
+    autojoin: bool,
+    nick: Option<String>,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .add_bookmark(bare(&room)?, name, autojoin, nick)
+        .await?)
+}
+
+/// Remove a room from the bookmarks. This does not leave the room.
+#[tauri::command]
+pub async fn remove_bookmark(state: State<'_, AppState>, room: String) -> Res<()> {
+    Ok(state.handle()?.remove_bookmark(bare(&room)?).await?)
 }
 
 #[tauri::command]

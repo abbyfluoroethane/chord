@@ -332,6 +332,11 @@ fn rooms_where(ctx: &Ctx<'_>, condition: &str) -> Vec<BareJid> {
     }
 }
 
+/// Whether the room has a bookmark.
+pub(crate) fn is_bookmarked(ctx: &Ctx<'_>, room: &BareJid) -> bool {
+    autojoin_of(ctx, room).is_some()
+}
+
 /// The stored autojoin flag of a bookmark, `None` if the room is not bookmarked.
 fn autojoin_of(ctx: &Ctx<'_>, room: &BareJid) -> Option<bool> {
     ctx.store
@@ -676,5 +681,68 @@ mod tests {
             answer.try_recv().unwrap(),
             Some(Err(ClientError::NotConnected))
         );
+    }
+
+    #[test]
+    fn leave_retracts_the_bookmark_and_a_room_without_one_sends_no_iq() {
+        use crate::features::muc::Command;
+        let mut h = Harness::new();
+        // A bookmarked room that we joined.
+        h.with_ctx(|ctx| on_event(ctx, event(vec![(A, conference(true, "al"))], vec![])));
+        h.take_sent();
+        h.with_ctx(|ctx| {
+            ctx.state.muc.joins.clear();
+            ctx.state
+                .muc
+                .nicks
+                .insert(BareJid::new(A).unwrap(), "al".into());
+        });
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            muc::on_command(
+                ctx,
+                Command::Leave {
+                    room: BareJid::new(A).unwrap(),
+                    reply,
+                },
+            )
+        });
+        let sent = h.take_sent();
+        assert!(
+            sent.iter().any(|s| matches!(s, Stanza::Presence(p) if p.type_ == xmpp_parsers::presence::Type::Unavailable)),
+            "{sent:?}"
+        );
+        let retracts = sent
+            .iter()
+            .filter(|s| matches!(s, Stanza::Iq(Iq::Set { payload, .. }) if payload.is("pubsub", "http://jabber.org/protocol/pubsub")))
+            .count();
+        assert_eq!(retracts, 1, "{sent:?}");
+        assert!(answer.try_recv().unwrap().is_none(), "waits for the server");
+        h.answer(is_bookmarks, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert_eq!(row(&h, A), Some((false, false, Some("al".into()))));
+
+        // A room in a space has no bookmark: leaving it sends no pubsub IQ.
+        h.with_ctx(|ctx| {
+            ctx.store
+                .conn()
+                .execute(
+                    "INSERT INTO rooms (account_id, jid, nick, joined) VALUES (?1, ?2, 'al', 1)",
+                    params![ctx.account_id, B],
+                )
+                .unwrap();
+        });
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            muc::on_command(
+                ctx,
+                Command::Leave {
+                    room: BareJid::new(B).unwrap(),
+                    reply,
+                },
+            )
+        });
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(h.sent_iqs().is_empty());
     }
 }

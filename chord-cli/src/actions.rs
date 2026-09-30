@@ -65,12 +65,8 @@ pub async fn nick(client: &Client, room: &str, nick: &str) -> Result<(), CliErro
 /// `leave <room>`: leave the room and remove its bookmark.
 pub async fn leave(client: &Client, room: &str) -> Result<(), CliError> {
     let room = bare(room)?;
+    // The core retracts the bookmark of the room as it leaves.
     client.handle.leave_room(room.clone()).await.map_err(err)?;
-    client
-        .handle
-        .remove_bookmark(room.clone())
-        .await
-        .map_err(err)?;
     println!("left {room}");
     Ok(())
 }

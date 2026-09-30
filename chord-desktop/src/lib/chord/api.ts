@@ -211,6 +211,10 @@ export const joinRoom = (room: string, nick: string, password?: string) =>
 /** Read a room with a disco#info query. It does not join the room. */
 export const roomInfo = (room: string) => invoke<RoomCard>('room_info', { room });
 export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
+/** Save a room in the account bookmarks (XEP-0402). Not for a channel of a space. */
+export const addBookmark = (room: string, nick: string, name: string | null = null) =>
+  invoke<void>('add_bookmark', { room, name, autojoin: true, nick });
+export const removeBookmark = (room: string) => invoke<void>('remove_bookmark', { room });
 export const changeNick = (room: string, nick: string) =>
   invoke<void>('change_nick', { room, nick });
 /** Set our availability and status text. Offline, Chord only stores them. */
