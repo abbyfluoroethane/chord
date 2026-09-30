@@ -389,6 +389,22 @@ pub async fn load_older(state: State<'_, AppState>, peer: String) -> Res<()> {
     Ok(state.handle()?.load_older(bare(&peer)?).await?)
 }
 
+/// Search the stored messages, newest first. With `peer`, only that chat or room.
+/// Works offline: it reads the local store, not the server archive.
+#[tauri::command]
+pub async fn search_messages(
+    state: State<'_, AppState>,
+    peer: Option<String>,
+    query: String,
+    limit: Option<usize>,
+) -> Res<Vec<chord_core::features::search::SearchHit>> {
+    let peer = peer.map(|p| bare(&p)).transpose()?.map(|p| p.to_string());
+    Ok(state
+        .handle()?
+        .search_messages(peer, query, limit.unwrap_or(50))
+        .await?)
+}
+
 // ---------------------------------------------------------------- rooms
 
 #[tauri::command]

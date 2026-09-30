@@ -132,6 +132,18 @@ export interface TimelineItem {
   status: DeliveryStatus;
 }
 
+/** One stored message that matches a search. `id` is the timeline id. */
+export interface SearchHit {
+  id: string;
+  kind: 'chat' | 'groupchat';
+  direction: 'in' | 'out';
+  peer: string;
+  sender: string;
+  body: string;
+  /** Unix ms. */
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------- events
 
 export type SaslCondition = string; // the Rust name, for example "NotAuthorized"

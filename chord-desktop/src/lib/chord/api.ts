@@ -26,6 +26,7 @@ import type {
   RoomAffiliation,
   RoomCard,
   RoomSettings,
+  SearchHit,
   Settings,
   SpaceAccess,
   SpaceCard,
@@ -203,6 +204,10 @@ export const uploadDropped = (to: string, path: string) =>
   invoke<string>('upload_dropped', { to, path });
 /** Fetch older messages of a chat or a room from the server archive. */
 export const loadOlder = (peer: string) => invoke<void>('load_older', { peer });
+
+/** Search the stored messages, newest first. Without `peer` it searches every chat. */
+export const searchMessages = (query: string, peer?: string, limit = 50) =>
+  invoke<SearchHit[]>('search_messages', { peer: peer ?? null, query, limit });
 
 // ---------------------------------------------------------------- rooms
 

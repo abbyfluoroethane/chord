@@ -57,7 +57,7 @@ impl Direction {
         }
     }
 
-    fn parse(s: &str) -> rusqlite::Result<Self> {
+    pub(crate) fn parse(s: &str) -> rusqlite::Result<Self> {
         match s {
             "in" => Ok(Self::In),
             "out" => Ok(Self::Out),
@@ -90,7 +90,7 @@ impl MessageKind {
         }
     }
 
-    fn parse(s: &str) -> rusqlite::Result<Self> {
+    pub(crate) fn parse(s: &str) -> rusqlite::Result<Self> {
         match s {
             "chat" => Ok(Self::Chat),
             "groupchat" => Ok(Self::Groupchat),

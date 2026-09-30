@@ -7,6 +7,7 @@
   import { app } from './app.svelte';
   import { live } from './bridge';
   import { clock, dayLabel, sameDay } from './format';
+  import { jumpToMessage } from './search';
   import type { TimelineItem } from './types';
 
   type Row =
@@ -114,12 +115,7 @@
   });
 
   function jump(id: string) {
-    const el = document.getElementById(`msg-${id}`);
-    if (!el) return;
-    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    el.classList.remove('flash');
-    void el.offsetWidth;
-    el.classList.add('flash');
+    jumpToMessage(id);
   }
 </script>
 

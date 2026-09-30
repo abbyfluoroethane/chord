@@ -75,6 +75,7 @@ pub fn run() {
             commands::load_older,
             commands::join_room,
             commands::room_info,
+            commands::search_messages,
             commands::leave_room,
             commands::add_bookmark,
             commands::remove_bookmark,

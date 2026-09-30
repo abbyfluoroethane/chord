@@ -2,10 +2,10 @@
   // 48px header: channel name, topic, member list toggle, search.
   import AtSign from 'lucide-svelte/icons/at-sign';
   import Hash from 'lucide-svelte/icons/hash';
-  import Search from 'lucide-svelte/icons/search';
   import Users from 'lucide-svelte/icons/users';
   import Icon from './Icon.svelte';
   import Presence from './Presence.svelte';
+  import SearchPanel from './SearchPanel.svelte';
   import { app, HOME } from './app.svelte';
   import { tooltip } from './tooltip';
   import { presenceKind } from './types';
@@ -40,10 +40,7 @@
       <Icon icon={Users} size={20} />
     </button>
   {/if}
-  <label class="search">
-    <Icon icon={Search} size={16} />
-    <input type="search" placeholder="Search" aria-label="Search messages" />
-  </label>
+  <SearchPanel />
 </header>
 
 <style>
@@ -100,35 +97,5 @@
   }
   .icon:hover {
     background: var(--hover);
-  }
-  .search {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    width: 168px;
-    height: 28px;
-    padding: 0 var(--space-2);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-md);
-    background: var(--surface-300);
-    color: var(--ink-muted);
-    transition:
-      width var(--dur-arrive) var(--ease-out),
-      border-color var(--dur-fast);
-  }
-  .search:focus-within {
-    width: 240px;
-    border-color: var(--accent);
-  }
-  input {
-    flex: 1;
-    min-width: 0;
-    background: none;
-    border: 0;
-    outline: 0;
-    font-size: 14px;
-  }
-  input::placeholder {
-    color: var(--ink-muted);
   }
 </style>

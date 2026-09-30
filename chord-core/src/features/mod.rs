@@ -30,6 +30,7 @@ pub mod reactions;
 pub mod replies;
 pub mod retraction;
 pub mod roster;
+pub mod search;
 pub mod spaces;
 pub mod upload;
 
@@ -148,6 +149,7 @@ pub(crate) enum FeatureCommand {
     ChatStates(chat_states::Command),
     Blocking(blocking::Command),
     Presence(presence::Command),
+    Search(search::Command),
 }
 
 /// Everything a feature function can use.
@@ -413,6 +415,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::ChatStates(c) => chat_states::on_command(ctx, c),
         FeatureCommand::Blocking(c) => blocking::on_command(ctx, c),
         FeatureCommand::Presence(c) => presence::on_command(ctx, c),
+        FeatureCommand::Search(c) => search::on_command(ctx, c),
     }
 }
 
@@ -440,6 +443,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
             let _ = reply.send(blocking::list(store, account_id));
         }
         FeatureCommand::Notify(c) => notify::run(store, account_id, c),
+        FeatureCommand::Search(c) => search::run(store, account_id, c),
         FeatureCommand::Markers(c) => {
             markers::offline_with_store(store, account_id, c);
             return true;
