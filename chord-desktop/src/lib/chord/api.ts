@@ -189,11 +189,18 @@ export const markReadPrivate = (room: string, nick: string) =>
 export const setTyping = (peer: string, typing: boolean) =>
   invoke<void>('set_typing', { peer, typing });
 /**
- * Upload the file at `path` and send its URL to `to`. Rust reads the file (100 MB at
- * most). Returns the URL. The type comes from the extension unless you pass one.
+ * Open the system file dialog and upload the files that the user picks (100 MB each at
+ * most) to `to`. Rust runs the dialog and reads the files: the page never gives a path.
+ * Returns the URLs. The list is empty when the user cancels.
  */
-export const upload = (to: string, path: string, contentType?: string) =>
-  invoke<string>('upload', { to, path, contentType: contentType ?? null });
+export const uploadFiles = (to: string) => invoke<string[]>('upload_files', { to });
+/**
+ * Upload a file that the user dropped on the window. `path` must come from the drop event
+ * (`onDragDropEvent`): Rust refuses a path that no drop gave, and accepts each one once.
+ * Returns the URL.
+ */
+export const uploadDropped = (to: string, path: string) =>
+  invoke<string>('upload_dropped', { to, path });
 /** Fetch older messages of a chat or a room from the server archive. */
 export const loadOlder = (peer: string) => invoke<void>('load_older', { peer });
 
@@ -308,8 +315,13 @@ export const setSettings = (value: Settings) => invoke<void>('set_settings', { v
  * site sees our IP address. Resolves to null when the page has no preview. Rust caches
  * the answer for one hour and refuses private addresses.
  */
-/** Download the image at `url` to `path`. Public addresses only, 50 MB at most. */
-export const saveImage = (url: string, path: string) => invoke<void>('save_image', { url, path });
+/**
+ * Download the image at `url` (public addresses only, 50 MB at most), then open the save
+ * dialog with `name` as the suggestion. Rust writes the file where the user says. Resolves
+ * to false when the user cancels.
+ */
+export const saveImage = (url: string, name?: string) =>
+  invoke<boolean>('save_image', { url, name: name ?? null });
 export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_preview', { url });
 /** Download the CSS of a linked theme. Https only, 256 KB at most. */
 export const themeFetch = (url: string) => invoke<string>('theme_fetch', { url });

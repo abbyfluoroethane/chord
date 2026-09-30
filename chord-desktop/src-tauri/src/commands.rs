@@ -64,7 +64,7 @@ pub fn parse_server(server: Option<&str>) -> Res<ServerAddr> {
 }
 
 /// The file name of an upload, from its path.
-fn file_name(path: &std::path::Path) -> Res<String> {
+pub fn file_name(path: &std::path::Path) -> Res<String> {
     path.file_name()
         .and_then(|n| n.to_str())
         .map(str::to_owned)
@@ -381,42 +381,6 @@ pub async fn mark_read_private(state: State<'_, AppState>, room: String, nick: S
 #[tauri::command]
 pub async fn set_typing(state: State<'_, AppState>, peer: String, typing: bool) -> Res<()> {
     Ok(state.handle()?.set_typing(peer, typing)?)
-}
-
-/// Upload the file at `path` (XEP-0363) and send its URL to `to`. Rust reads the file.
-/// Returns the URL. `content_type` is optional: the extension gives the default.
-#[tauri::command]
-pub async fn upload(
-    state: State<'_, AppState>,
-    to: String,
-    path: String,
-    content_type: Option<String>,
-) -> Res<String> {
-    let handle = state.handle()?;
-    let to = full(&to)?;
-    let path = PathBuf::from(path);
-    let name = file_name(&path)?;
-    let data = tauri::async_runtime::spawn_blocking(move || read_capped(&path))
-        .await
-        .map_err(|e| ChordError::io("the read task failed", e))??;
-    let content_type = content_type
-        .filter(|c| !c.is_empty())
-        .unwrap_or_else(|| guess_content_type(&name).to_owned());
-    Ok(handle.upload(to, name, content_type, data).await?)
-}
-
-fn read_capped(path: &std::path::Path) -> Res<Vec<u8>> {
-    let meta = std::fs::metadata(path).map_err(|e| ChordError::io("cannot read the file", e))?;
-    if !meta.is_file() {
-        return Err(ChordError::invalid("the path is not a file"));
-    }
-    if meta.len() > MAX_UPLOAD_BYTES {
-        return Err(ChordError::invalid(format!(
-            "the file is {} bytes, the limit is {MAX_UPLOAD_BYTES}",
-            meta.len()
-        )));
-    }
-    std::fs::read(path).map_err(|e| ChordError::io("cannot read the file", e))
 }
 
 /// Fetch older messages of a chat or a room from the archive (MAM).
@@ -859,13 +823,5 @@ mod tests {
         assert_eq!(guess_content_type("a.PNG"), "image/png");
         assert_eq!(guess_content_type("a.tar.gz"), "application/octet-stream");
         assert_eq!(guess_content_type("noext"), "application/octet-stream");
-    }
-
-    #[test]
-    fn upload_reads_only_small_files() {
-        let error = read_capped(std::path::Path::new("/definitely/not/here")).unwrap_err();
-        assert_eq!(error.code, "io");
-        let dir = std::env::temp_dir();
-        assert_eq!(read_capped(&dir).unwrap_err().code, "invalid");
     }
 }

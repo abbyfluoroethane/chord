@@ -22,8 +22,10 @@ tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2"
 # Desktop notifications for ClientEvent::Notification (src/notify.rs).
 tauri-plugin-notification = "2"
-# The system file dialog for the upload button. It gives the bridge a real file path.
+# The system file dialog. Rust opens it (src/files.rs), so the page needs no permission for it.
 tauri-plugin-dialog = "2"
+# O_NOFOLLOW and ELOOP for the file gate (src/files.rs). Already in the tree through tauri.
+libc = "0.2"
 # The Chord core with its JSON output (Serialize on the views and events).
 chord-core = { workspace = true, features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

@@ -396,13 +396,13 @@ class LiveController {
     }
   }
 
-  /** A file dropped on the window goes to the open chat. Rust reads it from its path. */
+  /** A file dropped on the window goes to the open chat. Rust remembers the path from the drop and reads the file. */
   private async listenDrops(gen: number) {
     try {
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');
       const un = await getCurrentWebview().onDragDropEvent((ev) => {
         if (ev.payload.type !== 'drop' || app.showContacts) return;
-        for (const p of ev.payload.paths) void app.uploadPath(p);
+        for (const p of ev.payload.paths) void app.uploadDropped(p);
       });
       if (gen !== this.generation) un();
       else this.unlistenDrop = un;

@@ -701,6 +701,7 @@ dependencies = [
  "chord-core",
  "flate2",
  "keyring",
+ "libc",
  "log",
  "percent-encoding",
  "reqwest",

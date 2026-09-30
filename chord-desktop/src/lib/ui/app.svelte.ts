@@ -573,12 +573,24 @@ class AppState {
     });
   }
 
-  /** Upload the file at `path` to the open chat. Maps to api.upload(to, path). */
-  async uploadPath(path: string) {
+  /** Let the user pick files and upload them to the open chat. Maps to api.uploadFiles(to). */
+  async uploadPicked() {
     const jid = this.selectedJid;
     if (!live || !jid) return;
     try {
-      await (await api()).upload(jid, path);
+      const urls = await (await api()).uploadFiles(jid);
+      if (urls.length) ui.say(urls.length === 1 ? 'File sent.' : 'Files sent.');
+    } catch (e) {
+      ui.say(plainError(e));
+    }
+  }
+
+  /** Upload a file that the user dropped on the window. Maps to api.uploadDropped(to, path). */
+  async uploadDropped(path: string) {
+    const jid = this.selectedJid;
+    if (!live || !jid) return;
+    try {
+      await (await api()).uploadDropped(jid, path);
       ui.say('File sent.');
     } catch (e) {
       ui.say(plainError(e));

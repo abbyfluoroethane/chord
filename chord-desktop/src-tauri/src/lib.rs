@@ -9,6 +9,7 @@ mod avatars;
 mod commands;
 mod emoji;
 mod error;
+mod files;
 mod gif;
 mod keychain;
 mod link_preview;
@@ -31,6 +32,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
+        .manage(files::Dropped::default())
+        // The path of a dropped file goes to Rust here, not through the page.
+        .on_webview_event(|webview, event| {
+            if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                use tauri::Manager;
+                webview.state::<files::Dropped>().remember(paths);
+            }
+        })
         .setup(links::setup);
     emoji::register(avatars::register(builder))
         .invoke_handler(tauri::generate_handler![
@@ -59,7 +68,8 @@ pub fn run() {
             commands::mark_read_private,
             commands::mark_unread,
             commands::set_typing,
-            commands::upload,
+            files::upload_files,
+            files::upload_dropped,
             commands::load_older,
             commands::join_room,
             commands::room_info,
@@ -104,7 +114,7 @@ pub fn run() {
             commands::notification_level,
             commands::push_registrations,
             link_preview::link_preview,
-            link_preview::save_image,
+            files::save_image,
             theme_fetch::theme_fetch,
             gif::gif_search,
             emoji::emoji_packs,

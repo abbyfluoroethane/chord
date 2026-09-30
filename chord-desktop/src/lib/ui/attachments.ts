@@ -37,18 +37,14 @@ export function viewImage(file: Attachment): void {
 }
 
 /**
- * Save an image to a place that the user picks. Only inside the app: the save dialog gives
- * the path, and the bridge downloads the file there. The download refuses private
- * addresses and files over 50 MB (see `save_image` in link_preview.rs).
+ * Save an image to a place that the user picks. Only inside the app: the bridge downloads
+ * the file, opens the save dialog, and writes the file. The page never sees the path. The
+ * download refuses private addresses and files over 50 MB (see `save_image` in files.rs).
  */
 export async function saveImage(file: Attachment): Promise<void> {
   if (!live) return;
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog');
-    const path = await save({ title: 'Save image', defaultPath: file.name || 'image' });
-    if (!path) return;
-    await (await api()).saveImage(file.url, path);
-    ui.say('Image saved.');
+    if (await (await api()).saveImage(file.url, file.name || undefined)) ui.say('Image saved.');
   } catch (e) {
     ui.say(plainError(e));
   }

@@ -444,18 +444,13 @@ fn within_cap(total: u64, chunk: usize, max: u64) -> bool {
     total.checked_add(chunk as u64).is_some_and(|n| n <= max)
 }
 
-/// Download the image at `url` and write it to `path`, which the user chose in the save
-/// dialog. The download uses the same filters as the previews: only public addresses,
-/// checked redirects. It fails for a file that is not an image, and for one over 50 MB.
-#[tauri::command]
-pub async fn save_image(url: String, path: String) -> Res<()> {
+/// Download the image at `url` and return its bytes. The download uses the same filters as
+/// the previews: only public addresses, checked redirects. It fails for a file that is not
+/// an image, and for one over 50 MB. The caller decides where the bytes go (files.rs).
+pub async fn download_image(url: &str) -> Res<Vec<u8>> {
     let parsed = Url::parse(url.trim())
         .map_err(|e| ChordError::invalid(format!("not a URL ({url:?}): {e}")))?;
     validate_url(&parsed)?;
-    let target = std::path::PathBuf::from(&path);
-    if path.is_empty() || !target.is_absolute() || target.is_dir() {
-        return Err(ChordError::invalid("the save path must be a file path"));
-    }
     let mut response = download_client()?
         .get(parsed)
         .header(ACCEPT, "image/*")
@@ -490,10 +485,7 @@ pub async fn save_image(url: String, path: String) -> Res<()> {
         }
         body.extend_from_slice(&chunk);
     }
-    tauri::async_runtime::spawn_blocking(move || std::fs::write(&target, body))
-        .await
-        .map_err(|e| ChordError::io("save the image", e))?
-        .map_err(|e| ChordError::io("save the image", e))
+    Ok(body)
 }
 
 fn poisoned() -> ChordError {
@@ -637,11 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn save_image_refuses_bad_urls_and_paths() {
-        let run = |u: &str, p: &str| tauri::async_runtime::block_on(save_image(u.into(), p.into()));
-        assert!(run("http://127.0.0.1/a.png", "/tmp/a.png").is_err());
-        assert!(run("https://example.org/a.png", "relative.png").is_err());
-        assert!(run("file:///etc/passwd", "/tmp/a.png").is_err());
+    fn download_image_refuses_bad_urls() {
+        let run = |u: &str| tauri::async_runtime::block_on(download_image(u));
+        assert!(run("http://127.0.0.1/a.png").is_err());
+        assert!(run("file:///etc/passwd").is_err());
     }
 
     #[test]

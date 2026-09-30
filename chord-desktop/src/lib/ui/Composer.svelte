@@ -190,17 +190,14 @@
     }
   }
 
-  // The bridge uploads from a file path. Inside the app the system file dialog gives one
-  // (a file dropped on the window works too). In a browser, the file input stays.
+  // Inside the app, Rust opens the system file dialog and reads the files: the page never
+  // handles a path. In a browser, the file input stays.
   async function upload() {
     if (!live) {
       files?.click();
       return;
     }
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const picked = await open({ multiple: true, directory: false, title: 'Send a file' });
-    const paths = picked === null ? [] : Array.isArray(picked) ? picked : [picked];
-    for (const path of paths) void app.uploadPath(path);
+    await app.uploadPicked();
   }
 
   function picked() {
