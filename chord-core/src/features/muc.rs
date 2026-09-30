@@ -1176,6 +1176,32 @@ pub(crate) fn send_chat(ctx: &mut Ctx<'_>, to: Jid, body: String) -> Result<Stri
     send(ctx, &room, body)
 }
 
+/// Send a link with an XEP-0066 out-of-band element, so that clients show the file
+/// inline (an "embed"), for example a GIF. The body is the URL too, for clients without
+/// XEP-0066. It picks a room or a chat as `send_chat` does, and stores the message.
+pub(crate) fn send_link(ctx: &mut Ctx<'_>, to: Jid, url: String) -> Result<String, ClientError> {
+    let oob = xmpp_parsers::oob::Oob {
+        url: url.clone(),
+        desc: None,
+    };
+    let room = to.to_bare();
+    if !is_room(ctx, &room) {
+        if to.resource().is_none() && is_muc_service(ctx, &room) {
+            return Err(ClientError::Invalid(format!(
+                "{room} is a room: join it before you send to it"
+            )));
+        }
+        return Ok(super::chat::send_with_oob(ctx, to, url, Some(oob)));
+    }
+    let mut out = Outgoing::default();
+    out.extras.oob_url = Some(url.clone());
+    out.payloads.push(oob.into());
+    match to.resource() {
+        Some(nick) => send_private_message(ctx, &room, nick.as_str(), url, out),
+        None => send_message(ctx, &room, url, out),
+    }
+}
+
 /// Whether `nick` is an occupant of `room` now.
 fn is_occupant(ctx: &Ctx<'_>, room: &BareJid, nick: &str) -> bool {
     db(
@@ -2691,6 +2717,38 @@ mod tests {
         });
         assert_eq!(peer_rows(&h, &format!("{ROOM}/bob")).len(), 2);
         assert!(peer_rows(&h, ROOM).is_empty());
+    }
+
+    #[test]
+    fn send_link_carries_the_url_as_body_and_oob_in_a_room_and_a_chat() {
+        use xmpp_parsers::oob::Oob;
+        let oob_of = |m: &Message| {
+            m.payloads
+                .iter()
+                .find_map(|p| Oob::try_from(p.clone()).ok())
+                .map(|o| o.url)
+        };
+        let url = "https://static.klipy.com/a/b.gif";
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        h.with_ctx(|ctx| send_link(ctx, Jid::from(room()), url.into()))
+            .unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = &sent[..] else {
+            panic!("{sent:?}");
+        };
+        assert_eq!(m.type_, MessageType::Groupchat);
+        assert_eq!(m.bodies.get("").map(|b| b.as_str()), Some(url));
+        assert_eq!(oob_of(m).as_deref(), Some(url));
+
+        h.with_ctx(|ctx| send_link(ctx, jid("bob@example.org"), url.into()))
+            .unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = &sent[..] else {
+            panic!("{sent:?}");
+        };
+        assert_eq!(m.type_, MessageType::Chat);
+        assert_eq!(oob_of(m).as_deref(), Some(url));
     }
 
     #[test]

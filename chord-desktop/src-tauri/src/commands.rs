@@ -297,6 +297,23 @@ pub async fn send_chat(state: State<'_, AppState>, to: String, body: String) -> 
     Ok(state.handle()?.send_chat(full(&to)?, body).await?)
 }
 
+/// Send a link that other clients show inline (XEP-0066), for example a GIF. Only an
+/// https URL. Returns the origin-id.
+#[tauri::command]
+pub async fn send_link(state: State<'_, AppState>, to: String, url: String) -> Res<String> {
+    let parsed = url::Url::parse(url.trim())
+        .map_err(|e| ChordError::invalid(format!("not a URL ({url:?}): {e}")))?;
+    if parsed.scheme() != "https" {
+        return Err(ChordError::invalid(
+            "only an https link can be sent as an embed",
+        ));
+    }
+    Ok(state
+        .handle()?
+        .send_link(full(&to)?, parsed.to_string())
+        .await?)
+}
+
 #[tauri::command]
 pub async fn edit_message(state: State<'_, AppState>, item_id: String, body: String) -> Res<()> {
     Ok(state.handle()?.edit_message(item_id, body).await?)

@@ -8,6 +8,7 @@
 mod avatars;
 mod commands;
 mod error;
+mod gif;
 mod keychain;
 mod link_preview;
 mod notify;
@@ -37,6 +38,7 @@ pub fn run() {
             commands::timeline_paginate_back,
             commands::events,
             commands::send_chat,
+            commands::send_link,
             commands::edit_message,
             commands::retract_message,
             commands::moderate_message,
@@ -91,6 +93,7 @@ pub fn run() {
             commands::push_registrations,
             link_preview::link_preview,
             link_preview::save_image,
+            gif::gif_search,
             settings::get_settings,
             settings::set_settings,
         ])

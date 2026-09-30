@@ -53,6 +53,11 @@ pub(crate) enum Command {
         body: String,
         reply: oneshot::Sender<Result<String, ClientError>>,
     },
+    SendLink {
+        to: Jid,
+        url: String,
+        reply: oneshot::Sender<Result<String, ClientError>>,
+    },
     SpaceList(oneshot::Sender<ViewStream<SpaceItem>>),
     ChannelList(ChannelScope, oneshot::Sender<ViewStream<ChannelItem>>),
     Timeline(
@@ -217,6 +222,16 @@ impl ClientHandle {
     pub async fn send_chat(&self, to: Jid, body: String) -> Result<String, ClientError> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::SendChat { to, body, reply })
+            .map_err(|_| ClientError::ActorGone)?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Send a link that clients show inline (XEP-0066), for example a GIF from a GIF
+    /// search. The file stays where it is: nothing goes to the upload service. Returns
+    /// the origin-id.
+    pub async fn send_link(&self, to: Jid, url: String) -> Result<String, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.send(Command::SendLink { to, url, reply })
             .map_err(|_| ClientError::ActorGone)?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
@@ -524,6 +539,14 @@ impl<S: Session> Actor<S> {
             Command::SendChat { to, body, reply } => {
                 let result = if self.online.is_some() {
                     self.with_ctx(|ctx| muc::send_chat(ctx, to, body))
+                } else {
+                    Err(ClientError::NotConnected)
+                };
+                let _ = reply.send(result);
+            }
+            Command::SendLink { to, url, reply } => {
+                let result = if self.online.is_some() {
+                    self.with_ctx(|ctx| muc::send_link(ctx, to, url))
                 } else {
                     Err(ClientError::NotConnected)
                 };
