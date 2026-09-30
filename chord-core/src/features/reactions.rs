@@ -11,6 +11,7 @@ use rusqlite::params;
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::reactions::{Reaction, Reactions};
+use xmpp_parsers::stanza_id::OriginId;
 
 use super::message_ext::{self, Incoming};
 use super::{Ctx, FeatureCommand, new_id, orphans};
@@ -190,7 +191,9 @@ fn react(ctx: &mut Ctx<'_>, item_id: &str, emojis: Vec<String>) -> Result<(), Cl
             .collect(),
     };
     let mut message = Message::new_with_type(type_, Some(to.clone())).with_payload(reactions);
-    message.id = Some(Id(new_id()));
+    let id = new_id();
+    message.id = Some(Id(id.clone()));
+    message.payloads.push(Element::from(OriginId { id }));
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
@@ -484,6 +487,16 @@ mod tests {
         let got: Vec<_> = r.reactions.iter().map(|r| r.emoji.as_str()).collect();
         assert_eq!(got, ["👍", "🎉"]);
         assert!(m.payloads.iter().any(|p| p.is("store", NS_HINTS)));
+        // XEP-0359: the origin-id equals the `id` of the message.
+        let origin = m
+            .payloads
+            .iter()
+            .find_map(|p| OriginId::try_from(p.clone()).ok())
+            .expect("an origin-id");
+        assert_eq!(
+            Some(origin.id.as_str()),
+            m.id.as_ref().map(|i| i.0.as_str())
+        );
         assert_eq!(
             senders(&h, row),
             vec![(ACCOUNT.into(), strs(&["👍", "🎉"]))]

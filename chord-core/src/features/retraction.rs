@@ -124,7 +124,7 @@ fn retract(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
     }
     let reference = match row.kind {
         MessageKind::Groupchat => row.stanza_id.clone(),
-        MessageKind::Chat => original_id(&row).map(str::to_owned),
+        MessageKind::Chat => retraction_id(&row).map(str::to_owned),
     }
     .ok_or_else(|| ClientError::Invalid("the message has no id to retract yet".into()))?;
     let mut message = new_message(&row, &peer).with_body("".into(), FALLBACK_BODY.into());
@@ -144,6 +144,13 @@ fn retract(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
     message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
     apply(ctx, &row, None);
     Ok(())
+}
+
+/// The id that a retraction of a chat message names (XEP-0424, section 6): the origin-id
+/// when the row has one, else the `id` attribute. A message that another device of ours
+/// sent can have two different values.
+fn retraction_id(row: &MessageRow) -> Option<&str> {
+    row.origin_id.as_deref().or_else(|| original_id(row))
 }
 
 /// A message that failed (RFC 6121, 8.5) never arrived, so there is nothing to retract.
@@ -460,6 +467,31 @@ mod tests {
         let r = row(&h, &item);
         assert!(r.retracted);
         assert_eq!(r.body, "");
+    }
+
+    #[test]
+    fn outgoing_retraction_in_a_chat_uses_the_origin_id() {
+        let mut h = Harness::new();
+        let item = store_row(
+            &h,
+            MessageKind::Chat,
+            Direction::Out,
+            BOB,
+            "alice@chord.localhost",
+            "m1",
+            None,
+        );
+        // Another device sent it with an `id` that differs from the origin-id.
+        h.store
+            .conn()
+            .execute("UPDATE messages SET message_id = 'other-id'", [])
+            .unwrap();
+        h.with_ctx(|ctx| retract(ctx, &item)).unwrap();
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(retracted_id(m).as_deref(), Some("m1"));
     }
 
     #[test]
