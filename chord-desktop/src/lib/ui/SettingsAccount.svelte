@@ -6,6 +6,7 @@
   import { app } from './app.svelte';
   import { api, live } from './bridge';
   import { plainError } from './adapt';
+  import { resizeAvatar } from '../chord/avatarResize';
   import { presenceKind } from './types';
   import { ui } from './ui.svelte';
 
@@ -26,8 +27,9 @@
       error = 'Pick an image file.';
       return;
     }
-    if (f.size > 1024 * 1024) {
-      error = 'The image is too big. Use one under 1 MB.';
+    // The app shrinks it to 256 by 256 before it goes out. This only stops a huge file.
+    if (f.size > 20 * 1024 * 1024) {
+      error = 'The image is too big. Use one under 20 MB.';
       return;
     }
     if (file) file.value = '';
@@ -41,12 +43,10 @@
   // Maps to api.setAvatar(mime, bytes, width, height).
   async function publish(f: File) {
     try {
-      const bitmap = await createImageBitmap(f);
-      const size = { w: bitmap.width, h: bitmap.height };
-      bitmap.close();
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      await (await api()).setAvatar(f.type, bytes, size.w, size.h);
-      app.me.avatar = URL.createObjectURL(f);
+      // At most 256 by 256, as PNG or JPEG, under 64 KiB (XEP-0084).
+      const small = await resizeAvatar(f);
+      await (await api()).setAvatar(small.mime, small.bytes, small.width, small.height);
+      app.me.avatar = URL.createObjectURL(new Blob([small.bytes as BlobPart], { type: small.mime }));
       ui.say('Avatar changed.');
     } catch (e) {
       error = plainError(e);

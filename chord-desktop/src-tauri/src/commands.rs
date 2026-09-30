@@ -946,7 +946,7 @@ pub async fn blocked_contacts(state: State<'_, AppState>) -> Res<Vec<BareJid>> {
 // ---------------------------------------------------------------- avatars, levels, push
 
 /// The largest avatar image that the UI may send, in bytes.
-const MAX_AVATAR_BYTES: usize = 1024 * 1024;
+const MAX_AVATAR_BYTES: usize = chord_core::features::avatars::MAX_PUBLISH_BYTES;
 
 /// Publish our avatar (XEP-0084, and the vCard photo for XEP-0153). The UI reads the
 /// image and its size in pixels.
@@ -959,7 +959,9 @@ pub async fn set_avatar(
     height: u16,
 ) -> Res<()> {
     if data.is_empty() || data.len() > MAX_AVATAR_BYTES || !mime.starts_with("image/") {
-        return Err(ChordError::invalid("use an image under 1 MB"));
+        return Err(ChordError::invalid(
+            "use an image under 64 KB: the app shrinks it first",
+        ));
     }
     Ok(state
         .handle()?
