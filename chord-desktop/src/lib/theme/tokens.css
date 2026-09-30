@@ -1,74 +1,78 @@
 /* Chord design tokens. The themes (src/lib/theme/themes/*.css) set the colours. */
 
-:root {
-  color-scheme: dark;
+/* The tokens sit in a cascade layer. A rule outside a layer always wins over a layered
+   one, so the active theme (theme.svelte.ts) wins in any load order. The preview page,
+   for example, loads this file after the theme. */
+@layer chord-tokens {
+  :root {
+    color-scheme: dark;
 
-  /* Surfaces */
-  --surface-100: #111316;
-  --surface-200: #181b20;
-  --surface-300: #21252b;
-  --line: #2e333b;
+    /* Surfaces */
+    --surface-100: #111316;
+    --surface-200: #181b20;
+    --surface-300: #21252b;
+    --line: #2e333b;
 
-  /* Text */
-  --ink: #ece8e1;
-  --ink-muted: #9aa0a8;
+    /* Text */
+    --ink: #ece8e1;
+    --ink-muted: #9aa0a8;
 
-  /* Brand */
-  --brand: #f2a93b;
-  --brand-soft: #3a2c16;
-  --on-brand: #1a1c20;
-  --brand-ink: #f2a93b; /* amber as text. Darker in light mode. */
+    /* Brand */
+    --brand: #f2a93b;
+    --brand-soft: #3a2c16;
+    --on-brand: #1a1c20;
+    --brand-ink: #f2a93b; /* amber as text. Darker in light mode. */
 
-  /* Accent and status */
-  --accent: #4cc3b5;
-  --online: #5bc46e;
-  --danger: #f0676b;
-  --on-danger: #1a1c20;
+    /* Accent and status */
+    --accent: #4cc3b5;
+    --online: #5bc46e;
+    --danger: #f0676b;
+    --on-danger: #1a1c20;
 
-  /* Interaction overlays */
-  --hover: color-mix(in srgb, var(--ink) 6%, transparent);
-  --press: color-mix(in srgb, var(--ink) 10%, transparent);
-  --selected: color-mix(in srgb, var(--ink) 12%, transparent);
-  --scrim: rgb(0 0 0 / 0.6);
+    /* Interaction overlays */
+    --hover: color-mix(in srgb, var(--ink) 6%, transparent);
+    --press: color-mix(in srgb, var(--ink) 10%, transparent);
+    --selected: color-mix(in srgb, var(--ink) 12%, transparent);
+    --scrim: rgb(0 0 0 / 0.6);
 
-  /* Type */
-  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --font-display: 'Bricolage Grotesque', 'IBM Plex Sans', system-ui, sans-serif;
+    /* Type */
+    --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    --font-display: 'Bricolage Grotesque', 'IBM Plex Sans', system-ui, sans-serif;
 
-  /* Spacing, 4px grid */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --space-8: 32px;
-  --space-16: 64px;
-  --space-24: 96px;
+    /* Spacing, 4px grid */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --space-16: 64px;
+    --space-24: 96px;
 
-  /* Radii */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 16px;
-  --radius-circle-icon: 16px; /* style guide radius-lg: circle icons */
+    /* Radii */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 16px;
+    --radius-circle-icon: 16px; /* style guide radius-lg: circle icons */
 
-  /* Motion */
-  --ease-out: cubic-bezier(0.2, 0, 0, 1);
-  --dur-fast: 120ms;
-  --dur-arrive: 240ms;
-  --dur-slow: 420ms;
+    /* Motion */
+    --ease-out: cubic-bezier(0.2, 0, 0, 1);
+    --dur-fast: 120ms;
+    --dur-arrive: 240ms;
+    --dur-slow: 420ms;
 
-  /* Layout */
-  --rail-width: 64px;
-  --sidebar-width: 240px;
-  --members-width: 240px;
-  --bar-height: 48px;
-  --panel-height: 52px;
+    /* Layout */
+    --rail-width: 64px;
+    --sidebar-width: 240px;
+    --members-width: 240px;
+    --bar-height: 48px;
+    --panel-height: 52px;
+  }
+
+  /* The colours above are Chord Dark, the default before the theme loads. The active theme
+     (theme.svelte.ts) puts its own tokens in a style element. */
+  :root[data-mode='light'] {
+    color-scheme: light;
+  }
 }
-
-/* The colours above are Chord Dark, the default before the theme loads. The active theme
-   (theme.svelte.ts) puts its own tokens in a style element after this file. */
-:root[data-mode='light'] {
-  color-scheme: light;
-}
-
