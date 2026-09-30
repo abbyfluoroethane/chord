@@ -330,6 +330,12 @@ export const contacts = () => invoke<Contact[]>('contacts');
 
 /** XEP-0191. Fails with an `unsupported` error when the server has no blocking support. */
 export const blockContact = (jid: string) => invoke<void>('block_contact', { jid });
+/**
+ * Block and report an address (XEP-0377). `reason` is "spam" or "abuse". A server that does
+ * not take reports gets a plain block. Resolves to true when the block carried the report.
+ */
+export const blockAndReport = (jid: string, reason: 'spam' | 'abuse') =>
+  invoke<boolean>('block_and_report', { jid, reason });
 export const unblockContact = (jid: string) => invoke<void>('unblock_contact', { jid });
 export const unblockAll = () => invoke<void>('unblock_all');
 /** Reads the stored copy of the blocklist, so it works offline. */
@@ -345,8 +351,15 @@ export const removeContact = (jid: string) => invoke<void>('remove_contact', { j
 /** Rename a contact in the roster. An empty name or null clears it. The groups stay. */
 export const renameContact = (jid: string, name: string | null) =>
   invoke<void>('rename_contact', { jid, name });
-/** Accept the request of a `subscriptionRequest` event. */
-export const approveSubscription = (jid: string) => invoke<void>('approve_subscription', { jid });
+/** Replace the groups of a contact. An empty list clears them. The name stays. */
+export const setContactGroups = (jid: string, groups: string[]) =>
+  invoke<void>('set_contact_groups', { jid, groups });
+/**
+ * Accept the request of a `subscriptionRequest` event. With `addBack` it also asks to see the
+ * presence of the contact, when you do not yet.
+ */
+export const approveSubscription = (jid: string, addBack?: boolean) =>
+  invoke<void>('approve_subscription', { jid, addBack: addBack ?? false });
 export const denySubscription = (jid: string) => invoke<void>('deny_subscription', { jid });
 export const preapproveSubscription = (jid: string) =>
   invoke<void>('preapprove_subscription', { jid });

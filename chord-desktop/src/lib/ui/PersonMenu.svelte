@@ -185,11 +185,30 @@
       });
     }
     if (!p.isMe) {
+      // A room that hides real addresses gives `room/nick`. That is not an address we can
+      // block, and the bare room address would block the whole room.
+      const hidden = p.address.includes('/');
+      const why = 'This room hides the real address of the person.';
       out.push(
         p.isBlocked
           ? { label: 'Unblock', icon: Ban, danger: true, onselect: () => contactsStore.unblock(p.address) }
-          : { label: 'Block', icon: Ban, danger: true, onselect: () => contactsStore.block(p.address) }
+          : {
+              label: 'Block',
+              icon: Ban,
+              danger: true,
+              disabled: hidden,
+              hint: hidden ? why : undefined,
+              onselect: () => contactsStore.block(p.address)
+            }
       );
+      if (!p.isBlocked && live && !hidden) {
+        out.push({
+          label: 'Block and report spam',
+          icon: Ban,
+          danger: true,
+          onselect: () => contactsStore.blockAndReport(p.address, 'spam')
+        });
+      }
     }
     out.push({ label: 'Copy address', icon: Copy, separator: true, onselect: copy });
     return out;

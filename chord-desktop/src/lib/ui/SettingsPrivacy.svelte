@@ -96,6 +96,9 @@
 
 <h2 class="section">Blocked addresses</h2>
 {#if contactsStore.blocked.length}
+  <div class="bar">
+    <button class="btn" onclick={() => contactsStore.unblockAll()}>Unblock all</button>
+  </div>
   <ul class="blocked">
     {#each contactsStore.blocked as b (b.address)}
       <li>
@@ -152,6 +155,11 @@
   .plain li {
     padding: var(--space-1) 0;
     color: var(--ink-muted);
+  }
+  .bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: var(--space-2);
   }
   .blocked li {
     display: flex;

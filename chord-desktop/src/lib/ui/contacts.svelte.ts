@@ -202,9 +202,12 @@ class ContactsStore {
     return { ok: true, message: `Request sent to ${address}.` };
   }
 
-  /** Accept an incoming request. Maps to api.approveSubscription(jid). */
-  accept(address: string) {
-    this.act(async (b) => b.approveSubscription(address));
+  /**
+   * Accept an incoming request. Maps to api.approveSubscription(jid, addBack). With `addBack`
+   * you also ask to see their presence, so they do not show as offline for ever.
+   */
+  accept(address: string, addBack = false) {
+    this.act(async (b) => b.approveSubscription(address, addBack));
     const item = this.incoming.find((c) => c.address === address);
     if (!item) return;
     this.incoming = this.incoming.filter((c) => c.address !== address);
@@ -267,6 +270,39 @@ class ContactsStore {
         since: null
       });
     }
+  }
+
+  /**
+   * Block and report an address as spam (XEP-0377). Maps to api.blockAndReport(jid, reason).
+   * A server that does not take reports gets a plain block, and the toast says so.
+   */
+  blockAndReport(address: string, reason: 'spam' | 'abuse' = 'spam') {
+    if (!live) {
+      this.block(address);
+      return;
+    }
+    void (async () => {
+      try {
+        const reported = await (await api()).blockAndReport(address, reason);
+        ui.say(
+          reported
+            ? `Blocked ${address} and reported it.`
+            : `Blocked ${address}. Your server does not take reports.`
+        );
+      } catch (e) {
+        const code = (e as { code?: string } | null)?.code;
+        ui.say(code === 'unsupported' ? 'Your server cannot block people.' : plainError(e));
+      }
+      await this.refresh();
+    })();
+    this.contacts = this.contacts.filter((c) => c.address !== address);
+    this.incoming = this.incoming.filter((c) => c.address !== address);
+  }
+
+  /** Maps to api.unblockAll(). */
+  unblockAll() {
+    this.act(async (b) => b.unblockAll(), 'Your server cannot block people.');
+    this.blocked = [];
   }
 
   /** Maps to api.unblockContact(jid). */

@@ -32,4 +32,25 @@ describe('contacts store', () => {
     c.unblock('jo@foid.space');
     expect(c.isBlocked('jo@foid.space')).toBe(false);
   });
+
+  it('unblocks everyone at once', () => {
+    c.block('jo@foid.space');
+    c.block('rin@foid.space');
+    c.unblockAll();
+    expect(c.blocked).toEqual([]);
+  });
+
+  it('accepts a request with add back', () => {
+    c.incoming.push({
+      address: 'kit@chord.example',
+      name: 'kit',
+      avatar: null,
+      show: null,
+      online: false,
+      status: null,
+      since: null
+    });
+    c.accept('kit@chord.example', true);
+    expect(c.isContact('kit@chord.example')).toBe(true);
+  });
 });

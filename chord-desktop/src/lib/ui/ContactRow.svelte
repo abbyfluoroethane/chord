@@ -3,6 +3,7 @@
   import Check from 'lucide-svelte/icons/check';
   import Ellipsis from 'lucide-svelte/icons/ellipsis';
   import MessageSquare from 'lucide-svelte/icons/message-square';
+  import UserPlus from 'lucide-svelte/icons/user-plus';
   import ShieldOff from 'lucide-svelte/icons/shield-off';
   import X from 'lucide-svelte/icons/x';
   import Avatar from './Avatar.svelte';
@@ -82,6 +83,12 @@
       />
     {:else if kind === 'incoming'}
       <RoundButton icon={Check} label="Accept" tone="good" onclick={() => contactsStore.accept(item.address)} />
+      <RoundButton
+        icon={UserPlus}
+        label="Accept and add back"
+        tone="good"
+        onclick={() => contactsStore.accept(item.address, true)}
+      />
       <RoundButton icon={X} label="Ignore" tone="danger" onclick={() => contactsStore.ignore(item.address)} />
     {:else if kind === 'outgoing'}
       <RoundButton icon={X} label="Cancel" tone="danger" onclick={() => contactsStore.cancel(item.address)} />
