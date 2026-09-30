@@ -25,6 +25,7 @@ pub mod file_sharing;
 pub mod jmi;
 pub mod mam;
 pub mod markers;
+pub mod mds;
 pub mod message_ext;
 pub mod muc;
 pub mod notify;
@@ -32,6 +33,7 @@ pub mod orphans;
 pub mod owner_form;
 pub mod pins;
 pub mod presence;
+pub mod profile;
 pub mod pubsub;
 pub mod push;
 pub mod reactions;
@@ -106,6 +108,8 @@ pub(crate) enum Pending {
     Pins(pins::Pending),
     Register(register::Pending),
     OwnerForm(owner_form::Pending),
+    Mds(mds::Pending),
+    Profile(profile::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -149,6 +153,7 @@ pub(crate) struct FeatureState {
     pub extdisco: extdisco::State,
     pub jmi: jmi::State,
     pub presence: presence::State,
+    pub mds: mds::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -180,6 +185,7 @@ pub(crate) enum FeatureCommand {
     Pins(pins::Command),
     Register(register::Command),
     OwnerForm(owner_form::Command),
+    Profile(profile::Command),
 }
 
 /// Everything a feature function can use.
@@ -291,6 +297,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     mam::on_connected(ctx);
     muc::on_connected(ctx);
     markers::on_connected(ctx);
+    mds::on_connected(ctx);
     spaces::on_connected(ctx);
     avatars::on_connected(ctx);
     csi::on_connected(ctx, stream_features);
@@ -413,6 +420,8 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Pins(p) => pins::on_response(ctx, p, response),
         Pending::Register(p) => register::on_response(ctx, p, response),
         Pending::OwnerForm(p) => owner_form::on_response(ctx, p, response),
+        Pending::Mds(p) => mds::on_response(ctx, p, response),
+        Pending::Profile(p) => profile::on_response(ctx, p, response),
     }
 }
 
@@ -486,6 +495,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Pins(c) => pins::on_command(ctx, c),
         FeatureCommand::Register(c) => register::on_command(ctx, c),
         FeatureCommand::OwnerForm(c) => owner_form::on_command(ctx, c),
+        FeatureCommand::Profile(c) => profile::on_command(ctx, c),
     }
 }
 
@@ -535,6 +545,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Pins(c) => pins::offline(store, account_id, c),
         FeatureCommand::Register(c) => register::offline(c),
         FeatureCommand::OwnerForm(c) => owner_form::offline(c),
+        FeatureCommand::Profile(c) => profile::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.

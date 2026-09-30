@@ -9,6 +9,7 @@ use chord_core::actor;
 use chord_core::actor::ClientEvent;
 use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomRole, RoomSettings};
 use chord_core::features::notify::{NotificationLevel, NotificationSetting};
+use chord_core::features::profile::Profile;
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
 use chord_core::features::spaces::{
@@ -821,6 +822,16 @@ pub async fn add_contact(
         }
         None => handle.add_contact(bare(&jid)?, name).await?,
     })
+}
+
+#[tauri::command]
+pub async fn set_nickname(state: State<'_, AppState>, nickname: Option<String>) -> Res<()> {
+    Ok(state.handle()?.set_nickname(nickname).await?)
+}
+
+#[tauri::command]
+pub async fn profile(state: State<'_, AppState>, jid: String) -> Res<Profile> {
+    Ok(state.handle()?.profile(bare(&jid)?).await?)
 }
 
 #[tauri::command]

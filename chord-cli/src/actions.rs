@@ -383,6 +383,9 @@ pub async fn space_add_room(client: &Client, args: &[&str]) -> Result<(), CliErr
         .add_room_to_space(service, node, room.clone(), &name)
         .await
         .map_err(err)?;
+    // The core goes on in the background: it reads the room config form and sets the
+    // space field (XEP-0503), and it grants the members of the space. Stay online for it.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     println!("added {room} to {service} {node}");
     Ok(())
 }
@@ -1142,6 +1145,57 @@ pub async fn pins(opts: &Opts, client: &Client, chat: Option<&str>) -> Result<()
         for p in &list {
             println!("  {} {} {}: {}", p.chat, p.key, p.sender, p.body);
         }
+    }
+    Ok(())
+}
+
+/// `profile [jid]`: read the nickname (XEP-0172) and the vCard4 name (XEP-0292) of an
+/// account. With no JID, our own account.
+pub async fn profile(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let jid = match args {
+        [] => client
+            .bound_jid
+            .as_ref()
+            .map(Jid::to_bare)
+            .ok_or_else(|| CliError::from("no session".to_owned()))?,
+        [jid] => bare(jid)?,
+        _ => return Err("usage: profile [jid]".to_owned().into()),
+    };
+    let profile = client.handle.profile(jid.clone()).await.map_err(err)?;
+    if opts.json {
+        println!(
+            "{}",
+            Obj::new()
+                .str("jid", jid.as_str())
+                .opt_str("nickname", profile.nickname.as_deref())
+                .opt_str("fullName", profile.full_name.as_deref())
+                .finish()
+        );
+    } else {
+        println!(
+            "{jid} nickname={} full-name={}",
+            profile.nickname.as_deref().unwrap_or("-"),
+            profile.full_name.as_deref().unwrap_or("-")
+        );
+    }
+    Ok(())
+}
+
+/// `set-nickname <text>` or `set-nickname --remove`: publish our nickname (XEP-0172).
+pub async fn set_nickname(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let nickname = match args {
+        ["--remove"] => None,
+        [] => return Err("usage: set-nickname <text> | --remove".to_owned().into()),
+        words => Some(words.join(" ")),
+    };
+    client
+        .handle
+        .set_nickname(nickname.clone())
+        .await
+        .map_err(err)?;
+    match nickname {
+        Some(n) => println!("nickname set to {n}"),
+        None => println!("nickname removed"),
     }
     Ok(())
 }

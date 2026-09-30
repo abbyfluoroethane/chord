@@ -28,6 +28,7 @@ import type {
   OwnPresence,
   PendingJoin,
   Pin,
+  Profile,
   PushRegistration,
   RegistrationForm,
   RegistrationSubmission,
@@ -338,6 +339,10 @@ export const blockedContacts = () => invoke<Jid[]>('blocked_contacts');
 /** `preauth` is the XEP-0379 token of a `?roster;preauth=` link. */
 export const addContact = (jid: string, name?: string, preauth?: string) =>
   invoke<void>('add_contact', { jid, name: name ?? null, preauth: preauth ?? null });
+/** Publish our nickname (XEP-0172). An empty text removes it. */
+export const setNickname = (nickname: string | null) => invoke<void>('set_nickname', { nickname });
+/** The nickname and the vCard4 name of an account. Both can be null. */
+export const profile = (jid: Jid) => invoke<Profile>('profile', { jid });
 export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });
 /** Rename a contact in the roster. An empty name or null clears it. The groups stay. */
 export const renameContact = (jid: string, name: string | null) =>

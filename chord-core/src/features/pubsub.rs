@@ -3,6 +3,7 @@
 //! Routing of `<event/>` messages:
 //! - node `urn:xmpp:bookmarks:1` from our own account: `bookmarks::on_event`,
 //! - node `urn:chord:pins:0` from our own account: `pins::on_event`,
+//! - node `urn:xmpp:mds:displayed:0` from our own account: `mds::on_event`,
 //! - node `urn:xmpp:avatar:metadata` (PEP of any contact): `avatars::on_metadata_event`,
 //! - node `http://jabber.org/protocol/tune` (PEP of any contact): `tune::on_event`,
 //! - a data form `subscribe_authorization` from the pubsub service: `spaces::on_authorization`,
@@ -12,10 +13,11 @@ use jid::Jid;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::pubsub::event::{Event, Payload};
 
-use super::{Ctx, avatars, bookmarks, pins, spaces, tune};
+use super::{Ctx, avatars, bookmarks, mds, pins, spaces, tune};
 
 pub const NODE_BOOKMARKS: &str = "urn:xmpp:bookmarks:1";
 pub const NODE_AVATAR_METADATA: &str = "urn:xmpp:avatar:metadata";
+pub const NODE_MDS: &str = mds::NODE_MDS;
 
 /// A message that carries a pubsub event (also PEP). Returns true if it is one.
 pub(crate) fn on_event(ctx: &mut Ctx<'_>, message: &Message) -> bool {
@@ -49,6 +51,13 @@ pub(crate) fn on_event(ctx: &mut Ctx<'_>, message: &Message) -> bool {
                 pins::on_event(ctx, event.payload);
             } else {
                 log::warn!("dropped a pins event from {from}: not our account");
+            }
+        }
+        NODE_MDS => {
+            if from.to_bare() == *ctx.account {
+                mds::on_event(ctx, event.payload);
+            } else {
+                log::warn!("dropped an MDS event from {from}: not our account");
             }
         }
         NODE_AVATAR_METADATA => avatars::on_metadata_event(ctx, &from.to_bare(), event.payload),

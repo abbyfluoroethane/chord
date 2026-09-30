@@ -122,6 +122,8 @@ pub fn run() {
             commands::unblock_all,
             commands::blocked_contacts,
             commands::add_contact,
+            commands::set_nickname,
+            commands::profile,
             commands::remove_contact,
             commands::rename_contact,
             commands::approve_subscription,

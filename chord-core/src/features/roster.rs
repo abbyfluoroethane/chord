@@ -328,7 +328,10 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
 /// The XEP-0379 element of a subscription request.
 fn preauth_element(token: &str) -> xmpp_parsers::minidom::Element {
     xmpp_parsers::minidom::Element::builder("preauth", NS_PARS)
-        .attr(NcName::try_from("token").expect("a valid attribute name"), token)
+        .attr(
+            NcName::try_from("token").expect("a valid attribute name"),
+            token,
+        )
         .build()
 }
 
@@ -1495,11 +1498,24 @@ mod tests {
             panic!("{sent:?}")
         };
         assert_eq!(p.type_, Type::Subscribe);
-        let el = p.payloads.iter().find(|e| e.is("preauth", NS_PARS)).unwrap();
+        let el = p
+            .payloads
+            .iter()
+            .find(|e| e.is("preauth", NS_PARS))
+            .unwrap();
         assert_eq!(el.attr("token"), Some("tok&en"));
         // A later plain add sends no token.
         let (reply, _answer) = oneshot::channel();
-        h.with_ctx(|ctx| on_command(ctx, Command::Add { jid: bare(BOB), name: None, reply }));
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Add {
+                    jid: bare(BOB),
+                    name: None,
+                    reply,
+                },
+            )
+        });
         h.sent_iqs();
         h.answer(is_add, None);
         let sent = h.take_sent();

@@ -293,7 +293,10 @@ fn start_refreshes_each_service_in_the_spaces_table() {
     let mut to: Vec<String> = sent.iter().map(|i| i.to().unwrap().to_string()).collect();
     to.sort();
     assert_eq!(to, ["pubsub.chord.localhost", "spaces.other.example"]);
-    assert!(sent.iter().all(|i| payload_of(i).contains("<subscriptions")));
+    assert!(
+        sent.iter()
+            .all(|i| payload_of(i).contains("<subscriptions"))
+    );
     // The other service lists the space: it gets its info request.
     h.answer(
         |p| matches!(p, FeaturePending::Spaces(Pending::Subscriptions { service }) if service.as_str() == "spaces.other.example"),
@@ -354,7 +357,10 @@ fn a_gone_node_drops_the_space_and_tells_the_user() {
     h.respond(is_info, not_found());
     let notes = notices(&mut h);
     assert_eq!(notes.len(), 1);
-    assert!(notes[0].contains("dev") && notes[0].contains("no longer exists"), "{notes:?}");
+    assert!(
+        notes[0].contains("dev") && notes[0].contains("no longer exists"),
+        "{notes:?}"
+    );
     assert!(column(&h, "SELECT node FROM spaces").is_empty());
 }
 
@@ -2300,7 +2306,9 @@ fn adding_a_room_sets_the_pubsub_field_of_the_room() {
     h.take_sent();
     h.answer(
         is_room_config,
-        Some(room_form("<field var='muc#roomconfig_pubsub' type='text-single'/>")),
+        Some(room_form(
+            "<field var='muc#roomconfig_pubsub' type='text-single'/>",
+        )),
     );
     let sent = h.sent_iqs();
     let [iq] = &sent[..] else {
@@ -2309,7 +2317,7 @@ fn adding_a_room_sets_the_pubsub_field_of_the_room() {
     assert!(matches!(iq, Iq::Set { .. }));
     assert_eq!(iq.to().unwrap().as_str(), "new@rooms.chord.localhost");
     let text = payload_of(iq);
-    assert!(text.contains("type=\"submit\""), "{text}");
+    assert!(text.contains("type='submit'"), "{text}");
     assert!(text.contains("muc#roomconfig_pubsub"), "{text}");
     assert!(
         text.contains("<value>xmpp:pubsub.chord.localhost?;node=dev</value>"),

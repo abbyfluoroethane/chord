@@ -68,10 +68,22 @@
     }
   }
 
-  function save() {
-    // The core cannot change the display name yet. Inside the app the field is read-only.
-    app.me.name = name.trim();
-    ui.say('Saved.');
+  // Maps to api.setNickname(name): publishes the nickname (XEP-0172) to our own PEP.
+  async function save() {
+    const next = name.trim();
+    if (!live) {
+      app.me.name = next;
+      ui.say('Saved.');
+      return;
+    }
+    error = '';
+    try {
+      await (await api()).setNickname(next);
+      app.me.name = next;
+      ui.say('Saved.');
+    } catch (e) {
+      error = plainError(e);
+    }
   }
 </script>
 
@@ -114,12 +126,11 @@
         class="input grow"
         maxlength="40"
         bind:value={name}
-        readonly={live}
       />
-      <button class="btn btn-primary" disabled={live || !changed} onclick={save}>Save</button>
+      <button class="btn btn-primary" disabled={!changed} onclick={save}>Save</button>
     </div>
     {#if live}
-      <span class="meta">You cannot change your display name yet. Others see your address.</span>
+      <span class="meta">Your contacts whose apps read nicknames see this name.</span>
     {/if}
   </div>
 

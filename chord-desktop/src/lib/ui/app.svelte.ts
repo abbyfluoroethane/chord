@@ -927,6 +927,18 @@ class AppState {
     }
   }
 
+  /** Read our display name from the server (nickname or vCard4 name). Maps to api.profile. */
+  async loadProfile() {
+    if (!live || !this.me.address) return;
+    try {
+      const p = await (await api()).profile(this.me.address);
+      const name = p.nickname ?? p.fullName;
+      if (name) this.me.name = name;
+    } catch {
+      /* keep the name from the address */
+    }
+  }
+
   private async pushPresence() {
     if (!live) return;
     const done = await this.call((b) => b.setPresence(toAvailability(this.me.show), this.me.status));

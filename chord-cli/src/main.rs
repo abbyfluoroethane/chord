@@ -46,6 +46,8 @@
 //!   contact-rename <jid> [name]   rename a contact in the roster (no name: clear it)
 //!   idle <seconds-ago>|off [hold-secs]   send idle time (XEP-0319), then stay online for hold-secs (default 5)
 //!   --wait <secs>                   anywhere in the arguments: stay online that long before the command runs
+//!   profile [jid]                   nickname and vCard4 name of an account (XEP-0172, XEP-0292)
+//!   set-nickname <text>|--remove    publish our nickname (XEP-0172)
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!   adhoc <jid> <node> [name=value ...]   run a one-step ad-hoc command (XEP-0050)
@@ -126,7 +128,8 @@ adhoc <jid> <node> [name=value ...] | adhoc-list <jid> | adhoc-run <jid> <node> 
 room-form <room> [name=value ...] | passwd | register-form | register [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
 call-answer accept|reject [reason] [--ring] | call-watch [--secs N] | \
 notify <jid> [all|mentions|none [--until <unix-ms>]] | \
-presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>]";
+presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>] | \
+profile [jid] | set-nickname <text>|--remove";
 
 /// Global options.
 pub struct Opts {
@@ -339,6 +342,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "call",
         "call-answer",
         "call-watch",
+        "profile",
+        "set-nickname",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
@@ -423,6 +428,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("space-deny", [service, node, jid]) => {
             actions::space_answer(&client, service, node, jid, false).await
         }
+        ("profile", args) => actions::profile(opts, &client, args).await,
+        ("set-nickname", args) => actions::set_nickname(&client, args).await,
         ("contacts", []) => actions::contacts(opts, &client).await,
         ("block", [jid]) => actions::block(&client, jid).await,
         ("unblock", args) => actions::unblock(&client, args).await,

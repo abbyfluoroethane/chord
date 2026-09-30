@@ -743,6 +743,23 @@ impl ChordClient {
         Ok(presence.into())
     }
 
+    // ---- Profile ----
+
+    /// Publish our nickname (XEP-0172). `None` or an empty text removes it.
+    pub async fn set_nickname(&self, nickname: Option<String>) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.set_nickname(nickname).await })
+            .await
+    }
+
+    /// Read the nickname and the vCard4 name of an account (XEP-0172, XEP-0292).
+    pub async fn profile(&self, jid: String) -> Result<Profile, ChordError> {
+        let jid = parse_bare(&jid)?;
+        let profile = self
+            .call(move |h| async move { h.profile(jid).await })
+            .await?;
+        Ok(profile.into())
+    }
+
     // ---- Roster ----
 
     /// Add a contact and ask to see its presence.

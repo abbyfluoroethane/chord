@@ -98,6 +98,7 @@ class LiveController {
     const gen = ++this.generation;
     this.root = $effect.root(() => this.effects());
     void app.loadPresence();
+    void app.loadProfile();
     void emojiPacks.load();
     const track = async <T extends ViewSubscription>(p: Promise<T>): Promise<T> => {
       const sub = await p;

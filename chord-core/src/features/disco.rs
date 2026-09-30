@@ -40,6 +40,8 @@ pub const FEATURES: &[&str] = &[
     "urn:chord:pins:0+notify",
     // Tunes (XEP-0118): Chord shows what a contact plays. It publishes none.
     "http://jabber.org/protocol/tune+notify",
+    // Message Displayed Synchronization (XEP-0490): we publish and read the node.
+    "urn:xmpp:mds:displayed:0+notify",
     "http://jabber.org/protocol/chatstates",
     // Markers (XEP-0333): every message is markable, and `mark_read` sends displayed.
     "urn:xmpp:chat-markers:0",
@@ -288,7 +290,7 @@ mod tests {
         // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
         // not from the code under test. Update it when `FEATURES` changes.
         let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "2b6cb36ebcfd101a63d7a5e0872dc6ee71e51de5");
+        assert_eq!(hex, "35236609ea3174a720ae8660d541b8401f2c16f6");
     }
 
     #[test]

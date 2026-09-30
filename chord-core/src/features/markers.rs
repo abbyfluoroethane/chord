@@ -394,6 +394,10 @@ fn send_marker(ctx: &mut Ctx<'_>, peer: &str, to: &Jid, newest: &Newest) {
         mark_sent(ctx, peer, newest.rowid);
         return;
     };
+    // XEP-0490: tell our other devices, also the ones that are offline now.
+    if let Some(stanza_id) = &newest.stanza_id {
+        super::mds::publish(ctx, peer, newest.kind, stanza_id);
+    }
     message.id = Some(Id(new_id()));
     message.payloads.push(
         Element::builder("displayed", NS_MARKERS)
@@ -469,9 +473,11 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
 pub(crate) fn after_store(
     ctx: &mut Ctx<'_>,
     incoming: &Incoming<'_>,
-    _stored: &StoredMessage,
+    stored: &StoredMessage,
     live: bool,
 ) {
+    // Another device may have read this message already (XEP-0490).
+    super::mds::on_stored(ctx, stored);
     let message = incoming.message;
     if !live
         || incoming.direction != Direction::In
@@ -531,6 +537,28 @@ pub(crate) fn request_payload() -> Element {
     Element::builder("request", NS_RECEIPTS).build()
 }
 
+/// Another device read `peer` up to the message `rowid` (XEP-0490). Move the read position
+/// there, never back. A marker is out already, so `on_connected` sends none.
+pub(crate) fn apply_remote_read(ctx: &mut Ctx<'_>, peer: &str, rowid: i64, kind: MessageKind) {
+    let before = ctx
+        .store
+        .conn()
+        .query_row(
+            "SELECT last_read FROM read_state WHERE account_id = ?1 AND peer = ?2",
+            params![ctx.account_id, peer],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .unwrap_or(None);
+    if let Err(e) = set_last_read(ctx.store, ctx.account_id, peer, rowid, true) {
+        ctx.store_error("apply a read position from another device", e);
+        return;
+    }
+    if before.is_none_or(|n| n < rowid) {
+        changed_channel_list(ctx, peer, kind);
+    }
+}
+
 /// Payloads for every outgoing message: `<markable/>`.
 pub(crate) fn outgoing_payloads(_ctx: &mut Ctx<'_>) -> Vec<Element> {
     vec![Element::builder("markable", NS_MARKERS).build()]
@@ -578,6 +606,36 @@ mod tests {
             .unwrap()
             .unwrap()
             .rowid
+    }
+
+    /// The messages among the sent stanzas. `mark_read` also publishes an MDS item.
+    fn messages_only(sent: Vec<Stanza>) -> Vec<Stanza> {
+        sent.into_iter()
+            .filter(|s| matches!(s, Stanza::Message(_)))
+            .collect()
+    }
+
+    #[test]
+    fn mark_read_publishes_the_mds_item_with_the_stanza_id() {
+        let mut h = Harness::new();
+        put(&h, "s5", Direction::In, MessageKind::Groupchat, ROOM);
+        let room = BareJid::new(ROOM).unwrap();
+        h.state.muc.nicks.insert(room, "alice".into());
+        h.with_ctx(|ctx| mark_read(ctx, ROOM)).unwrap();
+        let iqs = h.sent_iqs();
+        let [xmpp_parsers::iq::Iq::Set { payload, .. }] = &iqs[..] else {
+            panic!("{iqs:?}")
+        };
+        let text = String::from(payload);
+        assert!(text.contains("urn:xmpp:mds:displayed:0"), "{text}");
+        assert!(
+            text.contains("id=\"s5\"") || text.contains("id='s5'"),
+            "{text}"
+        );
+        // A chat message that has no stanza-id publishes nothing.
+        put(&h, "o1", Direction::In, MessageKind::Chat, PEER);
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        assert!(h.sent_iqs().is_empty());
     }
 
     fn marker(name: &str, ns: &str, id: &str) -> Message {
@@ -909,7 +967,7 @@ mod tests {
         put(&h, "s9", Direction::In, MessageKind::Groupchat, ROOM);
         h.state.muc.nicks.insert(room.clone(), "alice".into());
         h.with_ctx(|ctx| mark_read(ctx, room.as_str())).unwrap();
-        let sent = h.take_sent();
+        let sent = messages_only(h.take_sent());
         let Stanza::Message(m) = &sent[0] else {
             panic!()
         };
@@ -1129,7 +1187,7 @@ mod tests {
         // The room is joined: the marker goes out.
         h.state.muc.nicks.insert(room, "alice".into());
         h.with_ctx(on_connected);
-        let sent = h.take_sent();
+        let sent = messages_only(h.take_sent());
         let [Stanza::Message(m)] = sent.as_slice() else {
             panic!("{sent:?}")
         };

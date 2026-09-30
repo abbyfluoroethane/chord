@@ -318,6 +318,12 @@ export type InvisibleMethod = 'command' | 'privacyList';
 /** Our availability. Matches chord-core presence::Availability. */
 export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway' | 'invisible';
 
+/** What an account tells about itself: the nickname (XEP-0172) and the vCard4 name (XEP-0292). */
+export interface Profile {
+  nickname: string | null;
+  fullName: string | null;
+}
+
 export interface OwnPresence {
   availability: Availability;
   status: string | null;

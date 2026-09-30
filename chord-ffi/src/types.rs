@@ -618,6 +618,22 @@ impl From<core_presence::OwnPresence> for OwnPresence {
     }
 }
 
+/// What an account tells about itself (XEP-0172 nickname, XEP-0292 vCard4 name).
+#[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
+pub struct Profile {
+    pub nickname: Option<String>,
+    pub full_name: Option<String>,
+}
+
+impl From<chord_core::features::profile::Profile> for Profile {
+    fn from(p: chord_core::features::profile::Profile) -> Self {
+        Self {
+            nickname: p.nickname,
+            full_name: p.full_name,
+        }
+    }
+}
+
 /// How much a chat, room, or private chat may notify.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum NotificationLevel {

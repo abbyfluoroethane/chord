@@ -1652,7 +1652,10 @@ fn request_room_config(ctx: &mut Ctx<'_>, room: BareJid, uri: String) {
         id: String::new(),
         payload: Element::builder("query", NS_MUC_OWNER).build(),
     };
-    ctx.request(iq, FeaturePending::Spaces(Pending::RoomConfig { room, uri }));
+    ctx.request(
+        iq,
+        FeaturePending::Spaces(Pending::RoomConfig { room, uri }),
+    );
 }
 
 /// The submit of the pubsub field, or `None` if the form has no such field, or it has
