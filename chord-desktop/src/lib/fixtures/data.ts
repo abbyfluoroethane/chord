@@ -11,6 +11,7 @@ import type {
   TimelineItem
 } from '$lib/ui/types';
 import { spaceKey } from '$lib/ui/types';
+import rangeClip from './range-walkthrough.mp4';
 
 export const me: Me = {
   address: 'abby@foid.space',
@@ -326,6 +327,20 @@ const opsGeneral = build([
       size: 16_044,
       width: null,
       height: null
+    }
+  },
+  {
+    id: 'g7d',
+    who: 'jo',
+    ts: at(0, 10, 40),
+    body: 'Walkthrough of the new stand.',
+    attachment: {
+      url: rangeClip,
+      name: 'range-walkthrough.mp4',
+      mime: 'video/mp4',
+      size: 26_631,
+      width: 640,
+      height: 360
     }
   },
   { id: 'g8', who: 'sam', ts: at(0, 10, 3), body: 'Full run sheet is here if you want it.', attachment: {

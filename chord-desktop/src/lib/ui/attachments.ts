@@ -2,18 +2,38 @@
 import { plainError } from './adapt';
 import { app } from './app.svelte';
 import { api, live } from './bridge';
-import { openLightbox } from './lightbox';
+import { openLightbox, type LightboxItem } from './lightbox';
 import type { Attachment } from './types';
 import { ui } from './ui.svelte';
 
-/** Open the lightbox on an image. It pages through every image of the open channel. */
-export function viewImage(file: Attachment): void {
-  const images = app.items
+/** How a video opens in the viewer: where the chat player stopped, and how to go back. */
+export interface VideoHandoff {
+  startAt: number;
+  playing: boolean;
+  onclose: (time: number) => void;
+}
+
+/**
+ * Open the viewer on a photo or a video. It pages through every photo and video of the
+ * open channel.
+ */
+export function viewMedia(file: Attachment, handoff?: VideoHandoff): void {
+  const items: LightboxItem[] = app.items
     .map((m) => m.attachment)
-    .filter((a): a is Attachment => !!a && a.mime.startsWith('image/'))
-    .map((a) => ({ src: a.url, alt: a.name }));
-  const index = images.findIndex((i) => i.src === file.url);
-  void openLightbox(images, index);
+    .filter((a): a is Attachment => !!a && /^(image|video)\//.test(a.mime))
+    .map((a) => ({
+      kind: a.mime.startsWith('video/') ? 'video' : 'image',
+      src: a.url,
+      alt: a.name,
+      ...(a.url === file.url ? handoff : {})
+    }));
+  const index = items.findIndex((i) => i.src === file.url);
+  void openLightbox(items, index);
+}
+
+/** Open the viewer on a photo. */
+export function viewImage(file: Attachment): void {
+  viewMedia(file);
 }
 
 /**

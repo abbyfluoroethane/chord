@@ -18,7 +18,7 @@
   const label = $derived(preview.title ?? preview.siteName ?? preview.url);
 
   function view() {
-    if (image) void openLightbox([{ src: image, alt: label }], 0);
+    if (image) void openLightbox([{ kind: 'image', src: image, alt: label }], 0);
   }
 </script>
 

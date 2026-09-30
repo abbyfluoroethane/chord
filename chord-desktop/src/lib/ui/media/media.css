@@ -1,0 +1,299 @@
+/* The Chord media player, to the style guide:
+   - cards: surface-200, a 1px line border, the 16px corner (radius-lg);
+   - buttons: 32px, radius-md, hover and focus in 120ms;
+   - the time: the meta type, IBM Plex Sans 500 12/16 at +0.02em, tabular figures;
+   - icons: Lucide at a 1.5px line;
+   - motion: arrive in 240ms and leave in 120ms, ease-out, no bounce. Reduced motion
+     stops all of it.
+   The elements get their state as data attributes at run time, so these rules are global. */
+
+video-player.chord-media,
+audio-player.chord-media {
+  display: block;
+}
+
+.chord-media .cm-surface {
+  position: relative;
+  display: block;
+  color: var(--ink);
+  font-family: var(--font-sans);
+}
+
+/* --- video ------------------------------------------------------------ */
+
+.chord-media .cm-video {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.chord-media[data-surface='chat'] .cm-video {
+  background: var(--surface-200);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.chord-media .cm-video video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* The play button in the middle, while the video is paused. */
+.chord-media .cm-big-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  /* The play triangle looks centred with 2px more on the left. */
+  padding-left: 2px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface-100) 88%, transparent);
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+.chord-media .cm-big-play:hover {
+  background: var(--surface-300);
+}
+.chord-media .cm-big-play:defined:not([data-paused]) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The control bar floats on the video as a small card. */
+.chord-media .cm-video .cm-content {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  left: var(--space-2);
+  pointer-events: none;
+  transition: opacity var(--dur-arrive) var(--ease-out);
+}
+.chord-media .cm-video .cm-content:not([data-visible]) {
+  opacity: 0;
+  transition-duration: var(--dur-fast);
+}
+.chord-media .cm-video .cm-bar {
+  height: 40px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-200) 92%, transparent);
+  pointer-events: auto;
+}
+
+/* --- audio ------------------------------------------------------------ */
+
+.chord-media .cm-audio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-1) var(--space-3);
+  background: var(--surface-200);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.chord-media .cm-name {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chord-media .cm-audio .cm-bar {
+  height: 32px;
+  margin-left: calc(-1 * var(--space-2));
+}
+
+/* --- the bar ---------------------------------------------------------- */
+
+.chord-media .cm-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.chord-media .cm-button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.chord-media .cm-button:hover {
+  background: var(--hover);
+}
+.chord-media .cm-button:active {
+  background: var(--press);
+}
+.chord-media .cm-button > span {
+  display: grid;
+}
+
+/* Play, pause, replay. */
+.chord-media media-play-button .cm-when-playing,
+.chord-media media-play-button .cm-when-ended,
+.chord-media media-play-button:not([data-paused]) .cm-when-paused,
+.chord-media media-play-button[data-ended] .cm-when-paused {
+  display: none;
+}
+.chord-media media-play-button:not([data-paused]):not([data-ended]) .cm-when-playing,
+.chord-media media-play-button[data-ended] .cm-when-ended {
+  display: grid;
+}
+
+/* Volume icon by level. */
+.chord-media media-mute-button .cm-vol-off,
+.chord-media media-mute-button .cm-vol-low {
+  display: none;
+}
+.chord-media media-mute-button[data-volume-level='off'] .cm-vol-off,
+.chord-media media-mute-button[data-muted] .cm-vol-off,
+.chord-media media-mute-button[data-volume-level='low']:not([data-muted]) .cm-vol-low,
+.chord-media media-mute-button[data-volume-level='medium']:not([data-muted]) .cm-vol-low {
+  display: grid;
+}
+.chord-media media-mute-button[data-volume-level='off'] .cm-vol-high,
+.chord-media media-mute-button[data-muted] .cm-vol-high,
+.chord-media media-mute-button[data-volume-level='low'] .cm-vol-high,
+.chord-media media-mute-button[data-volume-level='medium'] .cm-vol-high {
+  display: none;
+}
+
+.chord-media .cm-time {
+  flex: none;
+  min-width: 32px;
+  padding: 0 var(--space-1);
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Sliders: a 4px line track, the amber fill, and a thumb that shows on hover or focus. */
+.chord-media .cm-slider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 24px;
+  cursor: pointer;
+  touch-action: none;
+}
+.chord-media .cm-seek {
+  flex: 1;
+  min-width: 48px;
+  margin: 0 var(--space-1);
+}
+.chord-media .cm-volume {
+  flex: 0 0 64px;
+  margin-right: var(--space-2);
+}
+.chord-media .cm-track {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--line);
+}
+.chord-media .cm-buffer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--media-slider-buffer);
+  height: 100%;
+  background: color-mix(in srgb, var(--ink-muted) 45%, transparent);
+}
+.chord-media .cm-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--media-slider-fill);
+  height: 100%;
+  background: var(--brand);
+}
+.chord-media .cm-thumb {
+  position: absolute;
+  left: var(--media-slider-fill);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--brand);
+  transform: translateX(-50%) scale(0);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.chord-media .cm-slider[data-interactive] .cm-thumb,
+.chord-media .cm-slider:focus-visible .cm-thumb,
+.chord-media .cm-slider[data-dragging] .cm-thumb {
+  transform: translateX(-50%) scale(1);
+}
+.chord-media .cm-slider[data-dragging] .cm-thumb {
+  left: var(--media-slider-pointer);
+}
+.chord-media .cm-slider[data-dragging] .cm-fill {
+  width: var(--media-slider-pointer);
+}
+.chord-media .cm-slider:focus-visible {
+  outline-offset: 0;
+  border-radius: var(--radius-sm);
+}
+
+/* --- loading ---------------------------------------------------------- */
+
+.chord-media .cm-buffering {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.chord-media .cm-spinner,
+.pswp__preloader::after {
+  display: none;
+  width: 24px;
+  height: 24px;
+  box-sizing: border-box;
+  border: 2px solid var(--line);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: chord-spin 840ms linear infinite;
+}
+.chord-media .cm-buffering[data-visible] .cm-spinner {
+  display: block;
+}
+
+@keyframes chord-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chord-media *,
+  .pswp__preloader::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -1,13 +1,14 @@
 <script lang="ts">
-  // An attachment: an image opens the lightbox (PhotoSwipe), audio and video play inline
-  // (Media Chrome controls). Anything else, or media the webview cannot play, is a file card.
-  import 'media-chrome';
+  // An attachment: a photo opens the viewer (PhotoSwipe). Video and audio play in the chat
+  // with the Chord player (Video.js v10), and a video also opens in the viewer. Anything
+  // else, or media that the webview cannot play, is a file card.
   import Download from 'lucide-svelte/icons/download';
   import File from 'lucide-svelte/icons/file';
   import Icon from './Icon.svelte';
   import { fileSize } from './format';
-  import { viewImage } from './attachments';
+  import { viewImage, viewMedia } from './attachments';
   import { preloadLightbox } from './lightbox';
+  import MediaPlayer from './media/MediaPlayer.svelte';
   import type { Attachment } from './types';
 
   let { file }: { file: Attachment } = $props();
@@ -22,6 +23,21 @@
     if (file.mime.startsWith('audio/')) return 'audio';
     return 'file';
   });
+  let media = $state<HTMLMediaElement>();
+
+  /** Open the video in the viewer where it is now, and continue here after. */
+  function expand() {
+    const playing = !!media && !media.paused;
+    media?.pause();
+    viewMedia(file, {
+      startAt: media?.currentTime ?? 0,
+      playing,
+      onclose: (time) => {
+        if (media) media.currentTime = time;
+      }
+    });
+  }
+
   const ratio = $derived(file.width && file.height ? `${file.width} / ${file.height}` : '16 / 10');
 </script>
 
@@ -44,37 +60,19 @@
     />
   </button>
 {:else if kind === 'video'}
-  <media-controller class="player video">
-    <!-- A shared file has no caption track. -->
-    <!-- svelte-ignore a11y_media_has_caption -->
-    <video
-      slot="media"
+  <div class="video" style:aspect-ratio={ratio}>
+    <MediaPlayer
+      kind="video"
       src={file.url}
-      preload="metadata"
-      playsinline
-      onerror={() => (broken = true)}
-    ></video>
-    <media-control-bar>
-      <media-play-button></media-play-button>
-      <media-time-range></media-time-range>
-      <media-time-display showduration></media-time-display>
-      <media-mute-button></media-mute-button>
-      <media-volume-range></media-volume-range>
-      <media-fullscreen-button></media-fullscreen-button>
-    </media-control-bar>
-  </media-controller>
+      name={file.name}
+      bind:media
+      onexpand={expand}
+      onfail={() => (broken = true)}
+    />
+  </div>
 {:else if kind === 'audio'}
-  <div class="audio-card">
-    <span class="name">{file.name}</span>
-    <media-controller audio class="player audio">
-      <audio slot="media" src={file.url} preload="metadata" onerror={() => (broken = true)}></audio>
-      <media-control-bar>
-        <media-play-button></media-play-button>
-        <media-time-range></media-time-range>
-        <media-time-display showduration></media-time-display>
-        <media-mute-button></media-mute-button>
-      </media-control-bar>
-    </media-controller>
+  <div class="audio">
+    <MediaPlayer kind="audio" src={file.url} name={file.name} onfail={() => (broken = true)} />
   </div>
 {:else}
   <div class="card">
@@ -90,14 +88,16 @@
 {/if}
 
 <style>
+  /* Every attachment is a card of the style guide: surface-200, a 1px line border and the
+     16px corner, at most 400 by 300px. The player cards are in media/media.css. */
   .image {
     display: block;
-    max-width: 360px;
-    max-height: 260px;
+    max-width: 400px;
+    max-height: 300px;
     margin-top: var(--space-1);
     padding: 0;
     border: 1px solid var(--line);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     overflow: hidden;
     background: var(--surface-200);
     cursor: zoom-in;
@@ -109,75 +109,26 @@
     object-fit: cover;
   }
 
-  /* Media Chrome controls in Chord colours. */
-  .player {
-    --media-primary-color: var(--ink);
-    --media-secondary-color: transparent;
-    --media-text-color: var(--ink);
-    --media-icon-color: var(--ink);
-    --media-control-background: transparent;
-    --media-control-hover-background: var(--hover);
-    --media-range-bar-color: var(--brand);
-    --media-range-track-background: var(--line);
-    --media-range-thumb-background: var(--brand);
-    --media-font-family: var(--font-sans);
-    --media-font-size: 12px;
-    display: block;
-    border-radius: var(--radius-md);
-    overflow: hidden;
-  }
-  .player media-control-bar {
-    width: 100%;
-    background: color-mix(in srgb, var(--surface-100) 80%, transparent);
-  }
   .video {
     max-width: 400px;
-    margin-top: var(--space-1);
-    border: 1px solid var(--line);
-    background: #000;
-  }
-  .video video {
-    display: block;
-    width: 100%;
     max-height: 300px;
-  }
-  .audio-card {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    max-width: 400px;
     margin-top: var(--space-1);
-    padding: var(--space-2) var(--space-3);
-    background: var(--surface-200);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-md);
-  }
-  .audio-card .name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--ink-muted);
-    font-size: 12px;
-    line-height: 16px;
   }
   .audio {
-    --media-background-color: transparent;
-    width: 100%;
-  }
-  .audio media-control-bar {
-    background: transparent;
+    max-width: 400px;
+    margin-top: var(--space-1);
   }
 
   .card {
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    max-width: 360px;
+    max-width: 400px;
     margin-top: var(--space-1);
     padding: var(--space-3);
     background: var(--surface-200);
     border: 1px solid var(--line);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
   }
   .ico {
     color: var(--accent);

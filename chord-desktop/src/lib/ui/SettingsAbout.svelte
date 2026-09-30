@@ -25,7 +25,7 @@
   <li>Bricolage Grotesque, SIL Open Font License.</li>
   <li>Lucide icons, ISC License.</li>
   <li>PhotoSwipe image viewer, MIT License.</li>
-  <li>Media Chrome player controls, MIT License.</li>
+  <li>Video.js media player, Apache License 2.0.</li>
 </ul>
 
 <style>
