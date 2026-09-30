@@ -209,7 +209,7 @@ class LiveController {
           }
           if (c.kind.type === 'direct' && !this.avatarsAsked.has(c.jid)) {
             this.avatarsAsked.add(c.jid);
-            void api().then((b) => b.refreshAvatar(c.jid).catch(() => undefined));
+            void api().then((b) => b.refreshAvatar(c.jid).catch((e) => console.warn('chord: avatar refresh failed', c.jid, e)));
           }
         }
       });
@@ -256,7 +256,7 @@ class LiveController {
           if (gen !== this.generation || !this.wanted.has(key)) void sub.unsubscribe();
           else this.spaceSubs.set(key, sub);
         })
-        .catch((e) => ui.say(plainError(e)));
+        .catch((e) => ui.say(plainError(e), true));
     }
   }
 
@@ -321,7 +321,7 @@ class LiveController {
       }
       sub = s;
       app.timelineSub = s;
-    })().catch((e) => ui.say(plainError(e)));
+    })().catch((e) => ui.say(plainError(e), true));
     return () => {
       cancelled = true;
       if (app.timelineSub === sub) app.timelineSub = null;
@@ -351,7 +351,7 @@ class LiveController {
         if (cancelled) await s.unsubscribe();
         else sub = s;
       })
-      .catch((e) => ui.say(plainError(e)));
+      .catch((e) => ui.say(plainError(e), true));
     return () => {
       cancelled = true;
       void sub?.unsubscribe();

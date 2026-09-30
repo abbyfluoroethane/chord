@@ -26,6 +26,7 @@ import type {
   SpaceItem,
   TimelineItem
 } from './types';
+import { failureNote, runBatch } from './batch';
 import { canSetTopic, isModerator } from './rooms';
 import { isGroup, spaceKey } from './types';
 import { ui } from './ui.svelte';
@@ -306,7 +307,7 @@ class AppState {
       if (c.kind === 'channel') void this.readSubjectRight(c.jid);
       await this.readOnBridge(c);
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 
@@ -352,7 +353,7 @@ class AppState {
     try {
       await b.addBookmark(jid, nick);
     } catch {
-      /* The room works without a bookmark. */
+      ui.say('Could not bookmark the channel, so it will not open again at sign-in.', true);
     }
   }
 
@@ -440,7 +441,7 @@ class AppState {
     if (live && jid) {
       this.mentions[jid] = 0;
       const pm = splitPrivate(jid);
-      void this.readOnBridge({ jid, pm }).catch((e) => ui.say(plainError(e)));
+      void this.readOnBridge({ jid, pm }).catch((e) => ui.say(plainError(e), true));
     }
   }
 
@@ -614,7 +615,7 @@ class AppState {
       else await b.sendChat(jid, text);
       return true;
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
       return false;
     }
   }
@@ -687,7 +688,7 @@ class AppState {
       const urls = await (await api()).uploadFiles(jid);
       if (urls.length) ui.say(urls.length === 1 ? 'File sent.' : 'Files sent.');
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 
@@ -699,7 +700,7 @@ class AppState {
       await (await api()).uploadDropped(jid, path);
       ui.say('File sent.');
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 
@@ -717,7 +718,7 @@ class AppState {
       await (await api()).uploadPasted(jid, file.type, bytes);
       ui.say('File sent.');
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 
@@ -806,7 +807,7 @@ class AppState {
     try {
       await this.timelineSub?.paginateBack(count);
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 
@@ -835,7 +836,7 @@ class AppState {
     try {
       return { ok: true, value: await f(await api()) };
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
       return { ok: false };
     }
   }
@@ -1165,7 +1166,7 @@ class AppState {
       try {
         await b.configureRoom(room, { name: clean });
       } catch {
-        /* Only an owner can do this. The room works without a name. */
+        ui.say('The channel is ready, but only an owner can set its name.', true);
       }
       await b.addRoomToSpace(service, node, room, clean);
     });
@@ -1193,8 +1194,10 @@ class AppState {
       const { service, node } = splitSpaceKey(key);
       const rooms = this.channels.filter((c) => c.space === key && c.kind === 'channel' && c.joined);
       void this.call(async (b) => {
-        for (const r of rooms) await b.leaveRoom(r.jid).catch(() => undefined);
+        const { failed } = await runBatch(rooms, (r) => b.leaveRoom(r.jid));
         await b.leaveSpace(service, node);
+        const note = failureNote(failed, rooms.length, 'channel');
+        if (note) ui.say(note.replace(' failed.', ' could not be left.'), true);
       });
     } else {
       this.spaces = this.spaces.filter((s) => spaceKey(s) !== key);
@@ -1241,7 +1244,9 @@ class AppState {
     const rooms = this.channels.filter((c) => c.space === space && c.kind === 'channel');
     const r = await this.call(async (b) => {
       await b.addSpaceMember(service, node, address);
-      for (const room of rooms) await b.inviteToRoom(room.jid, address).catch(() => undefined);
+      const { failed } = await runBatch(rooms, (room) => b.inviteToRoom(room.jid, address));
+      const note = failureNote(failed, rooms.length, 'channel invite');
+      if (note) ui.say(note, true);
     });
     return r.ok;
   }

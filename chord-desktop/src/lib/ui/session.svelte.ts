@@ -234,7 +234,7 @@ class Session {
     try {
       await (await api()).login({});
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 
@@ -253,7 +253,7 @@ class Session {
         this.hasSavedPassword = false;
       }
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
     settings.set('session', { account: this.address, auto: false });
     await settings.flush();

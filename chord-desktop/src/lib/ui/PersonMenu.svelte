@@ -117,7 +117,7 @@
               disabled: p.isBlocked,
               onselect: () => {
                 const r = contactsStore.add(p.address);
-                ui.say(r.ok ? r.message : r.error);
+                ui.say(r.ok ? r.message : r.error, !r.ok);
               }
             }
       );

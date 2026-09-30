@@ -13,6 +13,7 @@
   // of the space), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
   // createChannel, and leaveSpace.
   import { splitSpaceKey } from './adapt';
+  import { failureNote } from './batch';
   import InviteList from './InviteList.svelte';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
@@ -85,7 +86,9 @@
     sending = true;
     const n = await app.sendSpaceInvites(space, picked, link);
     sending = false;
-    ui.say(n === 1 ? 'Sent 1 invite.' : `Sent ${n} invites.`);
+    const note = failureNote(picked.length - n, picked.length, 'invite');
+    if (note) ui.say(note, true);
+    else ui.say(n === 1 ? 'Sent 1 invite.' : `Sent ${n} invites.`);
     onclose();
   }
 
@@ -105,7 +108,7 @@
       await navigator.clipboard.writeText(link);
       copied = true;
     } catch {
-      /* clipboard blocked */
+      ui.say('Could not copy the link.', true);
     }
   }
 

@@ -220,12 +220,12 @@ class XmppLinks {
             return true;
           }
           const r = contactsStore.add(link.jid, link.preauth);
-          ui.say(r.ok ? r.message : r.error);
+          ui.say(r.ok ? r.message : r.error, !r.ok);
           return r.ok;
         }
       }
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
       return false;
     }
   }

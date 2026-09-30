@@ -74,7 +74,7 @@ class EmojiPacks {
         await (await api()).emojiPackInstall(id);
         this.installed[id] = true;
       } catch (e) {
-        ui.say(plainError(e));
+        ui.say(plainError(e), true);
         return;
       } finally {
         this.installing = null;

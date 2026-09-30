@@ -30,7 +30,7 @@
         searched = text;
       }
     } catch (e) {
-      ui.say(e instanceof Error ? e.message : 'Search failed.');
+      ui.say(e instanceof Error ? e.message : 'Search failed.', true);
     }
   }
 

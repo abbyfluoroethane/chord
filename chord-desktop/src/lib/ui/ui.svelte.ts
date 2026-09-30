@@ -76,6 +76,8 @@ class UiState {
   /** Notes about people, per address. Local to this device. */
   notes = $state<Record<string, string>>({});
   toast = $state<string | null>(null);
+  /** True if the toast reports a failure. A screen reader reads it out at once. */
+  toastIsError = $state(false);
   private toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   load() {
@@ -183,8 +185,9 @@ class UiState {
     });
   }
 
-  say(text: string) {
+  say(text: string, error = false) {
     this.toast = text;
+    this.toastIsError = error;
     clearTimeout(this.toastTimer);
     this.toastTimer = setTimeout(() => (this.toast = null), 2400);
   }

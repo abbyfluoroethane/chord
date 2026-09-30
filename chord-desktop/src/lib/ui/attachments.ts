@@ -46,7 +46,7 @@ export async function saveImage(file: Attachment): Promise<void> {
   try {
     if (await (await api()).saveImage(file.url, file.name || undefined)) ui.say('Image saved.');
   } catch (e) {
-    ui.say(plainError(e));
+    ui.say(plainError(e), true);
   }
 }
 
@@ -65,6 +65,6 @@ export async function openLink(url: string): Promise<void> {
     const { openUrl } = await import('@tauri-apps/plugin-opener');
     await openUrl(url);
   } catch (e) {
-    ui.say(plainError(e));
+    ui.say(plainError(e), true);
   }
 }

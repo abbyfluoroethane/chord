@@ -85,21 +85,27 @@
   />
   <ul id="forward-list" role="listbox" aria-label="Places">
     {#each hits as t, i (t.id)}
-      <li
-        id="fw-{t.id}"
-        role="option"
-        aria-selected={i === index}
-        class:on={i === index}
-        onpointermove={() => (index = i)}
-        onclick={() => {
-          index = i;
-          void send();
-        }}
-        onkeydown={() => {}}
-      >
-        <Icon icon={t.kind === 'dm' ? AtSign : Hash} size={16} />
-        <span class="label">{t.label}</span>
-        <span class="meta">{t.hint}</span>
+      <li role="presentation">
+        <!-- The search box keeps the focus and moves the choice, so a row is not a tab stop. -->
+        <button
+          type="button"
+          id="fw-{t.id}"
+          role="option"
+          tabindex="-1"
+          aria-selected={i === index}
+          class="row"
+          class:on={i === index}
+          onpointermove={() => (index = i)}
+          onmousedown={(e) => e.preventDefault()}
+          onclick={() => {
+            index = i;
+            void send();
+          }}
+        >
+          <Icon icon={t.kind === 'dm' ? AtSign : Hash} size={16} />
+          <span class="label">{t.label}</span>
+          <span class="meta">{t.hint}</span>
+        </button>
       </li>
     {:else}
       <li class="none" role="presentation">Nothing matches. Try a shorter name.</li>
@@ -147,18 +153,23 @@
     max-height: 280px;
     overflow-y: auto;
   }
-  li {
+  .row {
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    width: 100%;
     height: 36px;
     padding: 0 var(--space-3);
+    border: 0;
+    background: none;
+    font: inherit;
+    text-align: left;
     border-radius: var(--radius-md);
     cursor: pointer;
     color: var(--ink-muted);
     transition: background var(--dur-fast);
   }
-  li.on {
+  .row.on {
     background: var(--selected);
     color: var(--ink);
   }

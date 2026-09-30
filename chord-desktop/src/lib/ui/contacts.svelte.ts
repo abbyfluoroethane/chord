@@ -136,7 +136,7 @@ class ContactsStore {
       // A request that was answered is no longer pending.
       this.incoming = this.incoming.filter((i) => !contacts.some((c) => c.address === i.address));
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
     await this.refreshBlocked();
   }
@@ -285,7 +285,7 @@ class ContactsStore {
         return known ?? toContactItem(jid, null);
       });
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 

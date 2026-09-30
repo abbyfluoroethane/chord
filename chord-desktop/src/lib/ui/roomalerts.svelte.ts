@@ -61,7 +61,7 @@ class RoomAlerts {
       const b = await api();
       await b.declineRoomInvite(card.room, bareOf(card.from));
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
   }
 

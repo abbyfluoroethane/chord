@@ -3,8 +3,14 @@
   import { ui } from './ui.svelte';
 </script>
 
-<div class="host" role="status" aria-live="polite">
-  {#if ui.toast}<div class="toast">{ui.toast}</div>{/if}
+<!-- Both regions stay in the page, so a screen reader sees the text arrive. -->
+<div class="host">
+  <div role="status" aria-live="polite">
+    {#if ui.toast && !ui.toastIsError}<div class="toast">{ui.toast}</div>{/if}
+  </div>
+  <div role="alert">
+    {#if ui.toast && ui.toastIsError}<div class="toast">{ui.toast}</div>{/if}
+  </div>
 </div>
 
 <style>

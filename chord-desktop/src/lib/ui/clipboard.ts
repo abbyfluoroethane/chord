@@ -31,6 +31,6 @@ export async function copyText(text: string, done = 'Copied.'): Promise<boolean>
   } catch {
     ok = fallback(text);
   }
-  ui.say(ok ? done : 'Could not copy.');
+  ui.say(ok ? done : 'Could not copy.', !ok);
   return ok;
 }

@@ -41,7 +41,7 @@ class PinStore {
       await (await api()).pinMessage(item.id);
       ui.say('Message pinned.');
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
     await this.load(chat);
   }
@@ -54,7 +54,7 @@ class PinStore {
     try {
       await (await api()).unpinMessage(pin.chat, pin.key);
     } catch (e) {
-      ui.say(plainError(e));
+      ui.say(plainError(e), true);
     }
     await this.load(pin.chat);
   }

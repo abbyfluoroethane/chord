@@ -37,8 +37,7 @@
     <button
       class="icon"
       class:on={ui.membersOpen}
-      aria-label={app.sideRail === 'profile' ? 'User profile' : 'Member list'}
-      aria-pressed={ui.membersOpen}
+      aria-label={`${ui.membersOpen ? 'Hide' : 'Show'} ${railWhat}`}
       use:tooltip={{ text: `${ui.membersOpen ? 'Hide' : 'Show'} ${railWhat}`, side: 'bottom' }}
       onclick={() => ui.toggleMembers()}
     >
