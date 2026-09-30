@@ -207,5 +207,6 @@ describe('errors and login', () => {
     expect(serverArg('chat.example.com')).toBe('starttls://chat.example.com:5222');
     expect(serverArg('chat.example.com:5223')).toBe('starttls://chat.example.com:5223');
     expect(serverArg('starttls://h:1')).toBe('starttls://h:1');
+    expect(serverArg('xmpps://h:1')).toBe('xmpps://h:1');
   });
 });

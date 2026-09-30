@@ -27,6 +27,8 @@ pub mod tls_common;
 
 mod dns;
 pub use dns::DnsConfig;
+#[cfg(feature = "dns")]
+pub use dns::SrvRecord;
 
 /// trait returned wrapped in XmppStream by ServerConnector
 pub trait AsyncReadAndWrite: AsyncBufRead + AsyncWrite + Unpin + Send {}

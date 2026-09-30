@@ -40,26 +40,33 @@ fn full(s: &str) -> Res<Jid> {
         .map_err(|e| ChordError::invalid(format!("not a JID ({s:?}): {e}")))
 }
 
-/// The server field of `login`: none or empty for a SRV lookup, or `starttls://host:port`.
+/// The server field of `login`: none or empty for a SRV lookup, `starttls://host:port`, or
+/// `xmpps://host:port` for direct TLS (XEP-0368).
 pub fn parse_server(server: Option<&str>) -> Res<ServerAddr> {
     let bad = |s: &str| {
         ChordError::invalid(format!(
-            "the server must be empty or starttls://host:port, not {s:?}"
+            "the server must be empty, starttls://host:port or xmpps://host:port, not {s:?}"
         ))
     };
     let s = match server.map(str::trim) {
         None | Some("") | Some("srv") => return Ok(ServerAddr::Srv),
         Some(s) => s,
     };
-    let rest = s.strip_prefix("starttls://").ok_or_else(|| bad(s))?;
+    let (direct_tls, rest) = match (s.strip_prefix("starttls://"), s.strip_prefix("xmpps://")) {
+        (Some(rest), _) => (false, rest),
+        (_, Some(rest)) => (true, rest),
+        _ => return Err(bad(s)),
+    };
     let (host, port) = rest.rsplit_once(':').ok_or_else(|| bad(s))?;
     let port: u16 = port.parse().map_err(|_| bad(s))?;
     if host.is_empty() || host.contains(['/', '@', ' ']) || port == 0 {
         return Err(bad(s));
     }
-    Ok(ServerAddr::StartTls {
-        host: host.to_owned(),
-        port,
+    let host = host.to_owned();
+    Ok(if direct_tls {
+        ServerAddr::DirectTls { host, port }
+    } else {
+        ServerAddr::StartTls { host, port }
     })
 }
 
@@ -837,6 +844,13 @@ mod tests {
             ServerAddr::StartTls {
                 host: "xmpp.example.org".into(),
                 port: 5222
+            }
+        );
+        assert_eq!(
+            parse_server(Some("xmpps://xmpp.example.org:5223")).unwrap(),
+            ServerAddr::DirectTls {
+                host: "xmpp.example.org".into(),
+                port: 5223
             }
         );
     }

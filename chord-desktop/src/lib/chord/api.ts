@@ -58,7 +58,7 @@ export const open = (account: string) => invoke<OpenInfo>('open', { account });
 
 /**
  * Log in. With no `password`, the saved one is used. `server`: empty for a SRV lookup,
- * or `starttls://host:port`. With `remember`, a good login saves the password in the
+ * `starttls://host:port`, or `xmpps://host:port` for direct TLS. With `remember`, a good login saves the password in the
  * system keychain.
  */
 export const login = (opts: { password?: string; server?: string; remember?: boolean } = {}) =>

@@ -140,8 +140,9 @@ async fn next_item<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
 ///
 /// - `""` or `"srv"`: find the server with SRV records.
 /// - `"starttls://host:port"`, `"host:port"` and `"host"`: STARTTLS. The default port is 5222.
+/// - `"xmpps://host:port"`: direct TLS (XEP-0368). The default port is 5223.
 ///
-/// `chord-core` has no direct TLS mode, so `tls://` is an error. Plain TCP is an error too.
+/// Plain TCP is an error.
 pub(crate) fn parse_server(s: &str) -> Result<ServerAddr, ChordError> {
     let bad = |detail: String| ChordError::InvalidServer { detail };
     let s = s.trim();
@@ -149,26 +150,28 @@ pub(crate) fn parse_server(s: &str) -> Result<ServerAddr, ChordError> {
         return Ok(ServerAddr::Srv);
     }
     let (scheme, rest) = s.split_once("://").unwrap_or(("starttls", s));
-    match scheme {
-        "starttls" => {}
-        "tls" => return Err(bad(format!("direct TLS is not supported: {s}"))),
+    let direct_tls = match scheme {
+        "starttls" => false,
+        "xmpps" => true,
         "tcp" => return Err(bad(format!("plain TCP is not allowed: {s}"))),
         _ => return Err(bad(format!("unknown scheme in {s}"))),
-    }
+    };
     let (host, port) = match rest.rsplit_once(':') {
         Some((host, port)) => (
             host,
             port.parse::<u16>()
                 .map_err(|_| bad(format!("bad port in {s}")))?,
         ),
-        None => (rest, 5222),
+        None => (rest, if direct_tls { 5223 } else { 5222 }),
     };
     if host.is_empty() {
         return Err(bad(format!("no host in {s}")));
     }
-    Ok(ServerAddr::StartTls {
-        host: host.to_owned(),
-        port,
+    let host = host.to_owned();
+    Ok(if direct_tls {
+        ServerAddr::DirectTls { host, port }
+    } else {
+        ServerAddr::StartTls { host, port }
     })
 }
 
@@ -1040,6 +1043,18 @@ mod tests {
         assert_eq!(
             parse_server("xmpp.example:5000").unwrap(),
             starttls("xmpp.example", 5000)
+        );
+        let direct = |host: &str, port| ServerAddr::DirectTls {
+            host: host.into(),
+            port,
+        };
+        assert_eq!(
+            parse_server("xmpps://xmpp.example:5443").unwrap(),
+            direct("xmpp.example", 5443)
+        );
+        assert_eq!(
+            parse_server("xmpps://xmpp.example").unwrap(),
+            direct("xmpp.example", 5223)
         );
     }
 

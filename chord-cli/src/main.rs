@@ -48,8 +48,8 @@
 //! Environment:
 //!   CHORD_JID        account, for example alice@chord.localhost
 //!   CHORD_PASSWORD   password (never an argument, so it stays out of the shell history)
-//!   CHORD_SERVER     "srv" (default) or "starttls://host:port". With the dev-insecure
-//!                    feature also "tcp://host:port" (no TLS).
+//!   CHORD_SERVER     "srv" (default), "starttls://host:port" or
+//!                    "xmpps://host:port" (direct TLS). With the dev-insecure feature also "tcp://host:port" (no TLS).
 //!   SSL_CERT_FILE    optional PEM file of trusted CAs. It replaces the system trust store.
 //!   CHORD_DB         account database (default: ~/.local/share/chord/<jid>.sqlite3)
 //!   CHORD_LOG        log level on stderr: error, warn, info, debug, or trace (default: no log)
@@ -420,7 +420,10 @@ fn parse_server(s: &str) -> Result<ServerAddr, String> {
             "plain TCP needs a build with --features dev-insecure: {s}"
         )),
         "starttls" => Ok(ServerAddr::StartTls { host, port }),
-        _ => Err(format!("CHORD_SERVER scheme must be tcp or starttls: {s}")),
+        "xmpps" => Ok(ServerAddr::DirectTls { host, port }),
+        _ => Err(format!(
+            "CHORD_SERVER scheme must be tcp, starttls or xmpps: {s}"
+        )),
     }
 }
 

@@ -23,11 +23,12 @@ export interface Credentials {
 const REMEMBER_KEY = 'chord.remember';
 const ADDRESS = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-/** The login field takes `host:port`. The bridge wants `starttls://host:port`. */
+/** The login field takes `host:port`. The bridge wants `starttls://host:port`.
+ * `xmpps://host:port` (direct TLS) goes through as typed. */
 export function serverArg(input: string): string {
   const s = input.trim();
   if (!s) return '';
-  if (s.startsWith('starttls://')) return s;
+  if (s.startsWith('starttls://') || s.startsWith('xmpps://')) return s;
   return `starttls://${s.includes(':') ? s : `${s}:5222`}`;
 }
 

@@ -11,6 +11,10 @@ pub use xmpp_parsers::sasl::DefinedCondition as SaslCondition;
 use xmpp_parsers::stanza::Stanza;
 
 #[cfg(feature = "native-session")]
+mod binding;
+#[cfg(feature = "native-session")]
+mod connector;
+#[cfg(feature = "native-session")]
 pub mod native;
 
 /// Default time limit for the first login.
@@ -19,10 +23,15 @@ pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(15);
 /// Where to connect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerAddr {
-    /// Find the server with DNS SRV records for the JID domain. Use STARTTLS.
+    /// Find the server with DNS SRV records for the JID domain. Look up `_xmpps-client._tcp`
+    /// (direct TLS, XEP-0368) and `_xmpp-client._tcp` (STARTTLS), and merge them by
+    /// priority. Direct TLS wins on the same priority. A failed target falls back to the
+    /// next one.
     Srv,
     /// Connect to this host and port. Use STARTTLS.
     StartTls { host: String, port: u16 },
+    /// Connect to this host and port. Use TLS from the first byte (XEP-0368).
+    DirectTls { host: String, port: u16 },
     /// Connect to this host and port with no TLS. Only for a dev server.
     #[cfg(feature = "dev-insecure")]
     InsecureTcp { host: String, port: u16 },

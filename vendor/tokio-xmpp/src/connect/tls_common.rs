@@ -103,6 +103,16 @@ impl From<InvalidDnsNameError> for TlsConnectorError {
     }
 }
 
+/// CHORD PATCH: `alpn` is new. The native-tls backend ignores it.
+#[cfg(feature = "native-tls")]
+pub async fn establish_tls_connection_with_alpn<S: TlsAsyncStream>(
+    stream: S,
+    domain: &str,
+    _alpn: &[&[u8]],
+) -> Result<(TlsStream<S>, ChannelBinding), Error> {
+    establish_tls_connection(stream, domain).await
+}
+
 /// Establish TLS connection using native-tls
 #[cfg(feature = "native-tls")]
 pub async fn establish_tls_connection<S: TlsAsyncStream>(
@@ -126,6 +136,17 @@ pub async fn establish_tls_connection<S: TlsAsyncStream>(
     stream: S,
     domain: &str,
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
+    establish_tls_connection_with_alpn(stream, domain, &[]).await
+}
+
+/// CHORD PATCH: `establish_tls_connection` with ALPN protocols. XEP-0368 direct TLS
+/// needs the ALPN protocol `xmpp-client`. An empty list sends no ALPN extension.
+#[cfg(all(feature = "rustls-any-backend", not(feature = "native-tls")))]
+pub async fn establish_tls_connection_with_alpn<S: TlsAsyncStream>(
+    stream: S,
+    domain: &str,
+    alpn: &[&[u8]],
+) -> Result<(TlsStream<S>, ChannelBinding), Error> {
     let domain =
         ServerName::try_from(domain.to_owned()).map_err(TlsConnectorError::DnsNameError)?;
     let mut root_store = RootCertStore::empty();
@@ -144,6 +165,8 @@ pub async fn establish_tls_connection<S: TlsAsyncStream>(
     let mut config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
+
+    config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
 
     #[cfg(feature = "ktls")]
     let stream = {

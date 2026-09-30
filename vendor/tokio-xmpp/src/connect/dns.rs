@@ -59,7 +59,46 @@ impl fmt::Display for DnsConfig {
     }
 }
 
+/// CHORD PATCH: one SRV record, as `DnsConfig::srv_records` returns it.
+#[cfg(feature = "dns")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SrvRecord {
+    /// Lower is better.
+    pub priority: u16,
+    /// Relative share among records with the same priority.
+    pub weight: u16,
+    /// TCP port.
+    pub port: u16,
+    /// Target host name, without the final dot.
+    pub target: String,
+}
+
 impl DnsConfig {
+    /// CHORD PATCH: look up the SRV records of `srv` (for example `_xmpps-client._tcp`) for
+    /// `host`. The records come in DNS order. A lookup error or no record gives an empty list.
+    #[cfg(feature = "dns")]
+    pub async fn srv_records(host: &str, srv: &str) -> Result<Vec<SrvRecord>, Error> {
+        let ascii_domain = idna::domain_to_ascii(host)?;
+        let resolver = Self::new_resolver(&None)?;
+        let srv_domain = format!("{}.{}.", srv, ascii_domain).into_name()?;
+        let Ok(lookup) = resolver.srv_lookup(srv_domain).await else {
+            return Ok(Vec::new());
+        };
+        Ok(lookup
+            .answers()
+            .iter()
+            .filter_map(|record| match record.data {
+                RData::SRV(ref srv) => Some(SrvRecord {
+                    priority: srv.priority,
+                    weight: srv.weight,
+                    port: srv.port,
+                    target: srv.target.to_ascii().trim_end_matches('.').to_owned(),
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
     /// Constructor for DnsConfig::UseSrv variant
     #[cfg(feature = "dns")]
     pub fn srv(host: &str, srv: &str, fallback_port: u16) -> Self {

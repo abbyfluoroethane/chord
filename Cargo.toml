@@ -31,10 +31,12 @@ uuid = { version = "1", features = ["v4"] }
 # SHA-1 of avatar images (XEP-0084). xmpp-parsers already depends on this version.
 sha1 = "0.11"
 
-# tokio-xmpp 6.0.0 with one patch: `StanzaStream::send_client_state` sends the XEP-0352
-# `<active/>` and `<inactive/>` nonzas. Upstream sends nothing but stanzas. See the
-# "CHORD PATCH" comments in vendor/tokio-xmpp/src/stanzastream. Drop this when upstream
-# gets an API for it.
+# tokio-xmpp 6.0.0 with patches. See the "CHORD PATCH" comments in vendor/tokio-xmpp.
+# - `StanzaStream::send_client_state` sends the XEP-0352 `<active/>` and `<inactive/>`
+#   nonzas. Upstream sends nothing but stanzas.
+# - `DnsConfig::srv_records` returns the SRV records, and
+#   `establish_tls_connection_with_alpn` sets the ALPN protocol of XEP-0368 direct TLS.
+# Drop these when upstream gets an API for them.
 [patch.crates-io]
 tokio-xmpp = { path = "vendor/tokio-xmpp" }
 

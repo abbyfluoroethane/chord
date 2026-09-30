@@ -20,11 +20,11 @@ use futures_core::Stream;
 use jid::Jid;
 use sasl::client::Mechanism;
 use sasl::client::mechanisms::Scram;
+use sasl::common::Credentials;
 use sasl::common::scram::{Sha1, Sha256};
-use sasl::common::{ChannelBinding, Credentials};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio_xmpp::connect::{DnsConfig, ServerConnector, StartTlsServerConnector};
+use tokio_xmpp::connect::ServerConnector;
 use tokio_xmpp::error::AuthError;
 use tokio_xmpp::rustls;
 use tokio_xmpp::stanzastream::{Connection, Event, StanzaStream, StreamEvent};
@@ -37,6 +37,8 @@ use xmpp_parsers::ns;
 use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stream_features::StreamFeatures;
 
+use super::binding::choose_binding;
+use super::connector::{Connector, Mode};
 use super::{
     AuthFailure, ConnectError, DisconnectReason, SaslRetry, ServerAddr, Session, SessionConfig,
     SessionError, SessionEvent, TICK, sasl_retry,
@@ -44,6 +46,16 @@ use super::{
 
 /// Size of the inbound and outbound queues.
 const QUEUE_DEPTH: usize = 64;
+
+/// Liveness limits of the stream (CORESESSION-07). After 60 s with no data from the server,
+/// `StanzaStream` sends a XEP-0198 `<r/>`, or a XEP-0199 ping when the server has no stream
+/// management. After 30 s more with no data, the stream is dead and `StanzaStream` reconnects
+/// and resumes. The default values are 300 s and 300 s, so a dead link can stay up to 10
+/// minutes.
+const STREAM_TIMEOUTS: Timeouts = Timeouts {
+    read_timeout: Duration::from_secs(60),
+    response_timeout: Duration::from_secs(30),
+};
 
 /// Time limit for a clean close of the `StanzaStream`.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -90,21 +102,22 @@ impl Session for NativeSession {
             server,
             login_timeout,
         } = config;
-        let domain = jid.domain().as_str().to_owned();
         let jid = Jid::from(jid);
         match server {
-            ServerAddr::Srv => {
-                let server = StartTlsServerConnector::from(DnsConfig::srv_default_client(&domain));
+            ServerAddr::Srv => start(Connector(Mode::Srv), jid, password, login_timeout).await,
+            ServerAddr::StartTls { host, port } => {
+                let server = Connector(Mode::StartTls { host, port });
                 start(server, jid, password, login_timeout).await
             }
-            ServerAddr::StartTls { host, port } => {
-                let server = StartTlsServerConnector::from(DnsConfig::no_srv(&host, port));
+            ServerAddr::DirectTls { host, port } => {
+                let server = Connector(Mode::DirectTls { host, port });
                 start(server, jid, password, login_timeout).await
             }
             #[cfg(feature = "dev-insecure")]
             ServerAddr::InsecureTcp { host, port } => {
-                let server =
-                    tokio_xmpp::connect::TcpServerConnector::from(DnsConfig::no_srv(&host, port));
+                let server = tokio_xmpp::connect::TcpServerConnector::from(
+                    tokio_xmpp::connect::DnsConfig::no_srv(&host, port),
+                );
                 start(server, jid, password, login_timeout).await
             }
         }
@@ -470,10 +483,9 @@ impl core::fmt::Display for LoginError {
 /// Changes:
 /// - The errors map to `LoginError`, so the callers can stop on a fatal SASL failure.
 /// - The channel binding from the connector goes to SASL, as in the original, except when
-///   the server offers no `-PLUS` mechanism. Then it is `ChannelBinding::Unsupported`.
-///   With binding data, the sasl crate names SCRAM only as `-PLUS`
-///   (sasl-0.5.2 src/client/mechanisms/scram.rs:103-108), so `client_login` skips SCRAM
-///   and falls back to PLAIN (client/login.rs:36-45).
+///   `choose_binding` says so (session/binding.rs). With binding data, the sasl crate names
+///   SCRAM only as `-PLUS` (sasl-0.5.2 src/client/mechanisms/scram.rs:103-108), so
+///   `client_login` skips SCRAM and falls back to PLAIN (client/login.rs:36-45).
 /// - It logs the SASL mechanism.
 async fn login<C: ServerConnector>(
     server: C,
@@ -486,7 +498,7 @@ async fn login<C: ServerConnector>(
         .as_str();
 
     let (stream, channel_binding) = server
-        .connect(jid, ns::JABBER_CLIENT, Timeouts::default())
+        .connect(jid, ns::JABBER_CLIENT, STREAM_TIMEOUTS)
         .await
         .map_err(map_error)?;
     let (features, stream) = stream
@@ -494,16 +506,11 @@ async fn login<C: ServerConnector>(
         .await
         .map_err(|e| map_error(e.into()))?;
 
-    let offers_plus = features
-        .sasl_mechanisms
-        .iter()
-        .any(|m| m.ends_with("-PLUS"));
-    let channel_binding = match channel_binding {
-        ChannelBinding::TlsUnique(_) | ChannelBinding::TlsExporter(_) if !offers_plus => {
-            ChannelBinding::Unsupported
-        }
-        other => other,
-    };
+    let channel_binding = choose_binding(
+        channel_binding,
+        &features.sasl_mechanisms,
+        features.sasl_cb.as_ref(),
+    );
     let creds = Credentials::default()
         .with_username(username)
         .with_password(password)
@@ -785,5 +792,54 @@ mod tests {
         assert_eq!(worker_panics().load(Ordering::SeqCst), panics_before);
         // The runtime and the process keep running after the panic.
         assert_eq!(tokio::spawn(async { 40 + 2 }).await.unwrap(), 42);
+    }
+
+    /// A silent server gives a soft timeout after 60 s (where `StanzaStream` sends its
+    /// `<r/>` or ping) and a dead stream 30 s later (where it reconnects).
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_stream_times_out_soft_then_hard() {
+        use tokio_xmpp::xmlstream::ReadError;
+        let (lhs, rhs) = tokio::io::duplex(65536);
+        let server = tokio::spawn(async move {
+            let stream = accept_stream(
+                tokio::io::BufReader::new(rhs),
+                ns::JABBER_CLIENT,
+                STREAM_TIMEOUTS,
+            )
+            .await?;
+            let header = StreamHeader::default();
+            let stream = stream.send_header(header).await?;
+            let stream = stream
+                .send_features::<FallibleStreamElement>(&StreamFeatures::default())
+                .await?;
+            // Stay silent, and keep the stream open.
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            drop(stream);
+            Ok::<_, io::Error>(())
+        });
+        let pending = initiate_stream(
+            tokio::io::BufReader::new(lhs),
+            ns::JABBER_CLIENT,
+            StreamHeader::default(),
+            STREAM_TIMEOUTS,
+        )
+        .await
+        .unwrap();
+        let (_, mut stream) = pending
+            .recv_features::<FallibleStreamElement>()
+            .await
+            .unwrap();
+        let start = tokio::time::Instant::now();
+        match core::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
+            Some(Err(ReadError::SoftTimeout)) => {}
+            other => panic!("expected a soft timeout, got {other:?}"),
+        }
+        assert_eq!(start.elapsed(), Duration::from_secs(60));
+        match core::future::poll_fn(|cx| Pin::new(&mut stream).poll_next(cx)).await {
+            Some(Err(ReadError::HardError(e))) if e.kind() == io::ErrorKind::TimedOut => {}
+            other => panic!("expected a hard timeout, got {other:?}"),
+        }
+        assert_eq!(start.elapsed(), Duration::from_secs(90));
+        server.abort();
     }
 }
