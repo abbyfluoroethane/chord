@@ -125,7 +125,7 @@ export function toMember(m: BMember, room: string): MemberItem {
   return {
     id: m.jid ?? `${room}/${m.id}`,
     name: m.name,
-    role: m.role === 'moderator' ? 'Moderator' : null,
+    role: m.role === 'moderator' ? 'Moderator' : m.role === 'visitor' ? 'Visitor' : null,
     affiliation,
     show: toShow(m.show),
     online: m.online,
@@ -330,6 +330,12 @@ export function plainError(error: unknown): string {
       return 'You are offline. Try again when the connection is back.';
     case 'unsupported':
       return 'Your server does not support this.';
+    case 'notAuthorized':
+      return 'This room needs a password, or the password is wrong.';
+    case 'registrationRequired':
+      return 'Only members can join this room. Ask an admin to add you.';
+    case 'conflict':
+      return 'Someone in this room has your nickname. Change your nickname and try again.';
     case 'keychain':
       return `Chord could not use the system keychain. ${message}`;
     case 'store':

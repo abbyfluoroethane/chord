@@ -178,6 +178,11 @@ describe('members', () => {
     });
   });
 
+  it('shows a visitor, and a participant as no role', () => {
+    expect(toMember({ ...base, role: 'visitor' }, 'g@x').role).toBe('Visitor');
+    expect(toMember({ ...base, role: 'participant' }, 'g@x').role).toBeNull();
+  });
+
   it('uses the real JID when there is one', () => {
     expect(toMember({ ...base, jid: 'bay@foid.space', affiliation: 'weird' }, 'g@x').id).toBe('bay@foid.space');
     expect(toMember({ ...base, affiliation: 'weird' }, 'g@x').affiliation).toBe('none');
@@ -251,6 +256,9 @@ describe('errors and login', () => {
   it('speaks plainly', () => {
     expect(plainError({ code: 'authFailed', message: 'x' })).toBe('Wrong address or password.');
     expect(plainError({ code: 'invalid', message: 'not a JID' })).toBe('not a JID');
+    expect(plainError({ code: 'notAuthorized', message: 'x' })).toContain('password');
+    expect(plainError({ code: 'registrationRequired', message: 'x' })).toContain('members');
+    expect(plainError({ code: 'conflict', message: 'x' })).toContain('nickname');
     expect(connectErrorText({ type: 'timeout' }, 'foid.space')).toBe('foid.space did not answer in time. Try again.');
   });
 

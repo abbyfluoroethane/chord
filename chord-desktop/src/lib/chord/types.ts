@@ -28,6 +28,9 @@ export type ErrorCode =
   | 'notConnected' // no session: call `login`
   | 'session'
   | 'server'
+  | 'notAuthorized' // a room needs a password, or the password is wrong
+  | 'conflict' // the nick is in use in the room
+  | 'registrationRequired' // only members can join the room
   | 'invalid' // a bad argument, for example a JID
   | 'unsupported' // the server lacks the service
   | 'actorGone'
@@ -214,6 +217,8 @@ export type ClientEvent =
       type: 'roomInvite';
       data: { room: Jid; from: Jid; reason: string | null; password: string | null };
     }
+  /** The owner destroyed a room that we were in. The core left it and retracted its bookmark. */
+  | { type: 'roomDestroyed'; data: { room: Jid; reason: string | null; alternate: Jid | null } }
   /** `typers` holds bare JIDs in a chat and nicks in a room. Empty: nobody types. */
   | { type: 'typing'; data: { peer: string; typers: string[] } }
   /** The blocklist changed. Read it again with `blockedContacts`. */
@@ -231,6 +236,9 @@ export interface NotificationSetting {
 }
 
 export type RoomAffiliation = 'owner' | 'admin' | 'member' | 'none' | 'outcast';
+
+/** The role of an occupant. `none` kicks, `visitor` mutes, `participant` gives voice back. */
+export type RoomRole = 'none' | 'visitor' | 'participant' | 'moderator';
 
 /** A null or missing field stays as it is. */
 export interface RoomSettings {
@@ -269,6 +277,8 @@ export interface RoomCard {
   occupants: number | null;
   passwordProtected: boolean;
   membersOnly: boolean;
+  /** Any occupant may change the subject. False: only moderators, or the room does not say. */
+  changeSubject: boolean;
 }
 
 export interface JoinRequest {

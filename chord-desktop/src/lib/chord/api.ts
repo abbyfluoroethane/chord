@@ -33,6 +33,7 @@ import type {
   RegistrationSubmission,
   RoomAffiliation,
   RoomCard,
+  RoomRole,
   RoomSettings,
   SearchHit,
   Settings,
@@ -234,13 +235,34 @@ export const searchMessages = (query: string, peer?: string, limit = 50) =>
 
 // ---------------------------------------------------------------- rooms
 
-export const joinRoom = (room: string, nick: string, password?: string) =>
-  invoke<void>('join_room', { room, nick, password: password ?? null });
+/**
+ * Join a room. With no nick, the room may have reserved one for us, else the stored nick,
+ * then `fallbackNick`, then the local part of the JID is the nick. A wrong or missing
+ * password rejects with the code `notAuthorized`.
+ */
+export const joinRoom = (
+  room: string,
+  nick: string | null,
+  password?: string,
+  fallbackNick?: string
+) =>
+  invoke<void>('join_room', {
+    room,
+    nick,
+    password: password ?? null,
+    fallbackNick: fallbackNick ?? null
+  });
+/** Set the subject of a room that we are in. An empty text clears it. */
+export const setRoomSubject = (room: string, subject: string) =>
+  invoke<void>('set_room_subject', { room, subject });
+/** Kick (`none`), mute (`visitor`), give voice (`participant`) or make a moderator, by nick. */
+export const setRoomRole = (room: string, nick: string, role: RoomRole, reason?: string) =>
+  invoke<void>('set_room_role', { room, nick, role, reason: reason ?? null });
 /** Read a room with a disco#info query. It does not join the room. */
 export const roomInfo = (room: string) => invoke<RoomCard>('room_info', { room });
 export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
 /** Save a room in the account bookmarks (XEP-0402). Not for a channel of a space. */
-export const addBookmark = (room: string, nick: string, name: string | null = null) =>
+export const addBookmark = (room: string, nick: string | null, name: string | null = null) =>
   invoke<void>('add_bookmark', { room, name, autojoin: true, nick });
 export const removeBookmark = (room: string) => invoke<void>('remove_bookmark', { room });
 export const changeNick = (room: string, nick: string) =>

@@ -48,6 +48,7 @@ import {
 import { app, HOME } from './app.svelte';
 import { contactsStore } from './contacts.svelte';
 import { rail, type RailEntry } from './rail.svelte';
+import { roomAlerts } from './roomalerts.svelte';
 import { session } from './session.svelte';
 import { settings } from './local';
 import { spaceKey, type ChannelItem } from './types';
@@ -376,7 +377,11 @@ class LiveController {
         contactsStore.addIncoming(e.data);
         break;
       case 'roomInvite':
-        ui.say(`${localPart(e.data.from)} invited you to ${localPart(e.data.room)}.`);
+        // A card with Accept and Decline. The app joins only after a click.
+        roomAlerts.invited(e.data.room, e.data.from, e.data.reason, e.data.password);
+        break;
+      case 'roomDestroyed':
+        roomAlerts.destroyed(e.data.room, e.data.reason, e.data.alternate);
         break;
       case 'typing':
         app.typing[e.data.peer] = e.data.typers.map((t) =>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Room settings for an owner or an admin. Maps to api.configureRoom(room, settings).
+  // Room settings for an owner or an admin. Maps to api.configureRoom(room, settings) and,
+  // for the topic, api.setRoomSubject(room, subject).
   // The bridge cannot read the current settings, so "Keep" leaves a value as it is.
   // "All options" loads the whole owner form of the room (api.roomConfigForm) and shows it
   // with the generic form renderer. It saves with api.submitRoomConfigForm.
@@ -18,7 +19,11 @@
   let { channel, onclose }: { channel: ChannelItem; onclose: () => void } = $props();
 
   let name = $state('');
-  onMount(() => (name = channel.name));
+  let topic = $state('');
+  onMount(() => {
+    name = channel.name;
+    topic = channel.topic ?? '';
+  });
   let visible = $state<'keep' | 'yes' | 'no'>('keep');
   let membersOnly = $state<'keep' | 'yes' | 'no'>('keep');
   let busy = $state(false);
@@ -64,6 +69,11 @@
 
   async function save() {
     busy = true;
+    // The topic is a message to the room, not a setting of the form.
+    if (topic.trim() !== (channel.topic ?? '') && !(await app.setTopic(channel.jid, topic))) {
+      busy = false;
+      return;
+    }
     const r = await app.call((b) =>
       b.configureRoom(channel.jid, {
         name: name.trim() && name.trim() !== channel.name ? name.trim() : null,
@@ -90,6 +100,10 @@
     <div class="field">
       <label for="room-name">Channel name</label>
       <input id="room-name" class="input" maxlength="60" bind:value={name} autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="room-topic">Topic</label>
+      <input id="room-topic" class="input" maxlength="300" bind:value={topic} autocomplete="off" />
     </div>
     <div class="field">
       <label for="room-public">Shown in the public list</label>

@@ -31,6 +31,14 @@ export interface ConfirmState {
   onconfirm: () => void;
 }
 
+/** A room that asks for a password. `resolve` gets the text, or null when the user cancels. */
+export interface PasswordAsk {
+  room: string;
+  /** True when we tried a password already and the room refused it. */
+  again: boolean;
+  resolve: (password: string | null) => void;
+}
+
 /** An anchor for a menu that opens at the pointer. Popover only needs two methods. */
 export function pointAnchor(x: number, y: number): HTMLElement {
   return {
@@ -53,6 +61,8 @@ class UiState {
   /** A space dialog (invite, settings, leave) opened from a menu. */
   circleDialog = $state<{ kind: DialogKind; space: string } | null>(null);
   confirm = $state<ConfirmState | null>(null);
+  /** The question for the password of a room. */
+  passwordAsk = $state<PasswordAsk | null>(null);
   /** The message in the forward dialog. */
   forwarding = $state<TimelineItem | null>(null);
   /** Popovers and dialogs that are open now. Esc marks read only at 0. */
@@ -163,6 +173,14 @@ class UiState {
     this.closePeople();
     this.settingsPage = page;
     this.settingsOpen = true;
+  }
+
+  /** Ask the user for the password of a room. Resolves with null when the user cancels. */
+  askPassword(room: string, again: boolean): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.passwordAsk?.resolve(null);
+      this.passwordAsk = { room, again, resolve };
+    });
   }
 
   say(text: string) {

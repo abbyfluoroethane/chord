@@ -4,7 +4,9 @@
 import * as fx from '$lib/fixtures/data';
 import type {
   Availability,
+  ChordError,
   Gif,
+  RoomRole,
   NotificationSetting,
   SpaceAccess,
   TimelineSubscription
@@ -24,6 +26,7 @@ import type {
   SpaceItem,
   TimelineItem
 } from './types';
+import { canSetTopic, isModerator } from './rooms';
 import { spaceKey } from './types';
 import { ui } from './ui.svelte';
 
@@ -137,6 +140,18 @@ class AppState {
     const mine = this.membersHere.find((m) => m.id === this.me.address);
     return !!mine && (mine.affiliation === 'owner' || mine.affiliation === 'admin' || mine.role === 'Moderator');
   });
+  /** What the rooms told us: may any occupant change the topic. */
+  subjectOpen = $state<Record<string, boolean>>({});
+  /** I can set the topic of the open room. */
+  canSetTopic = $derived.by(() => {
+    if (this.channel?.kind !== 'channel') return false;
+    const mine = this.membersHere.find((m) => m.id === this.me.address);
+    return canSetTopic(mine, this.subjectOpen[this.selectedJid] ?? false);
+  });
+  /** I am a moderator of the open room: I can kick and mute. */
+  isModerator = $derived(
+    isModerator(this.membersHere.find((m) => m.id === this.me.address))
+  );
   /** I can change the roles and the settings of this room. */
   isRoomAdmin = $derived.by(() => {
     const mine = this.membersHere.find((m) => m.id === this.me.address);
@@ -270,18 +285,56 @@ class AppState {
       const b = await api();
       if (c.kind === 'channel' && !c.joined) {
         const nick = this.myNick(c.space);
-        await b.joinRoom(c.jid, nick);
+        await this.joinAsking(b, c.jid, nick);
         // A room in a space is listed by the space. Only a room outside one is bookmarked.
         if (!c.space) await this.bookmark(b, c.jid, nick);
       }
+      if (c.kind === 'channel') void this.readSubjectRight(c.jid);
       await this.readOnBridge(c);
     } catch (e) {
       ui.say(plainError(e));
     }
   }
 
+  /**
+   * Join a room. A room that needs a password, or that refuses ours, makes the UI ask the
+   * user, and the join runs again with the answer. A cancel rejects with the first error.
+   * Maps to api.joinRoom(room, nick, password, fallbackNick).
+   */
+  private async joinAsking(
+    b: Awaited<ReturnType<typeof api>>,
+    jid: string,
+    nick: string | null,
+    password?: string,
+    fallbackNick?: string
+  ): Promise<void> {
+    let given = password;
+    for (;;) {
+      try {
+        await b.joinRoom(jid, nick, given, fallbackNick);
+        return;
+      } catch (e) {
+        if ((e as ChordError | null)?.code !== 'notAuthorized') throw e;
+        const asked = await ui.askPassword(jid, given !== undefined);
+        if (asked === null) throw e;
+        given = asked;
+      }
+    }
+  }
+
+  /** Ask once if any occupant may set the topic of a room. A failure keeps "no". */
+  private async readSubjectRight(jid: string) {
+    if (jid in this.subjectOpen) return;
+    try {
+      const b = await api();
+      this.subjectOpen[jid] = (await b.roomInfo(jid)).changeSubject;
+    } catch {
+      /* The room says nothing: only moderators set the topic. */
+    }
+  }
+
   /** Bookmark a room with autojoin, so that the next login joins it. A failure is not fatal. */
-  private async bookmark(b: Awaited<ReturnType<typeof api>>, jid: string, nick: string) {
+  private async bookmark(b: Awaited<ReturnType<typeof api>>, jid: string, nick: string | null) {
     try {
       await b.addBookmark(jid, nick);
     } catch {
@@ -961,15 +1014,68 @@ class AppState {
       this.selectChannel(jid);
       return true;
     }
-    const nick = this.myNick(null);
+    // A first join: no nick of our own, so that the room can give the nick that it reserved
+    // for us. Without one, the nick is what we use in the spaces.
     const r = await this.call(async (b) => {
-      await b.joinRoom(jid, nick, password ?? undefined);
-      await this.bookmark(b, jid, nick);
+      await this.joinAsking(b, jid, null, password ?? undefined, this.myNick(null));
+      await this.bookmark(b, jid, null);
     });
     if (!r.ok) return false;
     this.pending = { jid };
     this.ensureSelection();
     return true;
+  }
+
+  /**
+   * Accept an invitation to a room. The invitation may carry the password. A room that we
+   * know already is joined again, with that password. Maps to api.joinRoom.
+   */
+  async acceptRoomInvite(jid: string, password: string | null): Promise<boolean> {
+    const known = this.channels.find((c) => c.jid === jid && c.kind === 'channel');
+    if (!live || !known || known.joined) return this.joinRoomLink(jid, password);
+    const r = await this.call(async (b) => {
+      await this.joinAsking(b, jid, this.myNick(known.space), password ?? undefined);
+    });
+    if (r.ok) this.selectChannel(jid);
+    return r.ok;
+  }
+
+  /** The room is gone: it is not joined any more. The rows go when the bookmark is gone. */
+  markRoomGone(jid: string) {
+    const c = this.channels.find((x) => x.jid === jid);
+    if (c) c.joined = false;
+  }
+
+  /** Set the topic of a room that we are in. Maps to api.setRoomSubject(room, subject). */
+  async setTopic(jid: string, text: string): Promise<boolean> {
+    if (!live) {
+      const c = this.channels.find((x) => x.jid === jid);
+      if (c) c.topic = text.trim() || null;
+      return true;
+    }
+    const r = await this.call((b) => b.setRoomSubject(jid, text.trim()));
+    if (r.ok) ui.say(text.trim() ? 'Topic changed.' : 'Topic cleared.');
+    return r.ok;
+  }
+
+  /**
+   * Kick, mute, or give voice back to a person of the open room, by the nick.
+   * Maps to api.setRoomRole(room, nick, role, reason).
+   */
+  async setRole(address: string, role: RoomRole, reason?: string): Promise<void> {
+    const room = this.selectedJid;
+    const target = this.membersHere.find((m) => m.id === address);
+    if (!live || !room || !target?.nick) return;
+    const nick = target.nick;
+    const r = await this.call((b) => b.setRoomRole(room, nick, role, reason));
+    if (!r.ok) return;
+    ui.say(
+      role === 'none'
+        ? `${target.name} was kicked.`
+        : role === 'visitor'
+          ? `${target.name} is muted.`
+          : 'Saved.'
+    );
   }
 
   /** Maps to api.browseSpaces(). */

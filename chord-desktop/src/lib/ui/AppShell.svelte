@@ -16,6 +16,8 @@
   import QuickSwitcher from './QuickSwitcher.svelte';
   import SettingsOverlay from './SettingsOverlay.svelte';
   import ShortcutsModal from './ShortcutsModal.svelte';
+  import PasswordModal from './PasswordModal.svelte';
+  import RoomAlertCards from './RoomAlertCards.svelte';
   import XmppLinkModal from './XmppLinkModal.svelte';
   import Toast from './Toast.svelte';
   import { app, HOME } from './app.svelte';
@@ -139,6 +141,10 @@
 {/if}
 {#if xmppLinks.asking}
   <XmppLinkModal link={xmppLinks.asking} onclose={() => xmppLinks.dismiss()} />
+{/if}
+<RoomAlertCards />
+{#if ui.passwordAsk}
+  <PasswordModal ask={ui.passwordAsk} onclose={() => (ui.passwordAsk = null)} />
 {/if}
 {#if ui.confirm}<ConfirmModal state={ui.confirm} onclose={() => (ui.confirm = null)} />{/if}
 {#if ui.circleDialog}

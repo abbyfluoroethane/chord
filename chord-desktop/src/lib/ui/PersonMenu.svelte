@@ -5,6 +5,9 @@
   import Bell from 'lucide-svelte/icons/bell';
   import Shield from 'lucide-svelte/icons/shield';
   import Copy from 'lucide-svelte/icons/copy';
+  import LogOut from 'lucide-svelte/icons/log-out';
+  import Mic from 'lucide-svelte/icons/mic';
+  import MicOff from 'lucide-svelte/icons/mic-off';
   import MessageSquare from 'lucide-svelte/icons/message-square';
   import Pencil from 'lucide-svelte/icons/pencil';
   import StickyNote from 'lucide-svelte/icons/sticky-note';
@@ -16,6 +19,7 @@
   import { app, HOME } from './app.svelte';
   import { live } from './bridge';
   import { contactsStore } from './contacts.svelte';
+  import { canModerateMember } from './rooms';
   import { spaceKey, type NotificationLevel, type SpaceItem } from './types';
   import { ui, type PersonMenuState } from './ui.svelte';
 
@@ -50,6 +54,12 @@
     { v: 'member', label: 'Member' },
     { v: 'none', label: 'Guest' }
   ] as const;
+
+  // Kick and mute are role changes of an occupant. Maps to api.setRoomRole(room, nick, role).
+  const target = $derived(app.membersHere.find((m) => m.id === p.address));
+  const mine = $derived(app.membersHere.find((m) => m.id === app.me.address));
+  const canKick = $derived(live && !!target?.nick && canModerateMember(mine, target));
+  const muted = $derived(target?.role === 'Visitor');
 
   const items = $derived.by<MenuItem[]>(() => {
     const out: MenuItem[] = [
@@ -144,6 +154,28 @@
         ],
         onselect: () => {}
       });
+    }
+    if (canKick) {
+      out.push(
+        {
+          label: muted ? 'Unmute' : 'Mute',
+          icon: muted ? Mic : MicOff,
+          separator: true,
+          onselect: () => void app.setRole(p.address, muted ? 'participant' : 'visitor')
+        },
+        {
+          label: 'Kick from this channel',
+          icon: LogOut,
+          danger: true,
+          onselect: () =>
+            (ui.confirm = {
+              title: `Kick ${p.name}?`,
+              text: `${p.name} leaves the channel now. They can come back if the channel is open to them.`,
+              confirm: 'Kick',
+              onconfirm: () => void app.setRole(p.address, 'none')
+            })
+        }
+      );
     }
     if (p.isMe && app.selectedSpace !== HOME) {
       out.push({

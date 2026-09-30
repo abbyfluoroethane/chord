@@ -1,20 +1,10 @@
 <script lang="ts">
-  // Members grouped by affiliation and presence: owners, admins, online, offline.
+  // Members grouped by affiliation and presence: owners, admins, online, visitors, offline.
   import MemberRow from './MemberRow.svelte';
   import { app } from './app.svelte';
-  import type { MemberItem } from './types';
+  import { groupMembers } from './rooms';
 
-  const groups = $derived.by(() => {
-    const m = app.membersHere;
-    const on = m.filter((x) => x.online);
-    const list: { label: string; items: MemberItem[] }[] = [
-      { label: 'Owners', items: on.filter((x) => x.affiliation === 'owner') },
-      { label: 'Admins', items: on.filter((x) => x.affiliation === 'admin') },
-      { label: 'Online', items: on.filter((x) => x.affiliation !== 'owner' && x.affiliation !== 'admin') },
-      { label: 'Offline', items: m.filter((x) => !x.online) }
-    ];
-    return list.filter((g) => g.items.length);
-  });
+  const groups = $derived(groupMembers(app.membersHere));
 </script>
 
 <aside class="members" aria-label="Members">

@@ -5,7 +5,9 @@
   import Pencil from 'lucide-svelte/icons/pencil';
   import Avatar from './Avatar.svelte';
   import Settings from 'lucide-svelte/icons/settings';
+  import Pencil from 'lucide-svelte/icons/pencil';
   import ChannelSettings from './ChannelSettings.svelte';
+  import TopicModal from './TopicModal.svelte';
   import Icon from './Icon.svelte';
   import { contextMenu } from './contextmenu.svelte';
   import type { MenuItem } from './Menu.svelte';
@@ -38,14 +40,17 @@
   // The menu of a channel. Maps to api.setNotificationLevel(room, level, muteUntil),
   // api.markRead(room), and api.leaveRoom(room).
   let settingsOpen = $state(false);
-  const items = $derived<MenuItem[]>(
-    channelMenu(
-      channel,
-      selected && app.isRoomAdmin && !isDm
-        ? [{ label: 'Channel settings', icon: Settings, onselect: () => (settingsOpen = true) }]
-        : []
-    )
-  );
+  let topicOpen = $state(false);
+  // Maps to api.setRoomSubject(room, subject). A moderator, or anyone when the room allows it.
+  const extra = $derived<MenuItem[]>([
+    ...(selected && app.canSetTopic && !isDm
+      ? [{ label: 'Set topic', icon: Pencil, onselect: () => (topicOpen = true) }]
+      : []),
+    ...(selected && app.isRoomAdmin && !isDm
+      ? [{ label: 'Channel settings', icon: Settings, onselect: () => (settingsOpen = true) }]
+      : [])
+  ]);
+  const items = $derived<MenuItem[]>(channelMenu(channel, extra));
 
   function context(e: MouseEvent) {
     contextMenu.open(e, items, { label: `${channel.name} menu` });
@@ -112,6 +117,9 @@
 
 {#if settingsOpen}
   <ChannelSettings {channel} onclose={() => (settingsOpen = false)} />
+{/if}
+{#if topicOpen}
+  <TopicModal {channel} onclose={() => (topicOpen = false)} />
 {/if}
 
 <style>
