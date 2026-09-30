@@ -28,7 +28,10 @@ fn text_type(content_type: Option<&str>) -> bool {
         .trim()
         .to_ascii_lowercase();
     (mime.starts_with("text/") && mime != "text/html")
-        || matches!(mime.as_str(), "application/octet-stream" | "application/css")
+        || matches!(
+            mime.as_str(),
+            "application/octet-stream" | "application/css"
+        )
 }
 
 /// Check a URL for a theme: https only, and the usual public-address checks.
