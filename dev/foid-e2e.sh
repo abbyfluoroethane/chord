@@ -139,6 +139,9 @@ mid=$(a --json timeline "$room" --limit 20 | item "$mtext" "it['id']")
 sleep 3
 a moderate "$mid" "e2e test" >/dev/null
 sleep 6
+# `b` is a shell function, so $! is a subshell: stop the chord-cli child first, or it
+# stays online for hours and takes the messages of later runs.
+pkill -P "$follower" 2>/dev/null || true
 kill "$follower" 2>/dev/null || true
 wait "$follower" 2>/dev/null || true
 moderated=$(b --offline --json timeline "$room" --limit 20 | python3 -c "

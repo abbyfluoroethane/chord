@@ -1776,12 +1776,110 @@ fn is_requests(p: &FeaturePending) -> bool {
     matches!(p, FeaturePending::Spaces(Pending::JoinRequests { .. }))
 }
 
+fn is_resend_forms(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::ResendForms { .. }))
+}
+
+/// Ask for the join requests and answer the get-pending command, so that the owner query
+/// is the next IQ.
 fn requests(h: &mut Harness) -> oneshot::Receiver<Result<Vec<JoinRequest>, ClientError>> {
-    owner_call(h, |reply| Command::JoinRequests {
+    let rx = owner_call(h, |reply| Command::JoinRequests {
         service: service_bare(),
         node: "dev".into(),
         reply,
-    })
+    });
+    h.take_sent();
+    h.answer(is_resend_forms, None);
+    rx
+}
+
+#[test]
+fn the_join_requests_first_ask_the_service_to_send_the_forms_again() {
+    let mut h = followed();
+    let mut rx = owner_call(&mut h, |reply| Command::JoinRequests {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    });
+    let sent = h.sent_iqs();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(matches!(&sent[0], Iq::Set { .. }));
+    let text = payload_of(&sent[0]);
+    assert!(text.contains(GET_PENDING), "{text}");
+    assert!(
+        text.contains("pubsub#node") && text.contains("dev"),
+        "{text}"
+    );
+    // The service sends a form again before its answer to the command.
+    let m = authorization(SERVICE, "dev", "bob@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    h.take_sent();
+    h.answer(is_resend_forms, None);
+    assert_eq!(rx.try_recv(), Ok(None));
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+    // ejabberd does not list the pending subscriber in the owner query.
+    h.answer(
+        is_requests,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions node='dev'>
+               <subscription jid='alice@chord.localhost' subscription='subscribed'/>
+             </subscriptions></pubsub>",
+            ns::PUBSUB_OWNER
+        ))),
+    );
+    let Ok(Some(Ok(list))) = rx.try_recv() else {
+        panic!("expected requests")
+    };
+    assert_eq!(
+        list,
+        [JoinRequest {
+            jid: "bob@chord.localhost".into(),
+            subid: None
+        }]
+    );
+}
+
+#[test]
+fn a_service_without_get_pending_still_gets_the_owner_query() {
+    let mut h = followed();
+    let mut rx = owner_call(&mut h, |reply| Command::JoinRequests {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    });
+    h.take_sent();
+    h.respond(is_resend_forms, forbidden());
+    assert_eq!(rx.try_recv(), Ok(None));
+    h.answer(is_requests, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(vec![]))));
+}
+
+#[test]
+fn the_owner_is_never_a_join_request() {
+    let mut h = followed();
+    h.with_ctx(on_connected);
+    // The form for our own subscription, which ejabberd sends at node creation.
+    let m = authorization(SERVICE, "dev", "alice@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    assert!(notices(&mut h).is_empty());
+    assert!(
+        crate::features::spaces::db::requests(h.store.conn(), h.account_id, SERVICE, "dev")
+            .unwrap()
+            .is_empty()
+    );
+    // A row that an older version stored is left out of the list.
+    crate::features::spaces::db::add_request(
+        h.store.conn(),
+        h.account_id,
+        SERVICE,
+        "dev",
+        "alice@chord.localhost",
+    )
+    .unwrap();
+    let mut rx = requests(&mut h);
+    h.answer(is_requests, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(vec![]))));
 }
 
 #[test]

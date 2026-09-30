@@ -31,8 +31,11 @@
 //!   the row into a space and `none` drops it. Both send a `ClientEvent::Notice`. At start,
 //!   the subscriptions list does the same for an answer that came while we were offline.
 //!   `pending_space_joins` lists the rows. As owner, we get a `subscribe_authorization`
-//!   form (`on_authorization`, a `Notice`). `space_join_requests`, `approve_space_join`, and
-//!   `deny_space_join` use the owner subscriptions request and set (XEP-0060, 8.8.1, 8.8.2).
+//!   form (`on_authorization`, a `Notice`). The service sends it to the sessions that are
+//!   online at that time, so `space_join_requests` first runs the get-pending command
+//!   (XEP-0060, 8.7): the service sends each form again, to this session. Then it merges the
+//!   stored forms with the owner subscriptions request (8.8.1). `approve_space_join` and
+//!   `deny_space_join` answer with the form (8.6).
 //! - Private spaces use the `whitelist` access model. The owner makes a member with
 //!   `add_space_member`, then the member calls `join_space`. Join requests (`authorize`)
 //!   only work where a server offers them. Prosody 13 does not.
@@ -61,7 +64,7 @@ use xmpp_parsers::rsm::{SetQuery, SetResult};
 use xmpp_parsers::stanza_error::StanzaError;
 
 use super::avatars::{self, MAX_AVATAR_BYTES};
-use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, new_id, pubsub};
+use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, adhoc, new_id, pubsub};
 use crate::actor::{ClientError, ClientEvent, ClientHandle};
 use crate::store::Store;
 use crate::views::{ChannelScope, ViewKey};
@@ -197,6 +200,10 @@ pub struct JoinRequest {
 /// A join that waits for approval: service, node, and name.
 pub type PendingJoin = (String, String, String);
 
+/// The ad-hoc command that makes the service send the pending request forms again
+/// (XEP-0060, 8.7).
+const GET_PENDING: &str = "http://jabber.org/protocol/pubsub#get-pending";
+
 const FORM_SUBSCRIBE_AUTHORIZATION: &str =
     "http://jabber.org/protocol/pubsub#subscribe_authorization";
 const FEATURE_ACCESS_AUTHORIZE: &str = "http://jabber.org/protocol/pubsub#access-authorize";
@@ -331,6 +338,12 @@ pub(crate) enum Pending {
     Done {
         action: Action,
         reply: Reply<()>,
+    },
+    /// The service sent the pending request forms again. The owner query comes next.
+    ResendForms {
+        service: BareJid,
+        node: String,
+        reply: Reply<Vec<JoinRequest>>,
     },
     /// The pending subscriptions of a space that we own.
     JoinRequests {
@@ -937,17 +950,23 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             node,
             reply,
         } => {
-            let iq = owner_iq(
-                false,
-                &service,
-                &format!("<subscriptions node='{}'/>", xml_escape(&node)),
+            // XEP-0060, 8.7: the service sends each pending request form again, to this
+            // session. The service sends the forms before the command answer, so the
+            // store has them when the owner query goes out. A form that went to another
+            // session of the account, or to no session, comes back this way.
+            let iq = adhoc::execute_iq(
+                Jid::from(service.clone()),
+                GET_PENDING,
+                &[("pubsub#node".to_owned(), node.clone())],
             );
-            let service = service.to_string();
-            go(ctx, iq, reply, |reply| Pending::JoinRequests {
-                service,
-                node,
-                reply,
-            });
+            ctx.request(
+                iq,
+                FeaturePending::Spaces(Pending::ResendForms {
+                    service,
+                    node,
+                    reply,
+                }),
+            );
         }
         Command::AnswerJoin {
             service,
@@ -1330,6 +1349,27 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(Err(e));
             }
         },
+        Pending::ResendForms {
+            service,
+            node,
+            reply,
+        } => {
+            // A service without the command still has the owner query and the forms.
+            if let Err(e) = result {
+                log::debug!("get-pending for {node} at {service}: {e}");
+            }
+            let iq = owner_iq(
+                false,
+                &service,
+                &format!("<subscriptions node='{}'/>", xml_escape(&node)),
+            );
+            let service = service.to_string();
+            go(ctx, iq, reply, |reply| Pending::JoinRequests {
+                service,
+                node,
+                reply,
+            });
+        }
         Pending::JoinRequests {
             service,
             node,
@@ -1350,6 +1390,9 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                         list.push(JoinRequest { jid, subid: None });
                     }
                 }
+                // The owner is no request. An older version stored the form that the
+                // service sends for the owner's own subscription.
+                list.retain(|r| r.jid != ctx.account.as_str());
                 list
             }));
         }
@@ -1632,6 +1675,11 @@ pub(crate) fn on_authorization(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         log::warn!("a join request from {from} has no node or subscriber");
         return true;
     };
+    // ejabberd also sends a form for the owner's own subscription when it creates an
+    // `authorize` node, and then subscribes the owner. That is no join request.
+    if jid == ctx.account.as_str() {
+        return true;
+    }
     // An offline request arrives right after login, before service discovery names the
     // spaces service. So a space in the store also counts.
     let known = ctx.state.spaces.service.as_ref() == Some(&from)

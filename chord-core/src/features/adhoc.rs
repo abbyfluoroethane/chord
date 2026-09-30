@@ -62,7 +62,7 @@ fn nc(name: &'static str) -> NcName {
 }
 
 /// The IQ that starts the command.
-fn execute_iq(to: Jid, node: &str, fields: &[(String, String)]) -> Iq {
+pub(crate) fn execute_iq(to: Jid, node: &str, fields: &[(String, String)]) -> Iq {
     let mut form = Element::builder("x", NS_DATA).attr(nc("type"), "submit");
     for (var, value) in fields {
         form = form.append(
