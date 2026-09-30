@@ -70,6 +70,33 @@ pub fn parse_server(server: Option<&str>) -> Res<ServerAddr> {
     })
 }
 
+/// The text that the keychain keeps as the server of a saved password: `srv` or
+/// `starttls://host:port` in lower case. It is the same text as the `server` of `login`.
+pub fn server_key(server: Option<&str>) -> String {
+    match server.map(str::trim) {
+        None | Some("") => "srv".to_owned(),
+        Some(s) => s.to_ascii_lowercase(),
+    }
+}
+
+/// The password and the server text for a login. A password from the UI goes with the
+/// server from the UI. With none, the saved password goes with the server it was saved
+/// for, and the `server` argument is ignored. `saved` reads the keychain: the password and
+/// its server. A saved password with no server entry is an old one and is for SRV.
+pub fn credentials(
+    password: Option<String>,
+    server: Option<&str>,
+    saved: impl FnOnce() -> Res<(Option<String>, Option<String>)>,
+) -> Res<(String, String)> {
+    if let Some(p) = password.filter(|p| !p.is_empty()) {
+        return Ok((p, server_key(server)));
+    }
+    let (password, saved_server) = saved()?;
+    let password =
+        password.ok_or_else(|| ChordError::invalid("no password given and none saved"))?;
+    Ok((password, server_key(saved_server.as_deref())))
+}
+
 /// The file name of an upload, from its path.
 pub fn file_name(path: &std::path::Path) -> Res<String> {
     path.file_name()
@@ -160,9 +187,12 @@ pub async fn open(app: AppHandle, state: State<'_, AppState>, account: String) -
     })
 }
 
-/// Log in. `password` is optional: with none, the saved password is used. `server` is
-/// empty for a SRV lookup, or `starttls://host:port`. With `remember`, a good login
-/// saves the password in the system keychain.
+/// Log in. `password` is optional: with none, the saved password is used, and it goes only
+/// to the account and the server that it was saved for. Then `server` is ignored, because
+/// a script in the page could use it to send the saved password to another host
+/// (BRIDGESECURITY-08). Otherwise `server` is empty for a SRV lookup, or
+/// `starttls://host:port`. With `remember`, a good login saves the password and the server
+/// in the system keychain.
 #[tauri::command]
 pub async fn login(
     state: State<'_, AppState>,
@@ -171,16 +201,16 @@ pub async fn login(
     remember: Option<bool>,
 ) -> Res<()> {
     let client = state.client()?;
-    let server = parse_server(server.as_deref())?;
-    let password = match password.filter(|p| !p.is_empty()) {
-        Some(p) => p,
-        None => keychain::get(client.account.as_str())?
-            .ok_or_else(|| ChordError::invalid("no password given and none saved"))?,
-    };
+    let (password, server_text) = credentials(password, server.as_deref(), || {
+        let account = client.account.as_str();
+        Ok((keychain::get(account)?, keychain::get_server(account)?))
+    })?;
+    let server = parse_server(Some(&server_text))?;
     let config = SessionConfig::new(client.account.clone(), password.clone(), server);
     client.handle.login(config).await?;
     if remember.unwrap_or(false) {
         keychain::set(client.account.as_str(), &password)?;
+        keychain::set_server(client.account.as_str(), &server_text)?;
     }
     Ok(())
 }
@@ -833,6 +863,60 @@ pub async fn push_registrations(state: State<'_, AppState>) -> Res<Vec<PushRegis
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_saved_server_text_is_normal() {
+        assert_eq!(server_key(None), "srv");
+        assert_eq!(server_key(Some("  ")), "srv");
+        assert_eq!(server_key(Some("srv")), "srv");
+        assert_eq!(
+            server_key(Some(" starttls://XMPP.Example.org:5222 ")),
+            "starttls://xmpp.example.org:5222"
+        );
+        // What the keychain gives back must parse again.
+        assert_eq!(
+            parse_server(Some(&server_key(Some("starttls://Xmpp.Example.org:5222")))).unwrap(),
+            ServerAddr::StartTls {
+                host: "xmpp.example.org".into(),
+                port: 5222
+            }
+        );
+        assert_eq!(
+            parse_server(Some(&server_key(None))).unwrap(),
+            ServerAddr::Srv
+        );
+    }
+
+    #[test]
+    fn a_saved_password_goes_to_its_own_server_only() {
+        let saved = |server: Option<&str>| {
+            let server = server.map(str::to_owned);
+            move || Ok((Some("secret".to_owned()), server))
+        };
+        // The UI names another host. The saved password ignores it.
+        let got = credentials(None, Some("starttls://evil.example:5222"), saved(None)).unwrap();
+        assert_eq!(got, ("secret".into(), "srv".into()));
+        let got = credentials(
+            Some(String::new()),
+            Some("starttls://evil.example:5222"),
+            saved(Some("starttls://xmpp.example.org:5222")),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            ("secret".into(), "starttls://xmpp.example.org:5222".into())
+        );
+        // A typed password uses the typed server and never reads the keychain.
+        let got = credentials(
+            Some("typed".into()),
+            Some("starttls://Mine.example:5222"),
+            || panic!("the keychain is not read"),
+        )
+        .unwrap();
+        assert_eq!(got, ("typed".into(), "starttls://mine.example:5222".into()));
+        // No password anywhere is an error.
+        assert!(credentials(None, None, || Ok((None, None))).is_err());
+    }
 
     #[test]
     fn server_field_parses() {

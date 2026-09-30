@@ -24,6 +24,28 @@ pub fn get(account: &str) -> Res<Option<String>> {
     }
 }
 
+/// The server that the saved password of `account` is for: `srv` or `starttls://host:port`.
+/// It is a second entry, so an old entry with no server stays valid and means `srv`.
+pub fn get_server(account: &str) -> Res<Option<String>> {
+    match entry(&server_user(account))?.get_password() {
+        Ok(server) => Ok(Some(server)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(keychain_error(e)),
+    }
+}
+
+pub fn set_server(account: &str, server: &str) -> Res<()> {
+    entry(&server_user(account))?
+        .set_password(server)
+        .map_err(keychain_error)
+}
+
+/// The keychain user of the server entry. A JID has no `#` in its domain, so no other
+/// account has this name.
+fn server_user(account: &str) -> String {
+    format!("{account}#server")
+}
+
 pub fn set(account: &str, password: &str) -> Res<()> {
     entry(account)?
         .set_password(password)
@@ -32,15 +54,23 @@ pub fn set(account: &str, password: &str) -> Res<()> {
 
 /// Delete the saved password. No saved password is not an error.
 pub fn delete(account: &str) -> Res<()> {
-    match entry(account)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(keychain_error(e)),
+    for user in [account.to_owned(), server_user(account)] {
+        match entry(&user)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(keychain_error(e)),
+        }
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_server_entry_has_its_own_user() {
+        assert_eq!(server_user("a@b.example"), "a@b.example#server");
+    }
 
     #[test]
     fn a_keychain_failure_has_the_keychain_code() {
