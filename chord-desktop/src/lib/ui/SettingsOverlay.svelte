@@ -12,6 +12,7 @@
   import SettingsNav from './SettingsNav.svelte';
   import SettingsNotifications from './SettingsNotifications.svelte';
   import SettingsPrivacy from './SettingsPrivacy.svelte';
+  import SettingsServer from './SettingsServer.svelte';
   import Toast from './Toast.svelte';
   import { ui } from './ui.svelte';
 
@@ -23,6 +24,7 @@
     notifications: 'Notifications',
     appearance: 'Appearance',
     keybinds: 'Keybinds',
+    server: 'Server',
     about: 'About'
   } as const;
 
@@ -63,6 +65,8 @@
           <SettingsAppearance />
         {:else if ui.settingsPage === 'keybinds'}
           <SettingsKeybinds />
+        {:else if ui.settingsPage === 'server'}
+          <SettingsServer />
         {:else}
           <SettingsAbout />
         {/if}

@@ -180,6 +180,7 @@ export type SettingsPage =
   | 'notifications'
   | 'appearance'
   | 'keybinds'
+  | 'server'
   | 'about';
 
 export type DisplayMode = 'cozy' | 'compact';

@@ -716,7 +716,10 @@ mod tests {
         assert_eq!(payload.attr("sessionid"), Some("s9"));
         let x = payload.get_child("x", NS_DATA).unwrap();
         assert_eq!(x.attr("type"), Some("submit"));
-        assert_eq!(x.get_child("field", NS_DATA).unwrap().attr("var"), Some("name"));
+        assert_eq!(
+            x.get_child("field", NS_DATA).unwrap().attr("var"),
+            Some("name")
+        );
         let xml = "<command xmlns='http://jabber.org/protocol/commands' node='config' \
             sessionid='s9' status='completed'><note type='info'>Done</note></command>";
         respond(&mut h, IqResponse::Result(Some(el(xml))));
@@ -731,7 +734,7 @@ mod tests {
         let mut h = Harness::new();
         let form = Form::from_element(&el("<x xmlns='jabber:x:data' type='form'/>")).unwrap();
         for action in [CommandAction::Prev, CommandAction::Cancel] {
-            let _ = step(&mut h, Some("s9"), action, Some(form.clone()));
+            drop(step(&mut h, Some("s9"), action, Some(form.clone())));
         }
         let iqs = h.sent_iqs();
         assert_eq!(iqs.len(), 2);

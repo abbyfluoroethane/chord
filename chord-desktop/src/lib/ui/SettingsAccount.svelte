@@ -2,6 +2,7 @@
   // My account: avatar, display name, address, password row. There is no delete option.
   import { onMount } from 'svelte';
   import Avatar from './Avatar.svelte';
+  import ChangePasswordModal from './ChangePasswordModal.svelte';
   import { app } from './app.svelte';
   import { api, live } from './bridge';
   import { plainError } from './adapt';
@@ -11,6 +12,7 @@
   let name = $state('');
   let file = $state<HTMLInputElement>();
   let error = $state('');
+  let passwordOpen = $state(false);
 
   onMount(() => (name = app.me.name));
 
@@ -132,11 +134,13 @@
   <div class="row">
     <div class="text">
       <span class="label">Password</span>
-      <span class="meta">Changing your password here comes later. Use your server for now.</span>
+      <span class="meta">Choose a new password for your account.</span>
     </div>
-    <button class="btn" disabled>Change password</button>
+    <button class="btn" onclick={() => (passwordOpen = true)}>Change password</button>
   </div>
 </section>
+
+{#if passwordOpen}<ChangePasswordModal onclose={() => (passwordOpen = false)} />{/if}
 
 <style>
   .card {

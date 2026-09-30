@@ -8,7 +8,11 @@ import type {
   ChannelScope,
   ChordError,
   ClientEvent,
+  CommandAction,
+  CommandItem,
+  CommandStep,
   Contact,
+  DataForm,
   EmojiPackStatus,
   GifPage,
   InvisibleMethod,
@@ -25,6 +29,8 @@ import type {
   PendingJoin,
   Pin,
   PushRegistration,
+  RegistrationForm,
+  RegistrationSubmission,
   RoomAffiliation,
   RoomCard,
   RoomSettings,
@@ -382,3 +388,31 @@ export const gifSearch = (query: string, page: number) =>
 export const emojiPacks = () => invoke<EmojiPackStatus[]>('emoji_packs');
 /** Install an emoji pack. Noto and Fluent download from the npm registry. */
 export const emojiPackInstall = (id: string) => invoke<void>('emoji_pack_install', { id });
+
+// ---------------------------------------------------------------- forms, commands, accounts
+
+/** The commands that a service offers (XEP-0050). */
+export const listCommands = (service: string) => invoke<CommandItem[]>('list_commands', { service });
+/**
+ * Run one step of a command. Start with `execute`, no session id and no form. For the next
+ * steps, give the session id of the last answer, the action, and the filled form.
+ */
+export const commandStep = (
+  service: string,
+  node: string,
+  sessionId: string | null,
+  action: CommandAction,
+  form: DataForm | null,
+) => invoke<CommandStep>('command_step', { service, node, sessionId, action, form });
+/** The whole configuration form of a room that we own (XEP-0045, 10.2). */
+export const roomConfigForm = (room: string) => invoke<DataForm>('room_config_form', { room });
+export const submitRoomConfigForm = (room: string, form: DataForm) =>
+  invoke<void>('submit_room_config_form', { room, form });
+/** Change the password. The keychain gets the new one when it holds a saved password. */
+export const changePassword = (password: string) => invoke<void>('change_password', { password });
+/** Ask a server for its registration fields, before any login. */
+export const registrationForm = (domain: string, server?: string) =>
+  invoke<RegistrationForm>('registration_form', { domain, server: server ?? null });
+/** Create an account. Log in with it afterwards. */
+export const registerAccount = (domain: string, answer: RegistrationSubmission, server?: string) =>
+  invoke<void>('register_account', { domain, server: server ?? null, answer });

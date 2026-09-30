@@ -214,7 +214,9 @@ mod tests {
 
     use sasl::common::ChannelBinding;
     use tokio::io::{BufReader, DuplexStream};
-    use tokio_xmpp::xmlstream::{PendingFeaturesRecv, StreamHeader, accept_stream, initiate_stream};
+    use tokio_xmpp::xmlstream::{
+        PendingFeaturesRecv, StreamHeader, accept_stream, initiate_stream,
+    };
     use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType};
     use xmpp_parsers::stream_features::StreamFeatures;
 
@@ -242,7 +244,8 @@ mod tests {
             _jid: &Jid,
             ns: &'static str,
             timeouts: Timeouts,
-        ) -> Result<(PendingFeaturesRecv<Self::Stream>, ChannelBinding), tokio_xmpp::Error> {
+        ) -> Result<(PendingFeaturesRecv<Self::Stream>, ChannelBinding), tokio_xmpp::Error>
+        {
             let (client, server) = tokio::io::duplex(8192);
             let (answer, seen) = (self.answer.clone(), Arc::clone(&self.seen));
             tokio::spawn(async move {
@@ -334,8 +337,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_form_request_is_a_get_and_the_answer_parses() {
-        let query = el("<query xmlns='jabber:iq:register'><instructions>Pick a name.</instructions>\
-            <username/><password/></query>");
+        let query = el(
+            "<query xmlns='jabber:iq:register'><instructions>Pick a name.</instructions>\
+            <username/><password/></query>",
+        );
         let (server, seen) = fake(Answer::Result(Some(query)));
         let payload = exchange(server, &domain(), form_request())
             .await

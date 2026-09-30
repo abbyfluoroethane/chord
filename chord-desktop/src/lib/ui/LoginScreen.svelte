@@ -3,6 +3,7 @@
   import ChevronDown from 'lucide-svelte/icons/chevron-down';
   import CircleAlert from 'lucide-svelte/icons/circle-alert';
   import Icon from './Icon.svelte';
+  import RegisterForm from './RegisterForm.svelte';
   import { session } from './session.svelte';
 
   let address = $state(session.savedAddress());
@@ -10,6 +11,7 @@
   let remember = $state(session.savedAddress() !== '');
   let server = $state('');
   let advanced = $state(false);
+  let registering = $state(false);
 
   const busy = $derived(session.state === 'connecting');
 
@@ -17,9 +19,24 @@
     e.preventDefault();
     void session.signIn({ address, password, remember, server });
   }
+
+  /** A new account: sign in with it at once. */
+  function registered(newAddress: string, newPassword: string) {
+    registering = false;
+    if (newAddress) address = newAddress;
+    if (newAddress && newPassword) {
+      password = newPassword;
+      void session.signIn({ address: newAddress, password: newPassword, remember, server });
+    }
+  }
 </script>
 
 <main class="login">
+  {#if registering}
+    <div class="card">
+      <RegisterForm {address} {server} onback={() => (registering = false)} onregistered={registered} />
+    </div>
+  {:else}
   <form onsubmit={submit} aria-labelledby="login-title" novalidate>
     <div class="brand">
       <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
@@ -103,7 +120,11 @@
     {#if busy}
       <p class="status" role="status">Connecting to {address.split('@')[1] || 'your server'}…</p>
     {/if}
+    <button type="button" class="adv" disabled={busy} onclick={() => (registering = true)}>
+      Create an account
+    </button>
   </form>
+  {/if}
 </main>
 
 <style>
@@ -115,7 +136,8 @@
     background: var(--surface-100);
     overflow-y: auto;
   }
-  form {
+  form,
+  .card {
     display: flex;
     flex-direction: column;
     gap: var(--space-4);

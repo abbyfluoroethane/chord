@@ -491,11 +491,9 @@ impl ChordClient {
             )
             .await
         });
-        let form = task
-            .await
-            .map_err(|e| ChordError::Internal {
-                detail: e.to_string(),
-            })??;
+        let form = task.await.map_err(|e| ChordError::Internal {
+            detail: e.to_string(),
+        })??;
         Ok(form.into())
     }
 
@@ -563,8 +561,16 @@ mod tests {
     fn every_field_kind_maps_back() {
         use DataFieldKind::*;
         for kind in [
-            Boolean, Fixed, Hidden, JidMulti, JidSingle, ListMulti, ListSingle, TextMulti,
-            TextPrivate, TextSingle,
+            Boolean,
+            Fixed,
+            Hidden,
+            JidMulti,
+            JidSingle,
+            ListMulti,
+            ListSingle,
+            TextMulti,
+            TextPrivate,
+            TextSingle,
         ] {
             assert_eq!(DataFieldKind::from(CoreKind::from(kind)), kind);
         }

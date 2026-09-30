@@ -214,7 +214,11 @@ impl Form {
     /// element is not a data form.
     pub fn from_element(x: &Element) -> Result<Self, String> {
         if !x.is("x", NS_DATA) {
-            return Err(format!("not a data form: <{} xmlns='{}'>", x.name(), x.ns()));
+            return Err(format!(
+                "not a data form: <{} xmlns='{}'>",
+                x.name(),
+                x.ns()
+            ));
         }
         let instructions: Vec<String> = x
             .children()
@@ -374,7 +378,9 @@ impl Form {
 fn field_from_element(field: &Element) -> FormField {
     FormField {
         var: field.attr("var").map(str::to_owned),
-        kind: field.attr("type").map_or(FieldKind::TextSingle, FieldKind::parse),
+        kind: field
+            .attr("type")
+            .map_or(FieldKind::TextSingle, FieldKind::parse),
         label: field.attr("label").map(str::to_owned),
         desc: text_of(field, "desc"),
         required: field.get_child("required", NS_DATA).is_some(),
@@ -495,8 +501,14 @@ mod tests {
         let form = Form::from_element(&el(FORM)).unwrap();
         assert_eq!(form.kind, FormKind::Form);
         assert_eq!(form.title.as_deref(), Some("Configuration"));
-        assert_eq!(form.instructions.as_deref(), Some("Fill it in.\nThen send it."));
-        assert_eq!(form.form_type(), Some("http://jabber.org/protocol/muc#roomconfig"));
+        assert_eq!(
+            form.instructions.as_deref(),
+            Some("Fill it in.\nThen send it.")
+        );
+        assert_eq!(
+            form.form_type(),
+            Some("http://jabber.org/protocol/muc#roomconfig")
+        );
         let kinds: Vec<_> = form.fields.iter().map(|f| f.kind).collect();
         assert_eq!(
             kinds,
@@ -550,8 +562,12 @@ mod tests {
                 .find(|f| f.attr("var") == Some(var))
                 .unwrap_or_else(|| panic!("no field {var}"))
         };
-        let values = |var: &str| -> Vec<String> { by_var(var).children().map(Element::text).collect() };
-        assert_eq!(values("FORM_TYPE"), vec!["http://jabber.org/protocol/muc#roomconfig"]);
+        let values =
+            |var: &str| -> Vec<String> { by_var(var).children().map(Element::text).collect() };
+        assert_eq!(
+            values("FORM_TYPE"),
+            vec!["http://jabber.org/protocol/muc#roomconfig"]
+        );
         assert_eq!(values("name"), vec!["New"]);
         assert_eq!(values("public"), vec!["0"]);
         // A cleared text field sends an empty value.

@@ -59,7 +59,11 @@ pub struct RegistrationForm {
 
 /// What the user answers: the legacy fields, or the filled data form.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(rename_all = "camelCase"))]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub enum RegistrationSubmission {
     Fields(Vec<(String, String)>),
     Form(Form),
@@ -190,8 +194,11 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                     return;
                 }
             };
-            let submission = match password_submission(ctx.account.node().map_or("", |n| n.as_str()), &password, form)
-            {
+            let submission = match password_submission(
+                ctx.account.node().map_or("", |n| n.as_str()),
+                &password,
+                form,
+            ) {
                 Ok(submission) => submission,
                 Err(e) => {
                     let _ = reply.send(Err(e));
@@ -247,7 +254,11 @@ fn password_submission(
             && f.values.iter().all(|v| v.is_empty())
     });
     if let Some(field) = unknown {
-        let name = field.label.as_deref().or(field.var.as_deref()).unwrap_or("?");
+        let name = field
+            .label
+            .as_deref()
+            .or(field.var.as_deref())
+            .unwrap_or("?");
         return Err(ClientError::Unsupported(format!(
             "the server asks for more than the new password: {name}"
         )));
@@ -301,7 +312,9 @@ mod tests {
         let mut h = Harness::new();
         let mut answer = change(&mut h, "new secret");
         let iqs = h.sent_iqs();
-        assert!(matches!(&iqs[0], Iq::Get { to: None, payload, .. } if payload.is("query", NS_REGISTER)));
+        assert!(
+            matches!(&iqs[0], Iq::Get { to: None, payload, .. } if payload.is("query", NS_REGISTER))
+        );
         let fields = "<query xmlns='jabber:iq:register'><registered/>\
             <username>alice</username><password/></query>";
         respond(&mut h, IqResponse::Result(Some(el(fields))));
@@ -389,7 +402,11 @@ mod tests {
             Err(ClientError::Server(text)) => assert!(text.contains("password too weak")),
             other => panic!("unexpected {other:?}"),
         }
-        assert!(!h.effects.iter().any(|e| matches!(e, Effect::NewPassword(_))));
+        assert!(
+            !h.effects
+                .iter()
+                .any(|e| matches!(e, Effect::NewPassword(_)))
+        );
     }
 
     #[test]
@@ -405,8 +422,10 @@ mod tests {
 
     #[test]
     fn parse_form_reads_the_legacy_fields() {
-        let q = el("<query xmlns='jabber:iq:register'><instructions>Choose a name.</instructions>\
-            <username/><password/><email/></query>");
+        let q = el(
+            "<query xmlns='jabber:iq:register'><instructions>Choose a name.</instructions>\
+            <username/><password/><email/></query>",
+        );
         let form = parse_form(&q);
         assert_eq!(form.instructions.as_deref(), Some("Choose a name."));
         assert_eq!(form.fields, vec!["username", "password", "email"]);
@@ -415,17 +434,23 @@ mod tests {
 
     #[test]
     fn parse_form_reads_a_data_form_with_a_captcha_and_a_link() {
-        let q = el("<query xmlns='jabber:iq:register'><instructions>Fill it.</instructions>\
+        let q = el(
+            "<query xmlns='jabber:iq:register'><instructions>Fill it.</instructions>\
             <x xmlns='jabber:x:data' type='form'>\
             <field var='username' type='text-single'><required/></field>\
             <field var='ocr' type='text-single'><required/><media xmlns='urn:xmpp:media-element'><uri type='image/png'>cid:sha1+a@bob.xmpp.org</uri></media></field></x>\
             <x xmlns='jabber:x:oob'><url>https://example.org/register</url><desc>Register on the web</desc></x>\
-            <data xmlns='urn:xmpp:bob' cid='sha1+a@bob.xmpp.org' type='image/png'>AAAA</data></query>");
+            <data xmlns='urn:xmpp:bob' cid='sha1+a@bob.xmpp.org' type='image/png'>AAAA</data></query>",
+        );
         let form = parse_form(&q);
         assert!(form.fields.is_empty());
         let data = form.form.unwrap();
         assert_eq!(data.fields.len(), 2);
-        assert!(data.fields[1].media[0].uri.starts_with("data:image/png;base64,AAAA"));
+        assert!(
+            data.fields[1].media[0]
+                .uri
+                .starts_with("data:image/png;base64,AAAA")
+        );
         let oob = form.oob.unwrap();
         assert_eq!(oob.url, "https://example.org/register");
         assert_eq!(oob.desc.as_deref(), Some("Register on the web"));
@@ -434,8 +459,10 @@ mod tests {
 
     #[test]
     fn a_link_only_answer_has_no_fields() {
-        let q = el("<query xmlns='jabber:iq:register'><instructions>Use the web page.</instructions>\
-            <x xmlns='jabber:x:oob'><url>https://example.org/r</url></x></query>");
+        let q = el(
+            "<query xmlns='jabber:iq:register'><instructions>Use the web page.</instructions>\
+            <x xmlns='jabber:x:oob'><url>https://example.org/r</url></x></query>",
+        );
         let form = parse_form(&q);
         assert!(form.fields.is_empty() && form.form.is_none());
         assert_eq!(form.oob.unwrap().url, "https://example.org/r");
@@ -462,6 +489,9 @@ mod tests {
         .unwrap();
         form.set("username", vec!["bob".into()]);
         let q = submission_query(&RegistrationSubmission::Form(form));
-        assert_eq!(q.get_child("x", "jabber:x:data").unwrap().attr("type"), Some("submit"));
+        assert_eq!(
+            q.get_child("x", "jabber:x:data").unwrap().attr("type"),
+            Some("submit")
+        );
     }
 }

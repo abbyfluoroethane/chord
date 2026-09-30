@@ -153,7 +153,11 @@ fn print_step(opts: &Opts, number: usize, step: &CommandStep) {
         println!("{}", o.finish());
         return;
     }
-    println!("step {number}: {} ({})", step.node, status_name(step.status));
+    println!(
+        "step {number}: {} ({})",
+        step.node,
+        status_name(step.status)
+    );
     for note in &step.notes {
         println!("  note [{}] {}", note.kind, note.text);
     }
@@ -241,7 +245,13 @@ pub async fn adhoc_run(opts: &Opts, client: &Client, args: &[&str]) -> Result<()
         };
         step = client
             .handle
-            .command_step(to.clone(), (*node).to_owned(), step.session_id.clone(), action, form)
+            .command_step(
+                to.clone(),
+                (*node).to_owned(),
+                step.session_id.clone(),
+                action,
+                form,
+            )
             .await
             .map_err(err)?;
     }
@@ -284,22 +294,24 @@ pub async fn room_form(opts: &Opts, client: &Client, args: &[&str]) -> Result<()
 /// CHORD_NEW_PASSWORD, never from an argument.
 pub async fn passwd(client: &Client, args: &[&str]) -> Result<(), CliError> {
     if !args.is_empty() {
-        return Err("usage: passwd (new password in CHORD_NEW_PASSWORD)".to_owned().into());
+        return Err("usage: passwd (new password in CHORD_NEW_PASSWORD)"
+            .to_owned()
+            .into());
     }
     let password = std::env::var("CHORD_NEW_PASSWORD")
         .map_err(|_| CliError::from("set CHORD_NEW_PASSWORD".to_owned()))?;
-    client
-        .handle
-        .change_password(password)
-        .await
-        .map_err(err)?;
+    client.handle.change_password(password).await.map_err(err)?;
     println!("password changed for {}", client.account);
     Ok(())
 }
 
 fn print_registration(opts: &Opts, domain: &str, form: &RegistrationForm) {
     if opts.json {
-        let names = array(form.fields.iter().map(|n| Obj::new().str("name", n).finish()));
+        let names = array(
+            form.fields
+                .iter()
+                .map(|n| Obj::new().str("name", n).finish()),
+        );
         let mut o = Obj::new()
             .str("domain", domain)
             .opt_str("instructions", form.instructions.as_deref())
@@ -334,8 +346,8 @@ fn print_registration(opts: &Opts, domain: &str, form: &RegistrationForm) {
 /// need no password to read the form.
 fn target() -> Result<(BareJid, chord_core::session::ServerAddr), CliError> {
     let jid = std::env::var("CHORD_JID").map_err(|_| CliError::from("set CHORD_JID".to_owned()))?;
-    let jid =
-        BareJid::new(&jid).map_err(|e| CliError::from(format!("CHORD_JID is not a bare JID: {e}")))?;
+    let jid = BareJid::new(&jid)
+        .map_err(|e| CliError::from(format!("CHORD_JID is not a bare JID: {e}")))?;
     let server = crate::server_addr()?;
     Ok((jid, server))
 }
@@ -391,7 +403,9 @@ pub async fn register_account(opts: &Opts, args: &[&str]) -> Result<(), CliError
                         .iter()
                         .find(|(k, _)| k == other)
                         .map(|(_, v)| v.clone())
-                        .ok_or_else(|| CliError::from(format!("the server wants {other}={{value}}")))?,
+                        .ok_or_else(|| {
+                            CliError::from(format!("the server wants {other}={{value}}"))
+                        })?,
                 };
                 fields.push((name.clone(), value));
             }
@@ -399,9 +413,11 @@ pub async fn register_account(opts: &Opts, args: &[&str]) -> Result<(), CliError
         }
         (None, true) => {
             print_registration(opts, &domain, &asked);
-            return Err("the server gives no registration form here, only the link above"
-                .to_owned()
-                .into());
+            return Err(
+                "the server gives no registration form here, only the link above"
+                    .to_owned()
+                    .into(),
+            );
         }
     };
     register(&domain, server, &submission, DEFAULT_REGISTER_TIMEOUT)
@@ -433,7 +449,7 @@ mod tests {
             ("m".to_owned(), "x".to_owned()),
             ("m".to_owned(), "y".to_owned()),
         ];
-        fill(&mut f, &values).unwrap();
+        assert!(fill(&mut f, &values).is_ok());
         assert_eq!(f.get("a").unwrap().values, vec!["1"]);
         assert_eq!(f.get("m").unwrap().values, vec!["x", "y"]);
         assert!(fill(&mut f, &[("nope".to_owned(), "1".to_owned())]).is_err());

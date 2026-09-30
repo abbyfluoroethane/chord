@@ -220,7 +220,10 @@ mod tests {
                 .unwrap()
                 .text()
         };
-        assert_eq!(value("FORM_TYPE"), "http://jabber.org/protocol/muc#roomconfig");
+        assert_eq!(
+            value("FORM_TYPE"),
+            "http://jabber.org/protocol/muc#roomconfig"
+        );
         assert_eq!(value("muc#roomconfig_roomsecret"), "hunter2");
         assert_eq!(value("muc#roomconfig_moderatedroom"), "1");
         assert_eq!(value("muc#roomconfig_maxusers"), "10");
@@ -248,7 +251,9 @@ mod tests {
         });
         h.respond(
             |p| matches!(p, FeaturePending::OwnerForm(_)),
-            IqResponse::Result(Some(el("<query xmlns='http://jabber.org/protocol/muc#owner'/>"))),
+            IqResponse::Result(Some(el(
+                "<query xmlns='http://jabber.org/protocol/muc#owner'/>",
+            ))),
         );
         assert!(matches!(
             answer.try_recv().unwrap().unwrap(),
@@ -269,7 +274,12 @@ mod tests {
                 }),
             )
         });
-        let error = StanzaError::new(ErrorType::Auth, DefinedCondition::Forbidden, "en", "owners only");
+        let error = StanzaError::new(
+            ErrorType::Auth,
+            DefinedCondition::Forbidden,
+            "en",
+            "owners only",
+        );
         h.respond(
             |p| matches!(p, FeaturePending::OwnerForm(_)),
             IqResponse::Error(error),

@@ -392,3 +392,103 @@ export interface EmojiPackStatus {
   /** The pack ships with the app and needs no download. */
   bundled: boolean;
 }
+
+// ---------------------------------------------------------------- data forms (XEP-0004)
+
+/** The type of a field. The names are the ones in the XEP. */
+export type FieldKind =
+  | 'boolean'
+  | 'fixed'
+  | 'hidden'
+  | 'jid-multi'
+  | 'jid-single'
+  | 'list-multi'
+  | 'list-single'
+  | 'text-multi'
+  | 'text-private'
+  | 'text-single';
+
+export type FormKind = 'form' | 'submit' | 'cancel' | 'result';
+
+export interface FormOption {
+  label: string | null;
+  value: string;
+}
+
+/** A media element of a field, for example a CAPTCHA image. A `cid:` image is a `data:` URI. */
+export interface FormMedia {
+  uri: string;
+  mime: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+export interface FormField {
+  /** Only a `fixed` field has no name. */
+  var: string | null;
+  kind: FieldKind;
+  label: string | null;
+  desc: string | null;
+  required: boolean;
+  values: string[];
+  options: FormOption[];
+  media: FormMedia[];
+}
+
+/** A data form. The UI changes the `values` and sends the same object back. */
+export interface DataForm {
+  kind: FormKind;
+  title: string | null;
+  instructions: string | null;
+  fields: FormField[];
+}
+
+// ---------------------------------------------------------------- ad-hoc commands (XEP-0050)
+
+export interface CommandItem {
+  jid: string;
+  node: string;
+  name: string | null;
+}
+
+export type CommandAction = 'execute' | 'next' | 'prev' | 'complete' | 'cancel';
+export type CommandStatus = 'executing' | 'completed' | 'canceled';
+
+export interface CommandNote {
+  /** "info", "warn" or "error". */
+  kind: string;
+  text: string;
+}
+
+export interface CommandStep {
+  node: string;
+  /** Give it back with the next step. */
+  sessionId: string | null;
+  status: CommandStatus;
+  actions: CommandAction[];
+  defaultAction: CommandAction | null;
+  notes: CommandNote[];
+  form: DataForm | null;
+}
+
+// ---------------------------------------------------------------- registration (XEP-0077)
+
+export interface OobLink {
+  url: string;
+  desc: string | null;
+}
+
+/** What a server wants for a registration. */
+export interface RegistrationForm {
+  instructions: string | null;
+  /** The data form. When it is set, answer with it. */
+  form: DataForm | null;
+  /** The names of the legacy fields. Used when there is no data form. */
+  fields: string[];
+  /** A web page for the registration. */
+  oob: OobLink | null;
+  registered: boolean;
+}
+
+/** The answer: the filled data form, or the legacy fields as [name, value] pairs. */
+export type RegistrationSubmission = { form: DataForm } | { fields: [string, string][] };

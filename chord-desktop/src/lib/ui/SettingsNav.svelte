@@ -10,7 +10,8 @@
       label: 'User settings',
       pages: [
         { id: 'account', label: 'My account' },
-        { id: 'privacy', label: 'Privacy' }
+        { id: 'privacy', label: 'Privacy' },
+        { id: 'server', label: 'Server' }
       ]
     },
     {
