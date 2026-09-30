@@ -304,4 +304,20 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, bare)
     );
     "#,
+    // 14: spaces. The subscription id that the service gave us (XEP-0060, 6.2.1), for the
+    // unsubscribe. The subscription id and the answer state of a join request (8.6): a
+    // request that we answered stays until the service sends the subscription event. The
+    // nodes of a subscription list that are no space, so a start does not ask for their
+    // disco#info again (spaces.rs).
+    r#"
+    ALTER TABLE spaces ADD COLUMN subid TEXT;
+    ALTER TABLE space_join_requests ADD COLUMN subid TEXT;
+    ALTER TABLE space_join_requests ADD COLUMN answered INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE non_space_nodes (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        service    TEXT NOT NULL,
+        node       TEXT NOT NULL,
+        PRIMARY KEY (account_id, service, node)
+    );
+    "#,
 ];

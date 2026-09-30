@@ -332,21 +332,35 @@ pub async fn space_join(client: &Client, service: &str, node: &str) -> Result<()
     Ok(())
 }
 
-/// `space-create <name> [--private | --authorize]`.
+/// `space-create <name> [--private | --authorize] [--description TEXT]`.
 pub async fn space_create(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliError> {
-    let (name, access) = match args {
-        [name] => (*name, SpaceAccess::Open),
-        [name, "--private"] => (*name, SpaceAccess::Whitelist),
-        [name, "--authorize"] => (*name, SpaceAccess::Authorize),
-        _ => {
-            return Err("usage: space-create <name> [--private | --authorize]"
-                .to_owned()
-                .into());
-        }
+    let usage = || {
+        CliError::from(
+            "usage: space-create <name> [--private | --authorize] [--description TEXT]".to_owned(),
+        )
     };
+    let Some((name, mut rest)) = args.split_first() else {
+        return Err(usage());
+    };
+    let mut access = SpaceAccess::Open;
+    let mut description = None;
+    while let Some((flag, tail)) = rest.split_first() {
+        rest = tail;
+        match *flag {
+            "--private" => access = SpaceAccess::Whitelist,
+            "--authorize" => access = SpaceAccess::Authorize,
+            "--description" => {
+                let (text, tail) = rest.split_first().ok_or_else(usage)?;
+                description = Some(*text);
+                rest = tail;
+            }
+            _ => return Err(usage()),
+        }
+    }
+    let name = *name;
     let (service, node) = client
         .handle
-        .create_space_with(name, access)
+        .create_space_described(name, description, access)
         .await
         .map_err(err)?;
     if opts.json {
@@ -360,6 +374,150 @@ pub async fn space_create(opts: &Opts, client: &Client, args: &[&str]) -> Result
     } else {
         println!("created space {name}: {service} {node}");
     }
+    Ok(())
+}
+
+/// `space-members <service> <node>`: the affiliations of a space that we own.
+pub async fn space_members(
+    opts: &Opts,
+    client: &Client,
+    service: &str,
+    node: &str,
+) -> Result<(), CliError> {
+    let list = client
+        .handle
+        .space_members(service, node)
+        .await
+        .map_err(err)?;
+    if opts.json {
+        let items = list.iter().map(|m| {
+            Obj::new()
+                .str("jid", &m.jid)
+                .str("affiliation", &m.affiliation)
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        println!("members ({})", list.len());
+        for m in &list {
+            println!("  {}  {}", m.jid, m.affiliation);
+        }
+    }
+    Ok(())
+}
+
+/// `space-remove <service> <node> <jid>` and `space-ban <service> <node> <jid>`.
+pub async fn space_unaffiliate(
+    client: &Client,
+    service: &str,
+    node: &str,
+    jid: &str,
+    ban: bool,
+) -> Result<(), CliError> {
+    let member = bare(jid)?;
+    if ban {
+        client.handle.ban_space_member(service, node, member).await
+    } else {
+        client
+            .handle
+            .remove_space_member(service, node, member)
+            .await
+    }
+    .map_err(err)?;
+    println!(
+        "{} {jid} for {service} {node}",
+        if ban { "banned" } else { "removed" }
+    );
+    Ok(())
+}
+
+/// `space-config <service> <node>`: the node configuration form of a space that we own.
+pub async fn space_config(
+    opts: &Opts,
+    client: &Client,
+    service: &str,
+    node: &str,
+) -> Result<(), CliError> {
+    let fields = client
+        .handle
+        .space_config(service, node)
+        .await
+        .map_err(err)?;
+    if opts.json {
+        let items = fields.iter().map(|f| {
+            Obj::new()
+                .str("var", &f.var)
+                .str("value", &f.value)
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        for f in &fields {
+            println!("{} = {}", f.var, f.value);
+        }
+    }
+    Ok(())
+}
+
+/// `space-set <service> <node> [--name N] [--description D]`: change a space that we own.
+pub async fn space_set(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || {
+        CliError::from("usage: space-set <service> <node> [--name N] [--description D]".to_owned())
+    };
+    let [service, node, rest @ ..] = args else {
+        return Err(usage());
+    };
+    let (mut name, mut description) = (None, None);
+    let mut rest = rest;
+    while let Some((flag, tail)) = rest.split_first() {
+        let (value, tail) = tail.split_first().ok_or_else(usage)?;
+        match *flag {
+            "--name" => name = Some(*value),
+            "--description" => description = Some(*value),
+            _ => return Err(usage()),
+        }
+        rest = tail;
+    }
+    client
+        .handle
+        .configure_space(service, node, name, description)
+        .await
+        .map_err(err)?;
+    println!("changed {service} {node}");
+    Ok(())
+}
+
+/// `space-avatar <service> <node> <file>` and `space-banner ...`: upload an image and set
+/// it as the avatar or the banner of a space that we own.
+pub async fn space_image(
+    client: &Client,
+    service: &str,
+    node: &str,
+    file: &str,
+    banner: bool,
+) -> Result<(), CliError> {
+    let data = std::fs::read(file).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let filename = Path::new(file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("bad file name: {file}"))?;
+    let mime = content_type(filename);
+    if banner {
+        client
+            .handle
+            .set_space_banner(service, node, mime, data, 0, 0)
+            .await
+    } else {
+        client
+            .handle
+            .set_space_avatar(service, node, mime, data, 0, 0)
+            .await
+    }
+    .map_err(err)?;
+    println!(
+        "set the {} of {service} {node}",
+        if banner { "banner" } else { "avatar" }
+    );
     Ok(())
 }
 

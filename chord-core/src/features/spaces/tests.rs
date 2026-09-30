@@ -672,6 +672,7 @@ fn create_with(
             ctx,
             Command::Create {
                 name: name.into(),
+                description: None,
                 access,
                 reply,
             },
@@ -952,6 +953,7 @@ fn offline_answers_every_command_with_not_connected() {
     let (a, mut ra) = oneshot::channel();
     offline(Command::Create {
         name: "n".into(),
+        description: None,
         access: SpaceAccess::Open,
         reply: a,
     });
@@ -2000,6 +2002,7 @@ fn the_owner_is_never_a_join_request() {
         SERVICE,
         "dev",
         "alice@chord.localhost",
+        None,
     )
     .unwrap();
     let mut rx = requests(&mut h);
@@ -2062,13 +2065,14 @@ fn the_join_requests_are_the_pending_owner_subscriptions() {
 fn approve_and_deny_send_the_authorization_form() {
     for (state, allow) in [("subscribed", "true"), ("none", "false")] {
         let mut h = followed();
-        // A stored request from the service goes away after the answer.
+        // A stored request from the service is hidden after the answer.
         crate::features::spaces::db::add_request(
             h.store.conn(),
             h.account_id,
             SERVICE,
             "dev",
             "bob@chord.localhost",
+            None,
         )
         .unwrap();
         let mut rx = owner_call(&mut h, |reply| Command::AnswerJoin {
@@ -2136,7 +2140,7 @@ fn the_access_forms_use_each_access_model() {
         (SpaceAccess::Authorize, "authorize"),
         (SpaceAccess::Whitelist, "whitelist"),
     ] {
-        let form = node_config("x", access);
+        let form = node_config("x", None, access);
         assert!(form.contains(&format!("<value>{word}</value>")), "{form}");
     }
 }
@@ -2531,4 +2535,969 @@ fn space_info_fails_on_a_server_error_and_a_lost_session() {
     );
     h.respond(is_card_items, IqResponse::Lost);
     assert_eq!(rx.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+}
+
+// --- Subscription ids (XEP-0060, 6.2.1 and 8.6) ---
+
+fn subscription_with_subid(subid: &str) -> Element {
+    xml(&format!(
+        "<pubsub xmlns='{}'><subscription node='dev' jid='alice@chord.localhost'
+           subscription='subscribed' subid='{subid}'/></pubsub>",
+        ns::PUBSUB
+    ))
+}
+
+#[test]
+fn the_subid_of_a_subscribe_goes_on_the_unsubscribe() {
+    let mut h = harness();
+    let mut rx = join(&mut h);
+    h.take_sent();
+    h.answer(is_subscribe, Some(subscription_with_subid("s-42")));
+    h.take_sent();
+    h.answer(is_info, Some(node_info("dev", NS_SPACES, "Dev", "open")));
+    h.take_sent();
+    h.answer(is_items, Some(items_result("dev", "")));
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(JoinOutcome::Joined))));
+    assert_eq!(column(&h, "SELECT subid FROM spaces"), ["s-42"]);
+
+    let mut rx = leave(&mut h);
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        text.contains("<unsubscribe") && text.contains("subid='s-42'"),
+        "{text}"
+    );
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+}
+
+#[test]
+fn an_unsubscribe_without_a_known_subid_has_none() {
+    let mut h = followed();
+    let _rx = leave(&mut h);
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        text.contains("<unsubscribe") && !text.contains("subid"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_subscription_list_gives_the_subid_too() {
+    let mut h = harness();
+    h.with_ctx(on_connected);
+    h.answer(
+        is_subscriptions,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions>
+               <subscription node='dev' jid='alice@chord.localhost'
+                 subscription='subscribed' subid='s-7'/>
+               </subscriptions></pubsub>",
+            ns::PUBSUB
+        ))),
+    );
+    h.answer(is_info, Some(node_info("dev", NS_SPACES, "Dev", "open")));
+    h.answer(is_items, Some(items_result("dev", "")));
+    assert_eq!(column(&h, "SELECT subid FROM spaces"), ["s-7"]);
+    h.take_sent();
+    let _rx = leave(&mut h);
+    assert!(payload_of(&h.sent_iqs()[0]).contains("subid='s-7'"));
+}
+
+#[test]
+fn the_subid_of_a_pending_join_is_kept() {
+    let mut h = harness();
+    let mut rx = join(&mut h);
+    h.answer(
+        is_subscribe,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscription node='dev' jid='alice@chord.localhost'
+               subscription='pending' subid='p-1'/></pubsub>",
+            ns::PUBSUB
+        ))),
+    );
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(JoinOutcome::Pending))));
+    assert_eq!(column(&h, "SELECT subid FROM spaces"), ["p-1"]);
+}
+
+fn form_with_subid(who: &str, subid: &str) -> Message {
+    let mut m = authorization(SERVICE, "dev", who);
+    let form = String::from(&m.payloads[0]).replace(
+        "</x>",
+        &format!("<field var='pubsub#subid'><value>{subid}</value></field></x>"),
+    );
+    m.payloads[0] = xml(&form);
+    m
+}
+
+fn answer_join(h: &mut Harness, who: &str, state: &'static str) {
+    let jid = Jid::new(who).unwrap();
+    let mut rx = owner_call(h, |reply| Command::AnswerJoin {
+        service: service_bare(),
+        node: "dev".into(),
+        jid,
+        state,
+        reply,
+    });
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+}
+
+fn answer_form(h: &mut Harness) -> String {
+    let sent = h.take_sent();
+    let m = sent
+        .iter()
+        .find_map(|s| match s {
+            xmpp_parsers::stanza::Stanza::Message(m) => Some(m),
+            _ => None,
+        })
+        .expect("a message");
+    String::from(&m.payloads[0])
+}
+
+#[test]
+fn the_authorization_answer_echoes_the_subid_of_the_form() {
+    let mut h = followed();
+    let m = form_with_subid("bob@chord.localhost", "sub-9");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    answer_join(&mut h, "bob@chord.localhost", "subscribed");
+    let form = answer_form(&mut h);
+    assert!(
+        form.contains("pubsub#subid") && form.contains("sub-9"),
+        "{form}"
+    );
+}
+
+#[test]
+fn the_authorization_answer_echoes_the_subid_of_the_owner_list() {
+    let mut h = followed();
+    let mut rx = requests(&mut h);
+    h.answer(
+        is_requests,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions node='dev'>
+               <subscription jid='bob@chord.localhost' subscription='pending' subid='s1'/>
+             </subscriptions></pubsub>",
+            ns::PUBSUB_OWNER
+        ))),
+    );
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(_)))));
+    answer_join(&mut h, "bob@chord.localhost", "none");
+    let form = answer_form(&mut h);
+    assert!(
+        form.contains("pubsub#subid") && form.contains("s1"),
+        "{form}"
+    );
+}
+
+#[test]
+fn the_authorization_answer_has_no_subid_when_none_is_known() {
+    let mut h = followed();
+    let m = authorization(SERVICE, "dev", "bob@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    answer_join(&mut h, "bob@chord.localhost", "subscribed");
+    let form = answer_form(&mut h);
+    assert!(!form.contains("pubsub#subid"), "{form}");
+}
+
+fn request_rows(h: &Harness) -> Vec<String> {
+    column(
+        h,
+        "SELECT jid || ' ' || answered FROM space_join_requests ORDER BY jid",
+    )
+}
+
+#[test]
+fn an_answered_request_stays_until_the_subscription_event() {
+    let mut h = followed();
+    let m = authorization(SERVICE, "dev", "bob@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    answer_join(&mut h, "bob@chord.localhost", "subscribed");
+    // Kept, but the list does not show it.
+    assert_eq!(request_rows(&h), ["bob@chord.localhost 1"]);
+    let mut rx = requests(&mut h);
+    h.answer(is_requests, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(vec![]))));
+
+    // The service says that the subscription is done: the request goes.
+    h.with_ctx(|ctx| {
+        on_event(
+            ctx,
+            &service_jid(),
+            event("<subscription node='dev' jid='bob@chord.localhost' subscription='subscribed'/>"),
+        )
+    });
+    assert!(request_rows(&h).is_empty());
+}
+
+#[test]
+fn an_answered_request_that_the_service_lists_again_is_open_again() {
+    let mut h = followed();
+    let m = authorization(SERVICE, "dev", "bob@chord.localhost");
+    assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+    answer_join(&mut h, "bob@chord.localhost", "subscribed");
+    let mut rx = requests(&mut h);
+    h.answer(
+        is_requests,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions node='dev'>
+               <subscription jid='bob@chord.localhost' subscription='pending'/>
+             </subscriptions></pubsub>",
+            ns::PUBSUB_OWNER
+        ))),
+    );
+    let Ok(Some(Ok(list))) = rx.try_recv() else {
+        panic!("expected requests")
+    };
+    assert_eq!(list.len(), 1);
+    assert_eq!(request_rows(&h), ["bob@chord.localhost 0"]);
+}
+
+#[test]
+fn a_subscription_event_of_a_person_changes_no_space_of_ours() {
+    let mut h = followed();
+    h.with_ctx(|ctx| {
+        on_event(
+            ctx,
+            &service_jid(),
+            event("<subscription node='dev' jid='bob@chord.localhost' subscription='none'/>"),
+        )
+    });
+    assert_eq!(column(&h, "SELECT node FROM spaces"), ["dev"]);
+    assert!(h.take_dirty().is_empty());
+}
+
+// --- Nodes that are no space (XEP-0060, 5.6) ---
+
+fn subscriptions_of(nodes: &[&str]) -> Element {
+    let subs: String = nodes
+        .iter()
+        .map(|n| {
+            format!(
+                "<subscription node='{n}' jid='alice@chord.localhost' subscription='subscribed'/>"
+            )
+        })
+        .collect();
+    xml(&format!(
+        "<pubsub xmlns='{}'><subscriptions>{subs}</subscriptions></pubsub>",
+        ns::PUBSUB
+    ))
+}
+
+#[test]
+fn a_node_that_is_no_space_costs_no_disco_info_at_the_next_start() {
+    let mut h = harness();
+    h.with_ctx(on_connected);
+    h.take_sent();
+    h.answer(
+        is_subscriptions,
+        Some(subscriptions_of(&["dev", "comments"])),
+    );
+    assert_eq!(h.sent_iqs().len(), 2, "a disco#info for each node");
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::NodeInfo { node, .. }) if node == "comments"),
+        Some(node_info("comments", "urn:example:comments", "C", "open")),
+    );
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::NodeInfo { node, .. }) if node == "dev"),
+        Some(node_info("dev", NS_SPACES, "Dev", "open")),
+    );
+    assert_eq!(column(&h, "SELECT node FROM non_space_nodes"), ["comments"]);
+    h.take_sent();
+
+    // A new session: only the space gets a disco#info.
+    h.state.spaces.started = false;
+    h.with_ctx(on_connected);
+    h.answer(
+        is_subscriptions,
+        Some(subscriptions_of(&["dev", "comments"])),
+    );
+    let sent = h.sent_iqs();
+    let infos: Vec<_> = sent
+        .iter()
+        .filter(|iq| matches!(iq, Iq::Get { payload, .. } if payload.is("query", ns::DISCO_INFO)))
+        .collect();
+    assert_eq!(infos.len(), 1, "{sent:?}");
+    assert!(payload_of(infos[0]).contains("node='dev'"));
+}
+
+#[test]
+fn a_node_that_we_do_not_subscribe_to_any_more_is_forgotten() {
+    let mut h = harness();
+    h.with_ctx(on_connected);
+    h.answer(is_subscriptions, Some(subscriptions_of(&["comments"])));
+    h.answer(
+        is_info,
+        Some(node_info("comments", "urn:example:comments", "C", "open")),
+    );
+    assert_eq!(column(&h, "SELECT node FROM non_space_nodes"), ["comments"]);
+    h.state.spaces.started = false;
+    h.with_ctx(on_connected);
+    h.answer(is_subscriptions, Some(subscriptions_of(&[])));
+    assert!(column(&h, "SELECT node FROM non_space_nodes").is_empty());
+}
+
+#[test]
+fn an_info_without_the_meta_data_form_is_not_remembered() {
+    let mut h = harness();
+    h.with_ctx(on_connected);
+    h.answer(is_subscriptions, Some(subscriptions_of(&["odd"])));
+    h.answer(
+        is_info,
+        Some(xml(
+            "<query xmlns='http://jabber.org/protocol/disco#info' node='odd'>
+               <identity category='pubsub' type='leaf'/></query>",
+        )),
+    );
+    assert!(column(&h, "SELECT node FROM non_space_nodes").is_empty());
+}
+
+// --- XEP-0330 items ---
+
+const SUBSCRIPTION_ITEM: &str = "<item id='n1'><subscription xmlns='urn:xmpp:pubsub:subscription:0'
+   node='urn:example:feed' service='pubsub.example.org'/></item>";
+
+#[test]
+fn a_xep_0330_item_is_ignored_on_purpose() {
+    let mut h = followed();
+    h.with_ctx(|ctx| {
+        on_event(
+            ctx,
+            &service_jid(),
+            event(&format!("<items node='dev'>{SUBSCRIPTION_ITEM}</items>")),
+        )
+    });
+    assert_eq!(
+        column(&h, "SELECT item_id FROM space_items"),
+        ["room1@rooms.chord.localhost"]
+    );
+
+    // An item that an older version stored is dropped.
+    db::upsert_item(
+        h.store.conn(),
+        h.account_id,
+        &db::Item {
+            service: SERVICE,
+            node: "dev",
+            id: "n1",
+            room_jid: None,
+            name: None,
+            payload: Some("<subscription xmlns='urn:xmpp:pubsub:subscription:0'/>"),
+        },
+        None,
+    )
+    .unwrap();
+    h.with_ctx(|ctx| {
+        on_event(
+            ctx,
+            &service_jid(),
+            event(&format!("<items node='dev'>{SUBSCRIPTION_ITEM}</items>")),
+        )
+    });
+    assert_eq!(column(&h, "SELECT item_id FROM space_items").len(), 1);
+
+    // The card counts rooms only.
+    let payload = items_result(
+        "dev",
+        &format!(
+            "{SUBSCRIPTION_ITEM}<item id='r@rooms.chord.localhost'>
+               <conference xmlns='urn:xmpp:bookmarks:1'/></item>"
+        ),
+    );
+    assert_eq!(count_rooms(&payload), 1);
+}
+
+// --- Paging of the items (XEP-0060, 6.5, and XEP-0059) ---
+
+fn items_page(items: &[&str], last: &str, count: usize) -> Element {
+    let items: String = items
+        .iter()
+        .map(|id| {
+            format!(
+                "<item id='{id}@rooms.chord.localhost'>
+                   <conference xmlns='urn:xmpp:bookmarks:1' name='{id}'/></item>"
+            )
+        })
+        .collect();
+    xml(&format!(
+        "<pubsub xmlns='{}'><items node='dev'>{items}</items>
+           <set xmlns='http://jabber.org/protocol/rsm'>
+             <last>{last}</last><count>{count}</count></set></pubsub>",
+        ns::PUBSUB
+    ))
+}
+
+#[test]
+fn the_items_request_asks_for_a_page_and_follows_the_rsm_last() {
+    let mut h = harness();
+    let mut rx = join(&mut h);
+    h.take_sent();
+    h.answer(is_subscribe, Some(subscription("subscribed")));
+    h.take_sent();
+    h.answer(is_info, Some(node_info("dev", NS_SPACES, "Dev", "open")));
+    let sent = h.sent_iqs();
+    let first = payload_of(&sent[0]);
+    assert!(first.contains("<items node='dev'"), "{first}");
+    assert!(
+        first.contains(&format!("<max>{ITEMS_PAGE}</max>")),
+        "{first}"
+    );
+    assert!(!first.contains("<after>"), "{first}");
+
+    h.answer(
+        is_items,
+        Some(items_page(&["a", "b"], "b@rooms.chord.localhost", 3)),
+    );
+    assert_eq!(rx.try_recv(), Ok(None), "the join waits for the last page");
+    let second = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        second.contains("<after>b@rooms.chord.localhost</after>"),
+        "{second}"
+    );
+    // Nothing is stored before the last page: a partial list would drop items.
+    assert!(column(&h, "SELECT item_id FROM space_items").is_empty());
+
+    h.answer(
+        is_items,
+        Some(items_page(&["c"], "c@rooms.chord.localhost", 3)),
+    );
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(JoinOutcome::Joined))));
+    assert!(h.sent_iqs().is_empty(), "three of three: no third request");
+    assert_eq!(
+        column(&h, "SELECT name FROM space_items ORDER BY position"),
+        ["a", "b", "c"]
+    );
+}
+
+#[test]
+fn the_paging_stops_on_an_empty_page_or_a_repeated_last() {
+    for second in [
+        items_page(&[], "b@rooms.chord.localhost", 9),
+        items_page(&["c"], "b@rooms.chord.localhost", 9),
+    ] {
+        let mut h = harness();
+        let mut rx = join(&mut h);
+        h.answer(is_subscribe, Some(subscription("subscribed")));
+        h.answer(is_info, Some(node_info("dev", NS_SPACES, "Dev", "open")));
+        h.take_sent();
+        h.answer(
+            is_items,
+            Some(items_page(&["a", "b"], "b@rooms.chord.localhost", 9)),
+        );
+        h.take_sent();
+        h.answer(is_items, Some(second));
+        assert_eq!(rx.try_recv(), Ok(Some(Ok(JoinOutcome::Joined))));
+        assert!(h.sent_iqs().is_empty());
+    }
+}
+
+#[test]
+fn a_later_page_that_fails_stores_nothing() {
+    let mut h = followed();
+    h.with_ctx(on_connected);
+    h.state.spaces.started = false;
+    let before = column(&h, "SELECT item_id FROM space_items");
+    h.with_ctx(|ctx| request_items(ctx, &service_bare(), "dev", None));
+    h.answer(
+        is_items,
+        Some(items_page(&["a", "b"], "b@rooms.chord.localhost", 5)),
+    );
+    h.respond(is_items, forbidden());
+    assert_eq!(column(&h, "SELECT item_id FROM space_items"), before);
+}
+
+#[test]
+fn the_card_asks_for_the_newest_items_with_max_items() {
+    let mut h = harness();
+    let (reply, mut rx) = oneshot::channel();
+    h.with_ctx(|ctx| {
+        on_command(
+            ctx,
+            Command::Card {
+                service: service_bare(),
+                node: "dev".into(),
+                reply,
+            },
+        )
+    });
+    h.take_sent();
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::CardInfo { .. })),
+        Some(node_info("dev", NS_SPACES, "Dev", "open")),
+    );
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        text.contains(&format!("max_items='{CARD_ITEMS}'")),
+        "{text}"
+    );
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::CardItems { .. })),
+        Some(items_page(&["a", "b"], "b@rooms.chord.localhost", 2)),
+    );
+    let Ok(Some(Ok(card))) = rx.try_recv() else {
+        panic!("expected a card")
+    };
+    assert_eq!(card.channels, Some(2));
+}
+
+// --- The node form of a new space ---
+
+#[test]
+fn a_new_space_asks_for_publishers_and_has_a_description() {
+    let mut h = harness();
+    let (reply, mut rx) = oneshot::channel();
+    h.with_ctx(|ctx| {
+        on_command(
+            ctx,
+            Command::Create {
+                name: "Dev".into(),
+                description: Some("Where <we> talk".into()),
+                access: SpaceAccess::Open,
+                reply,
+            },
+        )
+    });
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(text.contains("pubsub#publish_model"), "{text}");
+    assert!(text.contains("<value>publishers</value>"), "{text}");
+    assert!(text.contains("pubsub#description"), "{text}");
+    assert!(text.contains("Where &lt;we&gt; talk"), "{text}");
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::Create { .. })),
+        None,
+    );
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::CreateSubscribe { .. })),
+        Some(subscription("subscribed")),
+    );
+    assert!(matches!(rx.try_recv(), Ok(Some(Ok(_)))));
+    assert_eq!(
+        column(&h, "SELECT description FROM spaces"),
+        ["Where <we> talk"]
+    );
+}
+
+#[test]
+fn a_new_space_without_a_description_has_no_description_field() {
+    let mut h = harness();
+    let _rx = create(&mut h, "Dev", false);
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(text.contains("<value>publishers</value>"), "{text}");
+    assert!(!text.contains("pubsub#description"), "{text}");
+}
+
+// --- Members (XEP-0060, 8.9) ---
+
+fn is_members_list(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::Members { .. }))
+}
+
+#[test]
+fn the_members_are_the_affiliations_of_the_node() {
+    let mut h = followed();
+    let mut rx = owner_call(&mut h, |reply| Command::Members {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    });
+    let sent = h.sent_iqs();
+    let text = payload_of(&sent[0]);
+    assert!(matches!(&sent[0], Iq::Get { .. }));
+    assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+    assert!(text.contains("<affiliations node='dev'"), "{text}");
+    h.answer(
+        is_members_list,
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><affiliations node='dev'>
+               <affiliation jid='carol@chord.localhost' affiliation='outcast'/>
+               <affiliation jid='bob@chord.localhost' affiliation='member'/>
+               <affiliation jid='alice@chord.localhost' affiliation='owner'/>
+               <affiliation jid='dave@chord.localhost' affiliation='publisher'/>
+             </affiliations></pubsub>",
+            ns::PUBSUB_OWNER
+        ))),
+    );
+    let Ok(Some(Ok(list))) = rx.try_recv() else {
+        panic!("expected members")
+    };
+    let pairs: Vec<_> = list
+        .iter()
+        .map(|m| (m.jid.as_str(), m.affiliation.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("alice@chord.localhost", "owner"),
+            ("dave@chord.localhost", "publisher"),
+            ("bob@chord.localhost", "member"),
+            ("carol@chord.localhost", "outcast"),
+        ]
+    );
+
+    // An error goes to the caller. An empty answer is an empty list.
+    let mut rx = owner_call(&mut h, |reply| Command::Members {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    });
+    h.respond(is_members_list, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    let mut rx = owner_call(&mut h, |reply| Command::Members {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    });
+    h.answer(is_members_list, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(vec![]))));
+}
+
+fn unaffiliate(h: &mut Harness, ban: bool) -> oneshot::Receiver<Result<(), ClientError>> {
+    owner_call(h, |reply| Command::Unaffiliate {
+        service: service_bare(),
+        node: "dev".into(),
+        member: BareJid::new("bob@chord.localhost").unwrap(),
+        ban,
+        reply,
+    })
+}
+
+#[test]
+fn remove_and_ban_set_the_affiliation_and_end_the_subscription() {
+    for (ban, affiliation) in [(false, "none"), (true, "outcast")] {
+        let mut h = followed();
+        let m = authorization(SERVICE, "dev", "bob@chord.localhost");
+        assert!(h.with_ctx(|ctx| on_authorization(ctx, &m)));
+        let mut rx = unaffiliate(&mut h, ban);
+        let sent = h.sent_iqs();
+        let text = payload_of(&sent[0]);
+        assert!(matches!(&sent[0], Iq::Set { .. }));
+        assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+        assert!(
+            text.contains("jid='bob@chord.localhost'")
+                && text.contains(&format!("affiliation='{affiliation}'")),
+            "{text}"
+        );
+        assert_eq!(rx.try_recv(), Ok(None), "waits for the service");
+        h.answer(is_done, None);
+        assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+        // The subscription ends too, and a request of that person is gone.
+        let text = payload_of(&h.sent_iqs()[0]);
+        assert!(
+            text.contains("<subscriptions node='dev'>") && text.contains("subscription='none'"),
+            "{text}"
+        );
+        assert!(request_rows(&h).is_empty());
+    }
+}
+
+#[test]
+fn a_refused_remove_changes_nothing() {
+    let mut h = followed();
+    let mut rx = unaffiliate(&mut h, true);
+    h.take_sent();
+    h.respond(is_done, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    assert!(
+        h.sent_iqs().is_empty(),
+        "no subscription change after an error"
+    );
+}
+
+// --- The owner config, name and description ---
+
+#[test]
+fn the_owner_config_lists_the_form_fields() {
+    let mut h = followed();
+    let mut rx = owner_call(&mut h, |reply| Command::Config {
+        service: service_bare(),
+        node: "dev".into(),
+        reply,
+    });
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        text.contains(ns::PUBSUB_OWNER) && text.contains("<configure node='dev'"),
+        "{text}"
+    );
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::Config { .. })),
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><configure node='dev'>
+               <x xmlns='jabber:x:data' type='form'>
+                 <field var='FORM_TYPE' type='hidden'><value>{}</value></field>
+                 <field var='pubsub#title'><value>Dev</value></field>
+                 <field var='pubsub#publish_model'><value>publishers</value></field>
+                 <field var='pubsub#children_association_whitelist'>
+                   <value>a</value><value>b</value></field>
+               </x></configure></pubsub>",
+            ns::PUBSUB_OWNER,
+            ns::PUBSUB_CONFIGURE
+        ))),
+    );
+    let Ok(Some(Ok(fields))) = rx.try_recv() else {
+        panic!("expected fields")
+    };
+    let pairs: Vec<_> = fields
+        .iter()
+        .map(|f| (f.var.as_str(), f.value.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("pubsub#title", "Dev"),
+            ("pubsub#publish_model", "publishers"),
+            ("pubsub#children_association_whitelist", "a, b"),
+        ]
+    );
+}
+
+fn configure(
+    h: &mut Harness,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> oneshot::Receiver<Result<(), ClientError>> {
+    owner_call(h, |reply| Command::Configure {
+        service: service_bare(),
+        node: "dev".into(),
+        name: name.map(str::to_owned),
+        description: description.map(str::to_owned),
+        reply,
+    })
+}
+
+#[test]
+fn configure_sends_only_the_changed_fields_and_stores_them() {
+    let mut h = followed();
+    let mut rx = configure(&mut h, Some("New <name>"), Some("About us"));
+    let sent = h.sent_iqs();
+    let text = payload_of(&sent[0]);
+    assert!(matches!(&sent[0], Iq::Set { .. }));
+    assert!(
+        text.contains(ns::PUBSUB_OWNER) && text.contains("<configure node='dev'"),
+        "{text}"
+    );
+    assert!(
+        text.contains("type='submit'") && text.contains(ns::PUBSUB_CONFIGURE),
+        "{text}"
+    );
+    assert!(
+        text.contains("New &lt;name&gt;") && text.contains("About us"),
+        "{text}"
+    );
+    assert!(!text.contains("access_model"), "{text}");
+    assert_eq!(rx.try_recv(), Ok(None));
+    assert_eq!(column(&h, "SELECT name FROM spaces"), ["The dev corner"]);
+    h.take_dirty();
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert_eq!(column(&h, "SELECT name FROM spaces"), ["New <name>"]);
+    assert_eq!(column(&h, "SELECT description FROM spaces"), ["About us"]);
+    assert!(h.take_dirty().contains(&ViewKey::SpaceList));
+
+    // Only the description: the name stays. An empty description clears it.
+    let mut rx = configure(&mut h, None, Some(""));
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        text.contains("pubsub#description") && !text.contains("pubsub#title"),
+        "{text}"
+    );
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert_eq!(column(&h, "SELECT name FROM spaces"), ["New <name>"]);
+    assert_eq!(column(&h, "SELECT description FROM spaces"), ["NULL"]);
+}
+
+#[test]
+fn a_refused_configure_keeps_the_name() {
+    let mut h = followed();
+    let mut rx = configure(&mut h, Some("Other"), None);
+    h.take_sent();
+    h.respond(is_done, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    assert_eq!(column(&h, "SELECT name FROM spaces"), ["The dev corner"]);
+}
+
+#[test]
+fn configure_with_nothing_to_change_is_invalid() {
+    let mut h = followed();
+    let mut rx = configure(&mut h, None, None);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Invalid(_))))
+    ));
+    assert!(h.sent_iqs().is_empty());
+}
+
+// --- Avatar and banner ---
+
+fn job(banner: bool) -> ImageJob {
+    ImageJob {
+        service: service_bare(),
+        node: "dev".into(),
+        banner,
+        mime: "image/png".into(),
+        hash: avatars::sha1_hex(IMAGE),
+        data: IMAGE.to_vec(),
+        width: 64,
+        height: 32,
+    }
+}
+
+#[test]
+fn an_uploaded_avatar_is_published_as_metadata_with_the_url() {
+    let mut h = followed();
+    let (reply, mut rx) = oneshot::channel();
+    h.with_ctx(|ctx| on_image_uploaded(ctx, job(false), "https://up.example/a.png".into(), reply));
+    let sent = h.sent_iqs();
+    assert!(matches!(&sent[0], Iq::Set { .. }));
+    assert_eq!(sent[0].to().unwrap().as_str(), SERVICE);
+    let text = payload_of(&sent[0]);
+    assert!(text.contains("<publish node='dev'>"), "{text}");
+    assert!(
+        text.contains(&format!("<item id='{AVATAR_ITEM}'>")),
+        "{text}"
+    );
+    let hash = avatars::sha1_hex(IMAGE);
+    for part in [
+        "xmlns='urn:xmpp:avatar:metadata'".to_owned(),
+        format!("id='{hash}'"),
+        format!("bytes='{}'", IMAGE.len()),
+        "type='image/png'".to_owned(),
+        "url='https://up.example/a.png'".to_owned(),
+        "width='64'".to_owned(),
+        "height='32'".to_owned(),
+    ] {
+        assert!(text.contains(&part), "{part} in {text}");
+    }
+    assert_eq!(rx.try_recv(), Ok(None));
+    assert!(stored_avatar(&h).is_none());
+
+    h.take_dirty();
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    let avatar = stored_avatar(&h).expect("the avatar");
+    assert_eq!(avatar.data.as_deref(), Some(IMAGE));
+    assert!(h.take_dirty().contains(&ViewKey::SpaceList));
+    assert!(
+        take_downloads(&mut h).is_empty(),
+        "the image is ours: no fetch"
+    );
+}
+
+#[test]
+fn an_uploaded_banner_uses_the_banner_item_and_leaves_the_avatar() {
+    let mut h = followed();
+    let (reply, mut rx) = oneshot::channel();
+    let mut banner = job(true);
+    banner.width = 0;
+    banner.height = 0;
+    h.with_ctx(|ctx| on_image_uploaded(ctx, banner, "https://up.example/b.png".into(), reply));
+    let text = payload_of(&h.sent_iqs()[0]);
+    assert!(
+        text.contains(&format!("<item id='{BANNER_ITEM}'>")),
+        "{text}"
+    );
+    assert!(
+        !text.contains("width=") && !text.contains("height="),
+        "{text}"
+    );
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert!(stored_avatar(&h).is_none());
+    assert!(column(&h, "SELECT item_id FROM space_items").contains(&BANNER_ITEM.to_owned()));
+}
+
+#[test]
+fn a_refused_image_publish_stores_nothing() {
+    let mut h = followed();
+    let (reply, mut rx) = oneshot::channel();
+    h.with_ctx(|ctx| on_image_uploaded(ctx, job(false), "https://up.example/a.png".into(), reply));
+    h.take_sent();
+    h.respond(is_done, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    assert!(stored_avatar(&h).is_none());
+}
+
+#[test]
+fn a_bad_image_is_refused_before_any_request() {
+    for (banner, mime, data) in [
+        (false, "image/png", Vec::new()),
+        (false, "text/plain", vec![1, 2, 3]),
+        (false, "image/png", vec![0; MAX_AVATAR_BYTES + 1]),
+        (true, "image/png", vec![0; MAX_BANNER_BYTES + 1]),
+    ] {
+        let mut h = followed();
+        let mut rx = owner_call(&mut h, |reply| Command::SetImage {
+            service: service_bare(),
+            node: "dev".into(),
+            banner,
+            mime: mime.into(),
+            data,
+            width: 0,
+            height: 0,
+            reply,
+        });
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Some(Err(ClientError::Invalid(_))))
+        ));
+        assert!(h.sent_iqs().is_empty());
+    }
+}
+
+#[test]
+fn offline_answers_the_new_commands_with_not_connected() {
+    let (a, mut ra) = oneshot::channel::<Result<Vec<SpaceMember>, ClientError>>();
+    offline(Command::Members {
+        service: service_bare(),
+        node: "n".into(),
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    let (a, mut ra) = oneshot::channel();
+    offline(Command::Unaffiliate {
+        service: service_bare(),
+        node: "n".into(),
+        member: BareJid::new("b@x").unwrap(),
+        ban: true,
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    let (a, mut ra) = oneshot::channel::<Result<Vec<SpaceConfigField>, ClientError>>();
+    offline(Command::Config {
+        service: service_bare(),
+        node: "n".into(),
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    let (a, mut ra) = oneshot::channel();
+    offline(Command::Configure {
+        service: service_bare(),
+        node: "n".into(),
+        name: None,
+        description: Some("d".into()),
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+    let (a, mut ra) = oneshot::channel();
+    offline(Command::SetImage {
+        service: service_bare(),
+        node: "n".into(),
+        banner: false,
+        mime: "image/png".into(),
+        data: vec![1],
+        width: 0,
+        height: 0,
+        reply: a,
+    });
+    assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
 }

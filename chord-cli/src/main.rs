@@ -13,10 +13,14 @@
 //!   leave <room>
 //!   upload <jid> <file>             XEP-0363 upload, then send the URL
 //!   space-info <service> <node> | room-info <room>   read a space or a room, no join
-//!   space-browse | space-join <service> <node> | space-create <name> [--private | --authorize]
+//!   space-browse | space-join <service> <node>
+//!   space-create <name> [--private | --authorize] [--description TEXT]
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
 //!   space-delete <service> <node> | space-leave <service> <node> | space-pending
 //!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
+//!   space-members <service> <node> | space-remove <service> <node> <jid> | space-ban ...
+//!   space-config <service> <node> | space-set <service> <node> [--name N] [--description D]
+//!   space-avatar <service> <node> <file> | space-banner <service> <node> <file>
 //!   contacts | contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> [--add-back]
 //!   block <jid> [--report spam|abuse] | unblock <jid|--all> | blocked (blocked works --offline)
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
@@ -122,9 +126,12 @@ const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <t
 listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
 timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
 upload <jid> <file> | space-info <service> <node> | room-info <room> | space-browse | space-join <service> <node> | \
-space-create <name> [--private | --authorize] | space-add-room <service> <node> <room> [name] | \
+space-create <name> [--private | --authorize] [--description TEXT] | space-add-room <service> <node> <room> [name] | \
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
-space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
+space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | \
+space-members <service> <node> | space-remove <service> <node> <jid> | space-ban <service> <node> <jid> | \
+space-config <service> <node> | space-set <service> <node> [--name N] [--description D] | \
+space-avatar <service> <node> <file> | space-banner <service> <node> <file> | contacts | \
 block <jid> [--report spam|abuse] | unblock <jid|--all> | blocked | \
 contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> [--add-back] | contact-rename <jid> [name] | contact-groups <jid> [group...] | idle <seconds-ago>|off [hold-secs] | \
 edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
@@ -313,6 +320,13 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "space-requests",
         "space-approve",
         "space-deny",
+        "space-members",
+        "space-remove",
+        "space-ban",
+        "space-config",
+        "space-set",
+        "space-avatar",
+        "space-banner",
         "contacts",
         "block",
         "unblock",
@@ -449,6 +463,25 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         }
         ("space-deny", [service, node, jid]) => {
             actions::space_answer(&client, service, node, jid, false).await
+        }
+        ("space-members", [service, node]) => {
+            actions::space_members(opts, &client, service, node).await
+        }
+        ("space-remove", [service, node, jid]) => {
+            actions::space_unaffiliate(&client, service, node, jid, false).await
+        }
+        ("space-ban", [service, node, jid]) => {
+            actions::space_unaffiliate(&client, service, node, jid, true).await
+        }
+        ("space-config", [service, node]) => {
+            actions::space_config(opts, &client, service, node).await
+        }
+        ("space-set", args) => actions::space_set(&client, args).await,
+        ("space-avatar", [service, node, file]) => {
+            actions::space_image(&client, service, node, file, false).await
+        }
+        ("space-banner", [service, node, file]) => {
+            actions::space_image(&client, service, node, file, true).await
         }
         ("profile", args) => actions::profile(opts, &client, args).await,
         ("set-nickname", args) => actions::set_nickname(&client, args).await,

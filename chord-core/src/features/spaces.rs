@@ -53,6 +53,35 @@
 //!   space node URI. A room that refuses, or that has no such field, stays as it is.
 //!   `add_room_to_space` does the same for a new room: it reads the affiliations and the
 //!   subscriptions of the node, and it grants each member except the owner.
+//! - Subscription ids (XEP-0060, 6.2.1): the subscribe answer, the subscriptions list and the
+//!   subscription event give a `subid`. We keep it in `spaces.subid`, and `leave_space` sends it
+//!   with the unsubscribe. An authorization answer (8.6) names the `pubsub#subid` of the
+//!   request when we know it: from the request form, or from the owner query. A message has
+//!   no answer, so a request that the owner answered stays, hidden, until the service sends the
+//!   subscription event. If the owner query lists it as pending again, it is open again.
+//! - Members (XEP-0060, 8.9): `space_members` lists the affiliations of the node. The owner
+//!   sees them all. `remove_space_member` sets `none`, and `ban_space_member` sets `outcast`.
+//!   Both also end the subscription. The rooms of the space keep their own member lists.
+//! - Settings of the owner: `space_config` reads the node configuration form. `configure_space`
+//!   submits the name and the description (`pubsub#title`, `pubsub#description`).
+//!   `set_space_avatar` and `set_space_banner` upload the image (XEP-0363, `upload.rs`, with no
+//!   chat message), then publish XEP-0084 metadata with the GET URL in the avatar item
+//!   (`AVATAR_ITEM`) or the banner item (`BANNER_ITEM`). The service decides how long the URL
+//!   lives: XEP-0363 has no way to ask for a permanent file. The banner is stored as an item
+//!   and not shown yet.
+//! - New spaces ask for `pubsub#publish_model` `publishers` (XEP-0503 says not `open`) and
+//!   can have a `pubsub#description`.
+//! - Items: a refresh asks for pages of `ITEMS_PAGE` items with RSM (XEP-0059) until the last
+//!   page, and it replaces the stored items only then. A service without RSM sends all items
+//!   at once. The card asks for `max_items` and counts the rooms of the newest ones.
+//! - Nodes that are no space: a node of the subscriptions list whose disco#info has a
+//!   `pubsub#type` other than a space goes into `non_space_nodes`. The next start skips it, so
+//!   a service with many nodes (for example Movim comments) costs no disco#info for each.
+//!   A node that we do not subscribe to any more leaves the table. A join of the node by the
+//!   user, where the node is a space, also clears the row.
+//! - XEP-0330 items: an item with a `urn:xmpp:pubsub:subscription:0` payload names a pubsub
+//!   node in the space. Chord shows rooms only, so it ignores these items on purpose. It does
+//!   not store them, and a room count does not include them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -117,6 +146,18 @@ const NS_EXT_DISCO_SHORT: &str = "urn:xmpp:pubsub-ext-disco";
 const NS_AVATAR_DATA: &str = "urn:xmpp:avatar:data";
 /// The most items that a space node keeps. Prosody keeps 20 by default.
 const MAX_ITEMS: &str = "256";
+/// The page size of the items request of a space (XEP-0059). A service may send less.
+const ITEMS_PAGE: usize = 100;
+/// The most items that one refresh of a space reads. The node keeps `MAX_ITEMS`.
+const MAX_SYNC_ITEMS: usize = 1024;
+/// The `max_items` of the card request: it counts the rooms of a space, and a card shows
+/// a number, so the newest items are enough.
+const CARD_ITEMS: &str = "100";
+/// The largest banner that we publish, in bytes.
+const MAX_BANNER_BYTES: usize = 4 * 1024 * 1024;
+/// XEP-0330: a pubsub subscription item. A space can list a node that is no room. Chord
+/// shows the rooms only and does not keep these items on purpose: it cannot open a node.
+const NS_PUBSUB_SUBSCRIPTION: &str = "urn:xmpp:pubsub:subscription:0";
 
 /// A space that `browse_spaces` found.
 #[derive(Clone, Debug, PartialEq)]
@@ -206,6 +247,32 @@ pub struct JoinRequest {
     pub subid: Option<String>,
 }
 
+/// A person with an affiliation to a space node (XEP-0060, 8.9.1). The owner sees the list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct SpaceMember {
+    pub jid: String,
+    /// `owner`, `publisher`, `publish-only`, `member` or `outcast`.
+    pub affiliation: String,
+}
+
+/// One field of the node configuration of a space (XEP-0060, 8.2): the variable, and its
+/// values joined with a comma.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct SpaceConfigField {
+    pub var: String,
+    pub value: String,
+}
+
 /// A join that waits for approval: service, node, and name.
 pub type PendingJoin = (String, String, String);
 
@@ -229,6 +296,12 @@ pub(crate) struct State {
     browses: HashMap<u64, Browse>,
     /// The space avatar images that we fetch now, as (owner, hash).
     avatar_fetching: HashSet<(String, String)>,
+    /// The subscription ids of the join requests that the owner query listed, by
+    /// (service, node, jid). The answer of the owner echoes them (XEP-0060, 8.6).
+    join_subids: HashMap<(String, String, String), String>,
+    /// The subscription ids of the subscription list, by (service, node), until the
+    /// disco#info of the node stores the space row that keeps them.
+    list_subids: HashMap<(String, String), String>,
 }
 
 /// The extensions that a browse uses. The disco features of the service set them.
@@ -267,7 +340,8 @@ struct Browse {
 pub(crate) enum After {
     Nothing,
     Items,
-    Join(Reply<JoinOutcome>),
+    /// Our join worked. The subscription id is the one from the subscribe answer.
+    Join(Reply<JoinOutcome>, Option<String>),
     /// Our join waits for approval. Keep the metadata, but do not follow the space.
     Pending,
 }
@@ -299,6 +373,28 @@ pub(crate) enum Action {
         node: String,
         member: BareJid,
     },
+    /// The owner removed or banned a person. The node keeps no affiliation for them, or
+    /// keeps `outcast`. Their subscription goes too.
+    Unaffiliate {
+        service: BareJid,
+        node: String,
+        member: BareJid,
+    },
+    /// The owner changed the name or the description.
+    Configure {
+        service: BareJid,
+        node: String,
+        name: Option<String>,
+        description: Option<String>,
+    },
+    /// The owner published an avatar or a banner.
+    Image {
+        service: BareJid,
+        node: String,
+        item: Element,
+        banner: bool,
+        data: Vec<u8>,
+    },
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -312,10 +408,14 @@ pub(crate) enum Pending {
         node: String,
         after: After,
     },
+    /// One page of the items of a space. The pages so far are in `items`. `after` is the
+    /// `last` of the page that we asked for, to stop if the service repeats it.
     Items {
         service: BareJid,
         node: String,
         join: Option<Reply<JoinOutcome>>,
+        items: Vec<(String, Option<Element>)>,
+        after: Option<String>,
     },
     /// One page of the disco#items of the service.
     BrowseItems {
@@ -334,6 +434,7 @@ pub(crate) enum Pending {
         service: BareJid,
         node: String,
         name: String,
+        description: Option<String>,
         access: SpaceAccess,
         reply: Reply<(String, String)>,
     },
@@ -341,6 +442,7 @@ pub(crate) enum Pending {
         service: BareJid,
         node: String,
         name: String,
+        description: Option<String>,
         access: SpaceAccess,
         reply: Reply<(String, String)>,
     },
@@ -392,6 +494,14 @@ pub(crate) enum Pending {
         card: SpaceCard,
         reply: Reply<SpaceCard>,
     },
+    /// The affiliations of a space node, for the owner.
+    Members {
+        reply: Reply<Vec<SpaceMember>>,
+    },
+    /// The configuration form of a space node, for the owner.
+    Config {
+        reply: Reply<Vec<SpaceConfigField>>,
+    },
     /// The answer does not matter.
     Ignore,
 }
@@ -418,6 +528,7 @@ pub(crate) enum Command {
     },
     Create {
         name: String,
+        description: Option<String>,
         access: SpaceAccess,
         reply: Reply<(String, String)>,
     },
@@ -460,6 +571,41 @@ pub(crate) enum Command {
     Delete {
         service: BareJid,
         node: String,
+        reply: Reply<()>,
+    },
+    Members {
+        service: BareJid,
+        node: String,
+        reply: Reply<Vec<SpaceMember>>,
+    },
+    /// Set the affiliation of a person to `none` (remove) or `outcast` (ban).
+    Unaffiliate {
+        service: BareJid,
+        node: String,
+        member: BareJid,
+        ban: bool,
+        reply: Reply<()>,
+    },
+    Config {
+        service: BareJid,
+        node: String,
+        reply: Reply<Vec<SpaceConfigField>>,
+    },
+    Configure {
+        service: BareJid,
+        node: String,
+        name: Option<String>,
+        description: Option<String>,
+        reply: Reply<()>,
+    },
+    SetImage {
+        service: BareJid,
+        node: String,
+        banner: bool,
+        mime: String,
+        data: Vec<u8>,
+        width: u16,
+        height: u16,
         reply: Reply<()>,
     },
 }
@@ -530,9 +676,23 @@ impl ClientHandle {
         name: &str,
         access: SpaceAccess,
     ) -> Result<(String, String), ClientError> {
+        self.create_space_described(name, None, access).await
+    }
+
+    /// Like `create_space_with`, with a description (`pubsub#description`). An empty
+    /// description counts as none.
+    pub async fn create_space_described(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        access: SpaceAccess,
+    ) -> Result<(String, String), ClientError> {
         let name = name.to_owned();
+        let description = description.map(str::trim).filter(|d| !d.is_empty());
+        let description = description.map(str::to_owned);
         self.space_call(|reply| Command::Create {
             name,
+            description,
             access,
             reply,
         })
@@ -653,6 +813,165 @@ impl ClientHandle {
             service,
             node,
             member,
+            reply,
+        })
+        .await
+    }
+
+    /// The people with an affiliation to a space node: the owner, publishers, members and
+    /// banned people (owner only, XEP-0060, 8.9.1).
+    pub async fn space_members(
+        &self,
+        service: &str,
+        node: &str,
+    ) -> Result<Vec<SpaceMember>, ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        self.space_call(|reply| Command::Members {
+            service,
+            node,
+            reply,
+        })
+        .await
+    }
+
+    /// Take the membership of `member` away (owner only): the affiliation becomes `none`
+    /// and the subscription ends. The person can join again where the space is open.
+    /// The rooms of the space keep their own member lists.
+    pub async fn remove_space_member(
+        &self,
+        service: &str,
+        node: &str,
+        member: BareJid,
+    ) -> Result<(), ClientError> {
+        self.unaffiliate(service, node, member, false).await
+    }
+
+    /// Ban `member` from a space (owner only): the affiliation becomes `outcast`, and the
+    /// subscription ends. The service refuses a new join of that person.
+    pub async fn ban_space_member(
+        &self,
+        service: &str,
+        node: &str,
+        member: BareJid,
+    ) -> Result<(), ClientError> {
+        self.unaffiliate(service, node, member, true).await
+    }
+
+    async fn unaffiliate(
+        &self,
+        service: &str,
+        node: &str,
+        member: BareJid,
+        ban: bool,
+    ) -> Result<(), ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        self.space_call(|reply| Command::Unaffiliate {
+            service,
+            node,
+            member,
+            ban,
+            reply,
+        })
+        .await
+    }
+
+    /// The node configuration form of a space, as variables and values (owner only).
+    pub async fn space_config(
+        &self,
+        service: &str,
+        node: &str,
+    ) -> Result<Vec<SpaceConfigField>, ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        self.space_call(|reply| Command::Config {
+            service,
+            node,
+            reply,
+        })
+        .await
+    }
+
+    /// Change the name or the description of a space (owner only). `None` keeps a value.
+    /// An empty description clears it. A name must not be empty.
+    pub async fn configure_space(
+        &self,
+        service: &str,
+        node: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<(), ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        let name = name.map(|n| n.trim().to_owned());
+        if name.as_deref() == Some("") {
+            return Err(ClientError::Invalid("the space name is empty".into()));
+        }
+        let description = description.map(|d| d.trim().to_owned());
+        self.space_call(|reply| Command::Configure {
+            service,
+            node,
+            name,
+            description,
+            reply,
+        })
+        .await
+    }
+
+    /// Set the avatar of a space (owner only). The image goes to the upload service
+    /// (XEP-0363). The URL goes into XEP-0084 metadata in the avatar item of the space.
+    /// `width` and `height` are the size in pixels, or 0 if the caller does not know them.
+    pub async fn set_space_avatar(
+        &self,
+        service: &str,
+        node: &str,
+        mime: &str,
+        data: Vec<u8>,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ClientError> {
+        self.set_space_image(service, node, false, mime, data, width, height)
+            .await
+    }
+
+    /// Set the banner of a space (owner only). It works like `set_space_avatar`, with
+    /// the banner item and a limit of 4 MiB.
+    pub async fn set_space_banner(
+        &self,
+        service: &str,
+        node: &str,
+        mime: &str,
+        data: Vec<u8>,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ClientError> {
+        self.set_space_image(service, node, true, mime, data, width, height)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn set_space_image(
+        &self,
+        service: &str,
+        node: &str,
+        banner: bool,
+        mime: &str,
+        data: Vec<u8>,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        let mime = mime.to_owned();
+        self.space_call(|reply| Command::SetImage {
+            service,
+            node,
+            banner,
+            mime,
+            data,
+            width,
+            height,
             reply,
         })
         .await
@@ -841,12 +1160,23 @@ fn subscribe_iq(ctx: &Ctx<'_>, service: &BareJid, node: &str) -> Result<Iq, Clie
     )
 }
 
-fn unsubscribe_iq(ctx: &Ctx<'_>, service: &BareJid, node: &str) -> Result<Iq, ClientError> {
+/// The unsubscribe request. With the subscription id that the service gave us, it names
+/// the one subscription (XEP-0060, 6.2.1): a service with more than one subscription of
+/// ours to the node answers `subid-required` without it.
+fn unsubscribe_iq(
+    ctx: &Ctx<'_>,
+    service: &BareJid,
+    node: &str,
+    subid: Option<&str>,
+) -> Result<Iq, ClientError> {
+    let subid = subid
+        .map(|s| format!(" subid='{}'", xml_escape(s)))
+        .unwrap_or_default();
     pubsub_iq(
         true,
         service,
         &format!(
-            "<unsubscribe node='{}' jid='{}'/>",
+            "<unsubscribe node='{}' jid='{}'{subid}/>",
             xml_escape(node),
             xml_escape(ctx.account.as_str())
         ),
@@ -863,11 +1193,32 @@ fn info_iq(service: &BareJid, node: &str) -> Iq {
     .with_to(Jid::from(service.clone()))
 }
 
+/// The items request of the card: the newest `CARD_ITEMS` items (XEP-0060, 6.5.7).
 fn items_iq(service: &BareJid, node: &str) -> Result<Iq, ClientError> {
     pubsub_iq(
         false,
         service,
-        &format!("<items node='{}'/>", xml_escape(node)),
+        &format!(
+            "<items node='{}' max_items='{CARD_ITEMS}'/>",
+            xml_escape(node)
+        ),
+    )
+}
+
+/// One page of the items of a node (XEP-0060, 6.5, with XEP-0059). `after` is the `last`
+/// of the page before. A service without RSM ignores the set and sends all items.
+fn items_page_iq(service: &BareJid, node: &str, after: Option<&str>) -> Result<Iq, ClientError> {
+    let after = after
+        .map(|a| format!("<after>{}</after>", xml_escape(a)))
+        .unwrap_or_default();
+    pubsub_iq(
+        false,
+        service,
+        &format!(
+            "<items node='{}'/><set xmlns='{}'><max>{ITEMS_PAGE}</max>{after}</set>",
+            xml_escape(node),
+            ns::RSM
+        ),
     )
 }
 
@@ -907,12 +1258,27 @@ fn request_items(
     node: &str,
     join: Option<Reply<JoinOutcome>>,
 ) {
+    request_items_page(ctx, service, node, join, Vec::new(), None);
+}
+
+/// Ask for a page of the items. `items` are the pages that came before.
+fn request_items_page(
+    ctx: &mut Ctx<'_>,
+    service: &BareJid,
+    node: &str,
+    join: Option<Reply<JoinOutcome>>,
+    items: Vec<(String, Option<Element>)>,
+    after: Option<String>,
+) {
+    let iq = items_page_iq(service, node, after.as_deref());
     let pending = Pending::Items {
         service: service.clone(),
         node: node.to_owned(),
         join,
+        items,
+        after,
     };
-    match items_iq(service, node) {
+    match iq {
         Ok(iq) => {
             ctx.request(iq, FeaturePending::Spaces(pending));
         }
@@ -970,7 +1336,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             node,
             reply,
         } => {
-            let iq = unsubscribe_iq(ctx, &service, &node);
+            let subid = stored_subid(ctx, &service, &node);
+            log::debug!("unsubscribe from {node} of {service}: subid {subid:?}");
+            let iq = unsubscribe_iq(ctx, &service, &node, subid.as_deref());
             go(ctx, iq, reply, |reply| Pending::Done {
                 action: Action::Leave { service, node },
                 reply,
@@ -1012,28 +1380,44 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             // XEP-0060, 8.6: the owner answers with the authorization form in a message.
             // ejabberd does not list pending subscribers in the owner subscriptions
             // query, and it acts on this form.
+            let key = (service.to_string(), node.clone(), jid.to_string());
+            let subid = db::request_subid(
+                ctx.store.conn(),
+                ctx.account_id,
+                service.as_str(),
+                &node,
+                jid.as_str(),
+            )
+            .ok()
+            .flatten()
+            .or_else(|| ctx.state.spaces.join_subids.remove(&key));
             ctx.send(authorization_answer(
                 &service,
                 &node,
                 jid.as_str(),
                 state == "subscribed",
+                subid.as_deref(),
             ));
             if state == "subscribed" {
                 grant_rooms(ctx, &service, &node, &jid);
             }
-            if let Err(e) = db::remove_request(
+            // A message has no answer. Keep the request, hidden, until the service sends
+            // the subscription event (`on_subscription_event`), or lists it as pending
+            // again (`Pending::JoinRequests`).
+            if let Err(e) = db::answer_request(
                 ctx.store.conn(),
                 ctx.account_id,
                 service.as_str(),
                 &node,
                 jid.as_str(),
             ) {
-                ctx.store_error("remove a join request", e);
+                ctx.store_error("answer a join request", e);
             }
             let _ = reply.send(Ok(()));
         }
         Command::Create {
             name,
+            description,
             access,
             reply,
         } => match service_of(ctx).and_then(|service| {
@@ -1053,13 +1437,14 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                     &format!(
                         "<create node='{}'/><configure>{}</configure>",
                         xml_escape(&node),
-                        node_config(&name, access)
+                        node_config(&name, description.as_deref(), access)
                     ),
                 );
                 go(ctx, iq, reply, |reply| Pending::Create {
                     service,
                     node,
                     name,
+                    description,
                     access,
                     reply,
                 });
@@ -1167,17 +1552,149 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 reply,
             });
         }
+        Command::Members {
+            service,
+            node,
+            reply,
+        } => {
+            // XEP-0060, 8.9.1: the owner asks for the affiliations of the node.
+            let iq = owner_iq(
+                false,
+                &service,
+                &format!("<affiliations node='{}'/>", xml_escape(&node)),
+            );
+            go(ctx, iq, reply, |reply| Pending::Members { reply });
+        }
+        Command::Unaffiliate {
+            service,
+            node,
+            member,
+            ban,
+            reply,
+        } => {
+            // XEP-0060, 8.9.2: `none` takes the affiliation away, `outcast` bans.
+            let affiliation = if ban { "outcast" } else { "none" };
+            let iq = owner_iq(
+                true,
+                &service,
+                &format!(
+                    "<affiliations node='{}'><affiliation jid='{}' affiliation='{affiliation}'/></affiliations>",
+                    xml_escape(&node),
+                    xml_escape(member.as_str())
+                ),
+            );
+            go(ctx, iq, reply, |reply| Pending::Done {
+                action: Action::Unaffiliate {
+                    service,
+                    node,
+                    member,
+                },
+                reply,
+            });
+        }
+        Command::Config {
+            service,
+            node,
+            reply,
+        } => {
+            let iq = owner_iq(
+                false,
+                &service,
+                &format!("<configure node='{}'/>", xml_escape(&node)),
+            );
+            go(ctx, iq, reply, |reply| Pending::Config { reply });
+        }
+        Command::Configure {
+            service,
+            node,
+            name,
+            description,
+            reply,
+        } => {
+            let iq = configure_iq(&service, &node, name.as_deref(), description.as_deref());
+            go(ctx, iq, reply, |reply| Pending::Done {
+                action: Action::Configure {
+                    service,
+                    node,
+                    name,
+                    description,
+                },
+                reply,
+            });
+        }
+        Command::SetImage {
+            service,
+            node,
+            banner,
+            mime,
+            data,
+            width,
+            height,
+            reply,
+        } => start_image(
+            ctx,
+            service,
+            node,
+            banner,
+            mime,
+            data,
+            (width, height),
+            reply,
+        ),
     }
 }
 
+/// The owner request that changes the name and the description of a space node. The
+/// form has only the changed fields (XEP-0060, 8.2.4): the service keeps the others.
+fn configure_iq(
+    service: &BareJid,
+    node: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> Result<Iq, ClientError> {
+    let mut fields = Vec::new();
+    if let Some(name) = name {
+        fields.push(Field::new("pubsub#title", FieldType::TextSingle).with_value(name));
+    }
+    if let Some(description) = description {
+        fields
+            .push(Field::new("pubsub#description", FieldType::TextSingle).with_value(description));
+    }
+    if fields.is_empty() {
+        return Err(ClientError::Invalid("nothing to change".into()));
+    }
+    let form = DataForm::new(DataFormType::Submit, ns::PUBSUB_CONFIGURE, fields);
+    owner_iq(
+        true,
+        service,
+        &format!(
+            "<configure node='{}'>{}</configure>",
+            xml_escape(node),
+            String::from(&Element::from(form))
+        ),
+    )
+}
+
+/// The subscription id that we stored for a space, if the service gave one.
+fn stored_subid(ctx: &Ctx<'_>, service: &BareJid, node: &str) -> Option<String> {
+    db::subid(ctx.store.conn(), ctx.account_id, service.as_str(), node)
+        .ok()
+        .flatten()
+}
+
 /// The node configuration form of a new space (XEP-0503, "Space Node Configuration").
-fn node_config(name: &str, access: SpaceAccess) -> String {
+fn node_config(name: &str, description: Option<&str>, access: SpaceAccess) -> String {
     let access = access.as_str();
     let text = |var: &str, value: &str| Field::new(var, FieldType::TextSingle).with_value(value);
     let boolean = |var: &str, value: &str| Field::new(var, FieldType::Boolean).with_value(value);
-    let fields = vec![
-        text("pubsub#type", NS_SPACES),
-        text("pubsub#title", name),
+    let mut fields = vec![text("pubsub#type", NS_SPACES), text("pubsub#title", name)];
+    if let Some(description) = description {
+        fields.push(text("pubsub#description", description));
+    }
+    // Only the owner publishes to a space node. XEP-0503 says not to use `open`. Services
+    // default to `publishers`, but a service may differ, so we ask for it.
+    fields.push(Field::new("pubsub#publish_model", FieldType::ListSingle).with_value("publishers"));
+    fields.extend([
         Field::new("pubsub#access_model", FieldType::ListSingle).with_value(access),
         boolean("pubsub#persist_items", "1"),
         boolean("pubsub#purge_offline", "0"),
@@ -1186,7 +1703,7 @@ fn node_config(name: &str, access: SpaceAccess) -> String {
         boolean("pubsub#notify_config", "1"),
         boolean("pubsub#notify_delete", "1"),
         text("pubsub#max_items", MAX_ITEMS),
-    ];
+    ]);
     let form = DataForm::new(DataFormType::Submit, ns::PUBSUB_CONFIGURE, fields);
     String::from(&Element::from(form))
 }
@@ -1209,6 +1726,11 @@ pub(crate) fn offline(command: Command) {
         Command::RemoveRoom { reply, .. } => no(reply),
         Command::AddMember { reply, .. } => no(reply),
         Command::Delete { reply, .. } => no(reply),
+        Command::Members { reply, .. } => no(reply),
+        Command::Unaffiliate { reply, .. } => no(reply),
+        Command::Config { reply, .. } => no(reply),
+        Command::Configure { reply, .. } => no(reply),
+        Command::SetImage { reply, .. } => no(reply),
     }
 }
 
@@ -1270,11 +1792,35 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             service,
             node,
             join,
+            mut items,
+            after,
         } => {
             let lost = matches!(result, Err(ClientError::NotConnected));
             match &result {
                 Ok(Some(payload)) => {
-                    let items = parse_items(payload);
+                    let page = parse_items(payload);
+                    let got = page.len();
+                    items.extend(page);
+                    // Another page follows if the service gave a `last` that is new, and
+                    // the count says that there is more. A service without RSM sends all
+                    // items and no `set`.
+                    let set = payload
+                        .get_child("set", ns::RSM)
+                        .and_then(|set| SetResult::try_from(set.clone()).ok());
+                    let next = set
+                        .as_ref()
+                        .and_then(|set| set.last.clone())
+                        .filter(|last| after.as_ref() != Some(last))
+                        .filter(|_| got > 0 && items.len() < MAX_SYNC_ITEMS)
+                        .filter(|_| {
+                            set.as_ref()
+                                .and_then(|set| set.count)
+                                .is_none_or(|count| items.len() < count)
+                        });
+                    if next.is_some() {
+                        return request_items_page(ctx, &service, &node, join, items, next);
+                    }
+                    items.truncate(MAX_SYNC_ITEMS);
                     sync_items(ctx, &service, &node, items);
                 }
                 other => {
@@ -1325,17 +1871,32 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             reply,
         } => match result {
             Ok(Some(payload)) => {
-                let state = payload
-                    .get_child("subscription", ns::PUBSUB)
+                let subscription = payload.get_child("subscription", ns::PUBSUB);
+                let state = subscription
                     .and_then(|s| s.attr("subscription"))
                     .unwrap_or("");
+                let subid = subscription
+                    .and_then(|s| s.attr("subid"))
+                    .map(str::to_owned);
+                log::debug!("subscribe to {node} of {service}: {state}, subid {subid:?}");
                 match state {
-                    "subscribed" => request_info(ctx, &service, &node, After::Join(reply)),
+                    "subscribed" => {
+                        request_info(ctx, &service, &node, After::Join(reply, subid));
+                    }
                     "pending" => {
                         // Keep the request. The service tells us when the owner answers.
                         let s = service.to_string();
                         if let Err(e) =
                             db::upsert_pending(ctx.store.conn(), ctx.account_id, &s, &node)
+                                .and_then(|_| {
+                                    db::set_subid(
+                                        ctx.store.conn(),
+                                        ctx.account_id,
+                                        &s,
+                                        &node,
+                                        subid.as_deref(),
+                                    )
+                                })
                         {
                             ctx.store_error("store a pending join", e);
                         }
@@ -1360,6 +1921,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             service,
             node,
             name,
+            description,
             access,
             reply,
         } => match result {
@@ -1369,6 +1931,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                     service,
                     node,
                     name,
+                    description,
                     access,
                     reply,
                 });
@@ -1381,10 +1944,16 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             service,
             node,
             name,
+            description,
             access,
             reply,
         } => match result {
             Ok(payload) => {
+                let subid = payload
+                    .as_ref()
+                    .and_then(|p| p.get_child("subscription", ns::PUBSUB))
+                    .and_then(|s| s.attr("subid"))
+                    .map(str::to_owned);
                 // ejabberd makes the owner's own subscription to an authorize node wait
                 // for approval too. We own the node, so approve it.
                 if payload.as_ref().is_some_and(is_pending_subscription) {
@@ -1393,19 +1962,30 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                         &node,
                         ctx.account.as_str(),
                         true,
+                        subid.as_deref(),
                     ));
                 }
                 let access = access.as_str();
                 let s = service.to_string();
-                if let Err(e) = db::upsert_space(
+                let stored = db::upsert_space(
                     ctx.store.conn(),
                     ctx.account_id,
                     &s,
                     &node,
                     Some(&name),
-                    None,
+                    description.as_deref(),
                     Some(access),
-                ) {
+                )
+                .and_then(|_| {
+                    db::set_subid(
+                        ctx.store.conn(),
+                        ctx.account_id,
+                        &s,
+                        &node,
+                        subid.as_deref(),
+                    )
+                });
+                if let Err(e) = stored {
                     ctx.store_error("store a new space", e);
                 }
                 changed(ctx, &s, &node);
@@ -1442,19 +2022,41 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             node,
             reply,
         } => {
-            // The owner query, plus the requests that the service sent as forms.
+            // The owner query, plus the requests that the service sent as forms. A request
+            // that we answered, and that the service still lists as pending, is open again.
+            let listed = match &result {
+                Ok(payload) => payload
+                    .as_ref()
+                    .map(|p| parse_join_requests(p, &node))
+                    .unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            for request in &listed {
+                if let Err(e) = db::reopen_request(
+                    ctx.store.conn(),
+                    ctx.account_id,
+                    &service,
+                    &node,
+                    &request.jid,
+                    request.subid.as_deref(),
+                ) {
+                    ctx.store_error("store a join request", e);
+                }
+                if let Some(subid) = &request.subid {
+                    let key = (service.clone(), node.clone(), request.jid.clone());
+                    ctx.state.spaces.join_subids.insert(key, subid.clone());
+                }
+            }
             let stored = db::requests(ctx.store.conn(), ctx.account_id, &service, &node)
                 .unwrap_or_else(|e| {
                     ctx.store_error("read the join requests", e);
                     Vec::new()
                 });
-            let _ = reply.send(result.map(|payload| {
-                let mut list = payload
-                    .map(|p| parse_join_requests(&p, &node))
-                    .unwrap_or_default();
-                for jid in stored {
-                    if !list.iter().any(|r| r.jid == jid) {
-                        list.push(JoinRequest { jid, subid: None });
+            let _ = reply.send(result.map(|_| {
+                let mut list = listed;
+                for request in stored {
+                    if !list.iter().any(|r| r.jid == request.jid) {
+                        list.push(request);
                     }
                 }
                 // The owner is no request. An older version stored the form that the
@@ -1488,6 +2090,14 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             if !subscriptions && !matches!(result, Err(ClientError::NotConnected)) {
                 request_node_members(ctx, service, node, room, true, seen);
             }
+        }
+        Pending::Members { reply } => {
+            let _ = reply
+                .send(result.map(|payload| payload.map(|p| parse_members(&p)).unwrap_or_default()));
+        }
+        Pending::Config { reply } => {
+            let _ = reply
+                .send(result.map(|payload| payload.map(|p| parse_config(&p)).unwrap_or_default()));
         }
         Pending::Done { action, reply } => match result {
             Ok(_) => {
@@ -1617,6 +2227,64 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             node,
             member,
         } => grant_rooms(ctx, &service, &node, &Jid::from(member)),
+        Action::Unaffiliate {
+            service,
+            node,
+            member,
+        } => {
+            // End the subscription too: on some services it outlives the affiliation. A
+            // refusal or an error changes nothing for the owner, so the answer is ignored.
+            let inner = format!(
+                "<subscriptions node='{}'><subscription jid='{}' subscription='none'/></subscriptions>",
+                xml_escape(&node),
+                xml_escape(member.as_str())
+            );
+            if let Ok(iq) = owner_iq(true, &service, &inner) {
+                ctx.request(iq, FeaturePending::Spaces(Pending::Ignore));
+            }
+            let s = service.to_string();
+            if let Err(e) =
+                db::remove_request(ctx.store.conn(), ctx.account_id, &s, &node, member.as_str())
+            {
+                ctx.store_error("remove a join request", e);
+            }
+        }
+        Action::Configure {
+            service,
+            node,
+            name,
+            description,
+        } => {
+            let s = service.to_string();
+            if let Err(e) = db::update_meta(
+                ctx.store.conn(),
+                ctx.account_id,
+                &s,
+                &node,
+                name.as_deref(),
+                description.as_deref(),
+            ) {
+                ctx.store_error("store a space", e);
+            }
+            changed(ctx, &s, &node);
+        }
+        Action::Image {
+            service,
+            node,
+            item,
+            banner,
+            data,
+        } => {
+            let s = service.to_string();
+            if banner {
+                store_item(ctx, &s, &node, BANNER_ITEM, Some(&item), None);
+            } else {
+                // The service will send the change as an event. Store it now, with the
+                // image that we have, so the avatar shows at once.
+                store_own_avatar(ctx, &s, &node, &item, &data);
+            }
+            changed(ctx, &s, &node);
+        }
     }
 }
 
@@ -1718,6 +2386,7 @@ fn on_subscriptions(ctx: &mut Ctx<'_>, service: &BareJid, payload: &Element) {
         return;
     };
     let mut nodes = Vec::new();
+    let mut subids = Vec::new();
     let mut denied = Vec::new();
     for sub in list.children().filter(|c| c.is("subscription", ns::PUBSUB)) {
         let ours = match sub.attr("jid").map(BareJid::new) {
@@ -1726,7 +2395,12 @@ fn on_subscriptions(ctx: &mut Ctx<'_>, service: &BareJid, payload: &Element) {
             None => true,
         };
         match (ours, sub.attr("subscription"), sub.attr("node")) {
-            (true, Some("subscribed"), Some(node)) => nodes.push(node.to_owned()),
+            (true, Some("subscribed"), Some(node)) => {
+                nodes.push(node.to_owned());
+                if let Some(subid) = sub.attr("subid") {
+                    subids.push((node.to_owned(), subid.to_owned()));
+                }
+            }
             (true, Some("none"), Some(node)) => denied.push(node.to_owned()),
             _ => {}
         }
@@ -1751,29 +2425,58 @@ fn on_subscriptions(ctx: &mut Ctx<'_>, service: &BareJid, payload: &Element) {
             )));
         }
     }
+    // Keep the subscription ids, for the unsubscribe. A node that is no row is no space.
+    for (node, subid) in subids {
+        if let Err(e) = db::set_subid(ctx.store.conn(), ctx.account_id, &s, &node, Some(&subid)) {
+            ctx.store_error("store a subscription id", e);
+        }
+        ctx.state
+            .spaces
+            .list_subids
+            .insert((s.clone(), node), subid);
+    }
+    // A node that an earlier start found to be no space (for example a Movim comments
+    // node) costs no disco#info now. Forget the nodes that we do not subscribe to any more.
+    let skip = db::non_space_nodes(ctx.store.conn(), ctx.account_id, &s).unwrap_or_else(|e| {
+        ctx.store_error("read the nodes that are no space", e);
+        Vec::new()
+    });
+    for node in skip.iter().filter(|n| !nodes.contains(n)) {
+        if let Err(e) = db::forget_non_space(ctx.store.conn(), ctx.account_id, &s, node) {
+            ctx.store_error("forget a node that is no space", e);
+        }
+    }
     // A pending join that the owner approved becomes a space: `upsert_space` follows it.
-    for node in nodes {
-        request_info(ctx, service, &node, After::Items);
+    for node in nodes.iter().filter(|n| !skip.contains(n)) {
+        request_info(ctx, service, node, After::Items);
     }
 }
 
 /// The subscriptions of a space node for its owner. Keeps the pending ones.
 /// The answer of an owner to a join request (XEP-0060, 8.6): the authorization form,
 /// submitted in a message to the service.
-fn authorization_answer(service: &BareJid, node: &str, jid: &str, allow: bool) -> Message {
-    let form = DataForm::new(
-        DataFormType::Submit,
-        FORM_SUBSCRIBE_AUTHORIZATION,
-        vec![
-            Field::text_single("pubsub#node", node),
-            Field::new("pubsub#subscriber_jid", FieldType::JidSingle).with_value(jid),
-            Field::new("pubsub#allow", FieldType::Boolean).with_value(if allow {
-                "true"
-            } else {
-                "false"
-            }),
-        ],
-    );
+/// With the subscription id of the request, if we know it, the form names the subscription
+/// (`pubsub#subid`).
+fn authorization_answer(
+    service: &BareJid,
+    node: &str,
+    jid: &str,
+    allow: bool,
+    subid: Option<&str>,
+) -> Message {
+    let mut fields = vec![
+        Field::text_single("pubsub#node", node),
+        Field::new("pubsub#subscriber_jid", FieldType::JidSingle).with_value(jid),
+        Field::new("pubsub#allow", FieldType::Boolean).with_value(if allow {
+            "true"
+        } else {
+            "false"
+        }),
+    ];
+    if let Some(subid) = subid {
+        fields.push(Field::text_single("pubsub#subid", subid));
+    }
+    let form = DataForm::new(DataFormType::Submit, FORM_SUBSCRIBE_AUTHORIZATION, fields);
     let mut message = Message::new(Some(Jid::from(service.clone())));
     message.payloads.push(form.into());
     message
@@ -1802,6 +2505,54 @@ fn parse_join_requests(payload: &Element, node: &str) -> Vec<JoinRequest> {
             Some(JoinRequest {
                 jid: c.attr("jid")?.to_owned(),
                 subid: c.attr("subid").map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+/// The affiliations of an owner answer (XEP-0060, 8.9.1). The owner comes first.
+fn parse_members(payload: &Element) -> Vec<SpaceMember> {
+    let Some(list) = payload
+        .get_child("affiliations", ns::PUBSUB_OWNER)
+        .or_else(|| payload.get_child("affiliations", ns::PUBSUB))
+    else {
+        return Vec::new();
+    };
+    let mut members: Vec<SpaceMember> = list
+        .children()
+        .filter(|c| c.name() == "affiliation")
+        .filter_map(|c| {
+            Some(SpaceMember {
+                jid: c.attr("jid")?.to_owned(),
+                affiliation: c.attr("affiliation")?.to_owned(),
+            })
+        })
+        .collect();
+    let rank = |m: &SpaceMember| match m.affiliation.as_str() {
+        "owner" => 0,
+        "publisher" | "publish-only" => 1,
+        "member" => 2,
+        _ => 3,
+    };
+    members.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.jid.cmp(&b.jid)));
+    members
+}
+
+/// The fields of the node configuration form of an owner answer (XEP-0060, 8.2.1).
+fn parse_config(payload: &Element) -> Vec<SpaceConfigField> {
+    let Some(form) = payload
+        .get_child("configure", ns::PUBSUB_OWNER)
+        .and_then(|c| c.get_child("x", ns::DATA_FORMS))
+        .and_then(|x| DataForm::try_from(x.clone()).ok())
+    else {
+        return Vec::new();
+    };
+    form.fields
+        .iter()
+        .filter_map(|f| {
+            Some(SpaceConfigField {
+                var: f.var.clone().filter(|v| v != "FORM_TYPE")?,
+                value: f.values.join(", "),
             })
         })
         .collect()
@@ -1852,7 +2603,15 @@ pub(crate) fn on_authorization(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         log::warn!("dropped a join request from {from}: not our spaces service");
         return true;
     }
-    if let Err(e) = db::add_request(ctx.store.conn(), ctx.account_id, from.as_str(), &node, &jid) {
+    let subid = value("pubsub#subid");
+    if let Err(e) = db::add_request(
+        ctx.store.conn(),
+        ctx.account_id,
+        from.as_str(),
+        &node,
+        &jid,
+        subid.as_deref(),
+    ) {
         ctx.store_error("store a join request", e);
     }
     let name = db::space_name(ctx.store.conn(), ctx.account_id, from.as_str(), &node)
@@ -1881,12 +2640,28 @@ fn on_subscription_event(
     node: &str,
     jid: Option<Jid>,
     state: Option<Subscription>,
+    subid: Option<String>,
 ) {
-    if service.resource().is_some() || jid.is_some_and(|j| j.to_bare() != *ctx.account) {
+    if service.resource().is_some() {
         return;
     }
     let bare = service.to_bare();
     let s = bare.to_string();
+    if let Some(other) = jid
+        .as_ref()
+        .map(Jid::to_bare)
+        .filter(|j| *j != *ctx.account)
+    {
+        // A person that asked to join our space: the service answered the request that
+        // we answered (XEP-0060, 8.6), so the stored request is done.
+        if matches!(state, Some(Subscription::Subscribed | Subscription::None))
+            && let Err(e) =
+                db::remove_request(ctx.store.conn(), ctx.account_id, &s, node, other.as_str())
+        {
+            ctx.store_error("remove a join request", e);
+        }
+        return;
+    }
     if !db::is_pending(ctx.store.conn(), ctx.account_id, &s, node).unwrap_or(false) {
         log::debug!("dropped a subscription event for {node} of {service}: no pending join");
         return;
@@ -1897,6 +2672,11 @@ fn on_subscription_event(
         .unwrap_or_else(|| node.to_owned());
     match state {
         Some(Subscription::Subscribed) => {
+            if let Err(e) =
+                db::set_subid(ctx.store.conn(), ctx.account_id, &s, node, subid.as_deref())
+            {
+                ctx.store_error("store a subscription id", e);
+            }
             request_info(ctx, &bare, node, After::Items);
             ctx.emit(ClientEvent::Notice(format!(
                 "Your request to join {name} was approved"
@@ -1950,9 +2730,21 @@ fn on_node_info(
             let meta = meta_of(&info);
             if meta.type_.as_deref() != Some(NS_SPACES) {
                 log::info!("node {node} of {service} is not a space");
-                if let After::Join(reply) = after {
+                // Remember it, if the answer had the meta-data form: no disco#info for
+                // this node at the next start.
+                let has_meta = info
+                    .extensions
+                    .iter()
+                    .any(|f| f.form_type() == Some(NS_META));
+                if has_meta
+                    && matches!(after, After::Items)
+                    && let Err(e) = db::add_non_space(ctx.store.conn(), ctx.account_id, &s, node)
+                {
+                    ctx.store_error("store a node that is no space", e);
+                }
+                if let After::Join(reply, subid) = after {
                     let _ = reply.send(Err(ClientError::Invalid("the node is not a space".into())));
-                    if let Ok(iq) = unsubscribe_iq(ctx, service, node) {
+                    if let Ok(iq) = unsubscribe_iq(ctx, service, node, subid.as_deref()) {
                         ctx.request(iq, FeaturePending::Spaces(Pending::Ignore));
                     }
                 }
@@ -1969,20 +2761,44 @@ fn on_node_info(
             ) {
                 ctx.store_error("store a space", e);
             }
+            if let Err(e) = db::forget_non_space(ctx.store.conn(), ctx.account_id, &s, node) {
+                ctx.store_error("forget a node that is no space", e);
+            }
+            if let Some(subid) = ctx
+                .state
+                .spaces
+                .list_subids
+                .remove(&(s.clone(), node.to_owned()))
+                && let Err(e) =
+                    db::set_subid(ctx.store.conn(), ctx.account_id, &s, node, Some(&subid))
+            {
+                ctx.store_error("store a subscription id", e);
+            }
+            if let After::Join(_, Some(subid)) = &after
+                && let Err(e) =
+                    db::set_subid(ctx.store.conn(), ctx.account_id, &s, node, Some(subid))
+            {
+                ctx.store_error("store a subscription id", e);
+            }
         }
-        (None, After::Join(_)) if !lost => {
+        (None, After::Join(..)) if !lost => {
             // We are subscribed already. Keep the space without its metadata.
             log::warn!("no disco#info for {node} of {service}: {result:?}");
-            if let Err(e) =
+            let subid = match &after {
+                After::Join(_, subid) => subid.as_deref(),
+                _ => None,
+            };
+            let stored =
                 db::upsert_space(ctx.store.conn(), ctx.account_id, &s, node, None, None, None)
-            {
+                    .and_then(|_| db::set_subid(ctx.store.conn(), ctx.account_id, &s, node, subid));
+            if let Err(e) = stored {
                 ctx.store_error("store a space", e);
             }
         }
         (None, _) => {
             log::warn!("no disco#info for {node} of {service}: {result:?}");
             match (after, &result) {
-                (After::Join(reply), _) => {
+                (After::Join(reply, _), _) => {
                     let _ = reply.send(Err(ClientError::NotConnected));
                 }
                 (After::Items, Err(e)) => on_refresh_error(ctx, service, node, e),
@@ -1995,7 +2811,7 @@ fn on_node_info(
     match after {
         After::Nothing | After::Pending => {}
         After::Items => request_items(ctx, service, node, None),
-        After::Join(reply) => request_items(ctx, service, node, Some(reply)),
+        After::Join(reply, _) => request_items(ctx, service, node, Some(reply)),
     }
 }
 
@@ -2435,6 +3251,15 @@ fn store_item(
         store_avatar_item(ctx, service, node, payload);
         return;
     }
+    // XEP-0330: an item that names a pubsub node. We show rooms only, so we ignore these
+    // items on purpose. An older version kept their XML: drop that row.
+    if payload.is_some_and(|p| p.ns() == NS_PUBSUB_SUBSCRIPTION) {
+        log::debug!("ignored a XEP-0330 subscription item {id} of {service} {node}");
+        if let Err(e) = db::delete_item(ctx.store.conn(), ctx.account_id, service, node, id) {
+            ctx.store_error("remove a space item", e);
+        }
+        return;
+    }
     let room = payload
         .filter(|p| p.is("conference", ns::BOOKMARKS2))
         .and_then(|_| BareJid::new(id).ok());
@@ -2598,6 +3423,146 @@ fn store_avatar_item(ctx: &mut Ctx<'_>, service: &str, node: &str, payload: Opti
     }
 }
 
+/// What an image upload needs after the PUT: the place of the item and the metadata.
+#[derive(Debug)]
+pub(crate) struct ImageJob {
+    service: BareJid,
+    node: String,
+    banner: bool,
+    mime: String,
+    /// The SHA-1 of the image, lower case hex (XEP-0084).
+    hash: String,
+    data: Vec<u8>,
+    width: u16,
+    height: u16,
+}
+
+/// The file extension for the name of an upload. The server may show it in the URL.
+fn extension(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/avif" => "avif",
+        _ => "img",
+    }
+}
+
+/// Set the avatar or the banner of a space: upload the image (XEP-0363), then publish
+/// the XEP-0084 metadata with the URL (`on_image_uploaded`).
+#[allow(clippy::too_many_arguments)]
+fn start_image(
+    ctx: &mut Ctx<'_>,
+    service: BareJid,
+    node: String,
+    banner: bool,
+    mime: String,
+    data: Vec<u8>,
+    (width, height): (u16, u16),
+    reply: Reply<()>,
+) {
+    let limit = if banner {
+        MAX_BANNER_BYTES
+    } else {
+        MAX_AVATAR_BYTES
+    };
+    if data.is_empty() || data.len() > limit || !mime.starts_with("image/") {
+        let what = if banner { "a banner" } else { "an avatar" };
+        let _ = reply.send(Err(ClientError::Invalid(format!(
+            "{what} is an image of 1 byte to {} KiB",
+            limit / 1024
+        ))));
+        return;
+    }
+    let hash = avatars::sha1_hex(&data);
+    let kind = if banner { "banner" } else { "avatar" };
+    let filename = format!("space-{kind}-{}.{}", &hash[..12], extension(&mime));
+    let job = ImageJob {
+        service,
+        node,
+        banner,
+        mime: mime.clone(),
+        hash,
+        data: data.clone(),
+        width,
+        height,
+    };
+    super::upload::start_space_upload(ctx, filename, mime, data, job, reply);
+}
+
+/// The upload of a space image worked: publish the metadata item. The item id is the
+/// avatar item or the banner item. The URL is the GET URL of the upload service.
+pub(crate) fn on_image_uploaded(ctx: &mut Ctx<'_>, job: ImageJob, url: String, reply: Reply<()>) {
+    let ImageJob {
+        service,
+        node,
+        banner,
+        mime,
+        hash,
+        data,
+        width,
+        height,
+    } = job;
+    let size = |name: &str, value: u16| {
+        if value > 0 {
+            format!(" {name}='{value}'")
+        } else {
+            String::new()
+        }
+    };
+    let metadata = format!(
+        "<metadata xmlns='{NS_AVATAR_METADATA}'><info bytes='{}' id='{hash}' type='{}' url='{}'{}{}/></metadata>",
+        data.len(),
+        xml_escape(&mime),
+        xml_escape(&url),
+        size("width", width),
+        size("height", height),
+    );
+    let item_id = if banner { BANNER_ITEM } else { AVATAR_ITEM };
+    let iq = pubsub_iq(
+        true,
+        &service,
+        &format!(
+            "<publish node='{}'><item id='{item_id}'>{metadata}</item></publish>",
+            xml_escape(&node)
+        ),
+    );
+    let item: Element = metadata.parse().expect("the metadata XML is valid");
+    go(ctx, iq, reply, |reply| Pending::Done {
+        action: Action::Image {
+            service,
+            node,
+            item,
+            banner,
+            data,
+        },
+        reply,
+    });
+}
+
+/// Store the avatar that we just published, with its image. The hash is ours, so there is
+/// no fetch.
+fn store_own_avatar(ctx: &mut Ctx<'_>, service: &str, node: &str, item: &Element, data: &[u8]) {
+    let Some(Some(info)) = avatar_of(item) else {
+        return;
+    };
+    let owner = avatar_owner(service, node);
+    let stored = avatars::store_metadata(
+        ctx.store,
+        ctx.account_id,
+        &owner,
+        &info.hash,
+        info.mime.as_deref(),
+    );
+    if let Err(e) = stored {
+        return ctx.store_error("store a space avatar", e);
+    }
+    if let Err(e) = store_avatar_image(ctx.store, ctx.account_id, service, node, &info.hash, data) {
+        log::warn!("avatar image for {node} of {service}: {e}");
+    }
+}
+
 /// An HTTP GET for the image of a space avatar. The runtime runs it.
 #[derive(Debug)]
 pub(crate) struct DownloadRequest {
@@ -2744,10 +3709,14 @@ fn changed(ctx: &mut Ctx<'_>, service: &str, node: &str) {
 pub(crate) fn on_event(ctx: &mut Ctx<'_>, service: &Jid, payload: Payload) {
     let node = pubsub::node_of(&payload).to_owned();
     if let Payload::Subscription {
-        jid, subscription, ..
+        jid,
+        subscription,
+        subid,
+        ..
     } = payload
     {
-        return on_subscription_event(ctx, service, &node, jid, subscription);
+        let subid = subid.map(|id| id.0);
+        return on_subscription_event(ctx, service, &node, jid, subscription, subid);
     }
     let s = service.to_string();
     match db::is_followed(ctx.store.conn(), ctx.account_id, &s, &node) {
@@ -2878,7 +3847,62 @@ pub(super) mod db {
         )
     }
 
+    /// Store a join request. A request that we answered before is open again: the service
+    /// asks again. A known subscription id stays if the new one is empty.
     pub fn add_request(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        jid: &str,
+        subid: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT INTO space_join_requests (account_id, service, node, jid, subid)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (account_id, service, node, jid) DO UPDATE SET
+                 answered = 0, subid = COALESCE(excluded.subid, subid)",
+            params![account_id, service, node, jid, subid],
+        )?;
+        Ok(())
+    }
+
+    /// A request that we answered, and that the service lists as pending again, is open
+    /// again. A new subscription id replaces the old one. No row: nothing changes.
+    pub fn reopen_request(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        jid: &str,
+        subid: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE space_join_requests SET answered = 0, subid = COALESCE(?5, subid)
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND jid = ?4",
+            params![account_id, service, node, jid, subid],
+        )?;
+        Ok(())
+    }
+
+    /// The subscription id of a join request, if the service gave one.
+    pub fn request_subid(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        jid: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT subid FROM space_join_requests
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND jid = ?4",
+        )?;
+        let mut rows = stmt.query_map(params![account_id, service, node, jid], |row| row.get(0))?;
+        Ok(rows.next().transpose()?.flatten())
+    }
+
+    /// Mark a request as answered. It stays until the subscription event arrives.
+    pub fn answer_request(
         conn: &Connection,
         account_id: i64,
         service: &str,
@@ -2886,9 +3910,107 @@ pub(super) mod db {
         jid: &str,
     ) -> rusqlite::Result<()> {
         conn.execute(
-            "INSERT OR IGNORE INTO space_join_requests (account_id, service, node, jid)
-             VALUES (?1, ?2, ?3, ?4)",
+            "UPDATE space_join_requests SET answered = 1
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND jid = ?4",
             params![account_id, service, node, jid],
+        )?;
+        Ok(())
+    }
+
+    /// Keep the subscription id of a space that we follow, or that waits for approval.
+    /// Nothing changes if the space has no row. `None` keeps the id that we have.
+    pub fn set_subid(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        subid: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "UPDATE spaces SET subid = COALESCE(?4, subid)
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3",
+            params![account_id, service, node, subid],
+        )?;
+        Ok(())
+    }
+
+    pub fn subid(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT subid FROM spaces WHERE account_id = ?1 AND service = ?2 AND node = ?3",
+        )?;
+        let mut rows = stmt.query_map(params![account_id, service, node], |row| row.get(0))?;
+        Ok(rows.next().transpose()?.flatten())
+    }
+
+    /// Change the name or the description of a space that we follow. An empty description
+    /// clears it. `None` keeps a value.
+    pub fn update_meta(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        let description = description.map(|d| (!d.is_empty()).then_some(d));
+        conn.execute(
+            "UPDATE spaces SET name = COALESCE(?4, name),
+                               description = CASE WHEN ?5 THEN ?6 ELSE description END
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3",
+            params![
+                account_id,
+                service,
+                node,
+                name,
+                description.is_some(),
+                description.flatten()
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The nodes of a service that an earlier start found to be no space.
+    pub fn non_space_nodes(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT node FROM non_space_nodes WHERE account_id = ?1 AND service = ?2",
+        )?;
+        stmt.query_map(params![account_id, service], |row| row.get(0))?
+            .collect()
+    }
+
+    pub fn add_non_space(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT OR IGNORE INTO non_space_nodes (account_id, service, node)
+             VALUES (?1, ?2, ?3)",
+            params![account_id, service, node],
+        )?;
+        Ok(())
+    }
+
+    pub fn forget_non_space(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "DELETE FROM non_space_nodes
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3",
+            params![account_id, service, node],
         )?;
         Ok(())
     }
@@ -2908,18 +4030,25 @@ pub(super) mod db {
         Ok(())
     }
 
+    /// The requests that wait for us. A request that we answered is not one of them.
     pub fn requests(
         conn: &Connection,
         account_id: i64,
         service: &str,
         node: &str,
-    ) -> rusqlite::Result<Vec<String>> {
+    ) -> rusqlite::Result<Vec<JoinRequest>> {
         let mut stmt = conn.prepare_cached(
-            "SELECT jid FROM space_join_requests
-             WHERE account_id = ?1 AND service = ?2 AND node = ?3 ORDER BY jid",
+            "SELECT jid, subid FROM space_join_requests
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND answered = 0
+             ORDER BY jid",
         )?;
-        stmt.query_map(params![account_id, service, node], |row| row.get(0))?
-            .collect()
+        stmt.query_map(params![account_id, service, node], |row| {
+            Ok(JoinRequest {
+                jid: row.get(0)?,
+                subid: row.get(1)?,
+            })
+        })?
+        .collect()
     }
 
     pub fn pending(conn: &Connection, account_id: i64) -> rusqlite::Result<Vec<PendingJoin>> {

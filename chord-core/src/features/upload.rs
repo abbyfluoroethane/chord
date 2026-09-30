@@ -17,7 +17,7 @@ use xmpp_parsers::iq::Iq;
 use xmpp_parsers::oob::Oob;
 use xmpp_parsers::stanza_error::StanzaError;
 
-use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, file_sharing};
+use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, file_sharing, spaces};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{FileMeta, MessageExtras};
 
@@ -58,6 +58,30 @@ struct Transfer {
     /// Set when the slot answer arrives.
     get_url: Option<String>,
     reply: Reply,
+    /// A space image. The transfer sends no message: after the PUT, the URL goes into the
+    /// metadata of the space (`spaces::on_image_uploaded`), and errors go to this reply.
+    space: Option<SpaceUpload>,
+}
+
+/// The image of a space and the reply of the command that waits for it.
+#[derive(Debug)]
+struct SpaceUpload {
+    job: spaces::ImageJob,
+    reply: oneshot::Sender<Result<(), ClientError>>,
+}
+
+impl Transfer {
+    /// End the transfer with an error, for the caller that waits for it.
+    fn fail(self, error: ClientError) {
+        match self.space {
+            Some(space) => {
+                let _ = space.reply.send(Err(error));
+            }
+            None => {
+                let _ = self.reply.send(Err(error));
+            }
+        }
+    }
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -183,7 +207,7 @@ fn start_upload(
     source: Source,
     size: u64,
     reply: Reply,
-) -> Result<(), (ClientError, Reply)> {
+) -> Result<u64, (ClientError, Reply)> {
     if filename.is_empty() {
         return Err((ClientError::Invalid("the file name is empty".into()), reply));
     }
@@ -230,13 +254,48 @@ fn start_upload(
             source: Some(source),
             get_url: None,
             reply,
+            space: None,
         },
     );
     ctx.request(
         Iq::from_get("", request).with_to(service),
         FeaturePending::Upload(Pending::Slot(id)),
     );
-    Ok(())
+    Ok(id)
+}
+
+/// Upload the image of a space (XEP-0363). No message goes out. When the PUT is done,
+/// `spaces::on_image_uploaded` publishes the URL. `reply` gets any error on the way.
+pub(crate) fn start_space_upload(
+    ctx: &mut Ctx<'_>,
+    filename: String,
+    content_type: String,
+    data: Vec<u8>,
+    job: spaces::ImageJob,
+    reply: oneshot::Sender<Result<(), ClientError>>,
+) {
+    // The transfer has a reply for a chat upload. Here nobody listens to it.
+    let (unused, _) = oneshot::channel();
+    let size = data.len() as u64;
+    let to = Jid::from(ctx.account.clone());
+    match start_upload(
+        ctx,
+        to,
+        filename,
+        content_type,
+        Source::Memory(data),
+        size,
+        unused,
+    ) {
+        Ok(id) => {
+            if let Some(transfer) = ctx.state.upload.transfers.get_mut(&id) {
+                transfer.space = Some(SpaceUpload { job, reply });
+            }
+        }
+        Err((e, _)) => {
+            let _ = reply.send(Err(e));
+        }
+    }
 }
 
 /// Whether `to` is a room that we know.
@@ -280,14 +339,14 @@ fn on_slot(ctx: &mut Ctx<'_>, id: u64, response: IqResponse) {
     let slot = match slot {
         Ok(slot) => slot,
         Err(e) => {
-            let _ = transfer.reply.send(Err(e));
+            transfer.fail(e);
             return;
         }
     };
     // The service is not trusted with the scheme (XEP-0363, section 6).
     for url in [&slot.put.url, &slot.get.url] {
         if let Err(e) = check_url(url) {
-            let _ = transfer.reply.send(Err(ClientError::Server(e)));
+            transfer.fail(ClientError::Server(e));
             return;
         }
     }
@@ -439,10 +498,15 @@ pub(crate) fn on_put_done(ctx: &mut Ctx<'_>, done: PutDone) {
     let Some(transfer) = ctx.state.upload.transfers.remove(&done.id) else {
         return;
     };
-    let Some(get_url) = transfer.get_url else {
+    let Some(get_url) = transfer.get_url.clone() else {
         return;
     };
     match done.result {
+        Ok(_) if transfer.space.is_some() => {
+            if let Some(space) = transfer.space {
+                spaces::on_image_uploaded(ctx, space.job, get_url, space.reply);
+            }
+        }
         Ok(digest) => {
             // The URL in the body and the XEP-0066 link are for clients without XEP-0447.
             let oob = Oob {
@@ -472,9 +536,7 @@ pub(crate) fn on_put_done(ctx: &mut Ctx<'_>, done: PutDone) {
                 let _ = transfer.reply.send(Ok(get_url));
             }
         }
-        Err(e) => {
-            let _ = transfer.reply.send(Err(ClientError::Server(e)));
-        }
+        Err(e) => transfer.fail(ClientError::Server(e)),
     }
 }
 
@@ -909,5 +971,113 @@ mod tests {
         assert!(check_url("http://up.example/a").is_err());
         assert!(check_url("https:///a").is_err());
         assert!(check_url("no scheme").is_err());
+    }
+    fn space_image(h: &mut Harness, data: Vec<u8>) -> oneshot::Receiver<Result<(), ClientError>> {
+        let (reply, answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                FeatureCommand::Spaces(spaces::Command::SetImage {
+                    service: jid("pubsub.chord.localhost").to_bare(),
+                    node: "dev".into(),
+                    banner: false,
+                    mime: "image/png".into(),
+                    data,
+                    width: 0,
+                    height: 0,
+                    reply,
+                }),
+            )
+        });
+        answer
+    }
+
+    #[test]
+    fn a_space_image_uploads_without_a_message_then_publishes_the_url() {
+        let mut h = harness(None);
+        let mut answer = space_image(&mut h, vec![1, 2, 3]);
+        let iqs = h.sent_iqs();
+        let Iq::Get { to, payload, .. } = &iqs[0] else {
+            panic!("not a get");
+        };
+        assert_eq!(to.as_ref().unwrap().as_str(), "upload.chord.localhost");
+        let name = payload.attr("filename").unwrap();
+        assert!(
+            name.starts_with("space-avatar-") && name.ends_with(".png"),
+            "{name}"
+        );
+        assert_eq!(payload.attr("size"), Some("3"));
+        assert_eq!(payload.attr("content-type"), Some("image/png"));
+
+        answer_slot(
+            &mut h,
+            IqResponse::Result(Some(slot(
+                "https://up.example/put/9",
+                "https://up.example/get/9",
+            ))),
+        );
+        let put = take_put(&mut h).expect("a PUT request");
+        assert_eq!(put.url, "https://up.example/put/9");
+        finish(&mut h, put.id, Ok(vec![7; 32]));
+
+        // No chat message. The URL goes to the pubsub service, in the avatar metadata.
+        let sent = h.take_sent();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        let Stanza::Iq(iq) = &sent[0] else {
+            panic!("not an IQ: {sent:?}");
+        };
+        assert_eq!(iq.to().unwrap().as_str(), "pubsub.chord.localhost");
+        let Iq::Set { payload, .. } = iq else {
+            panic!("not a set");
+        };
+        let text = String::from(payload);
+        assert!(text.contains("url='https://up.example/get/9'"), "{text}");
+        assert!(text.contains(spaces::AVATAR_ITEM), "{text}");
+        assert!(
+            answer.try_recv().unwrap().is_none(),
+            "waits for the publish"
+        );
+    }
+
+    #[test]
+    fn a_failed_space_image_upload_goes_to_the_space_reply() {
+        // The slot answer is an error.
+        let mut h = harness(None);
+        let mut answer = space_image(&mut h, vec![1, 2, 3]);
+        h.take_sent();
+        let error = StanzaError::new(ErrorType::Cancel, DefinedCondition::NotAllowed, "en", "no");
+        answer_slot(&mut h, IqResponse::Error(error));
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
+
+        // The PUT fails.
+        let mut answer = space_image(&mut h, vec![1, 2, 3]);
+        h.take_sent();
+        answer_slot(
+            &mut h,
+            IqResponse::Result(Some(slot(
+                "https://up.example/put/9",
+                "https://up.example/get/9",
+            ))),
+        );
+        let put = take_put(&mut h).expect("a PUT request");
+        finish(&mut h, put.id, Err("HTTP 500".into()));
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
+        assert!(h.take_sent().is_empty());
+    }
+
+    #[test]
+    fn a_space_image_that_the_service_cannot_take_fails_at_once() {
+        let mut h = harness(Some(2));
+        let mut answer = space_image(&mut h, vec![1, 2, 3]);
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
     }
 }
