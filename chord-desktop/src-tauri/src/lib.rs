@@ -10,6 +10,7 @@ mod commands;
 mod emoji;
 mod error;
 mod files;
+mod forms;
 mod gif;
 mod keychain;
 mod link_preview;
@@ -132,6 +133,13 @@ pub fn run() {
             pins::unpin_message,
             pins::pins,
             pins::refresh_pins,
+            forms::list_commands,
+            forms::command_step,
+            forms::room_config_form,
+            forms::submit_room_config_form,
+            forms::change_password,
+            forms::registration_form,
+            forms::register_account,
             link_preview::link_preview,
             link_preview::link_image,
             files::save_image,
