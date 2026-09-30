@@ -39,13 +39,23 @@
   }
 
   const ratio = $derived(file.width && file.height ? `${file.width} / ${file.height}` : '16 / 10');
+  // A photo with a known size gets an exact box, at most 400 by 300 px. A photo without
+  // one (a GIF link, for example) keeps its own size up to the same limits. A button with
+  // only an aspect ratio has no width, and WebKitGTK then draws the photo tiny.
+  const box = $derived.by(() => {
+    if (!file.width || !file.height) return null;
+    const scale = Math.min(1, 400 / file.width, 300 / file.height);
+    return { w: Math.round(file.width * scale), h: Math.round(file.height * scale) };
+  });
 </script>
 
 {#if kind === 'image'}
   <button
     class="image"
+    class:natural={!box}
     data-ctx="image"
-    style:aspect-ratio={ratio}
+    style:width={box ? `${box.w}px` : null}
+    style:height={box ? `${box.h}px` : null}
     onclick={() => viewImage(file)}
     onpointerenter={preloadLightbox}
     onfocus={preloadLightbox}
@@ -107,6 +117,18 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+  .image {
+    max-width: min(400px, 100%);
+  }
+  .image.natural {
+    display: inline-block;
+  }
+  .image.natural img {
+    width: auto;
+    height: auto;
+    max-width: min(398px, 100%);
+    max-height: 298px;
   }
 
   .video {
