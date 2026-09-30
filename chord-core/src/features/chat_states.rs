@@ -71,9 +71,8 @@ impl ClientHandle {
     }
 
     /// The user closes the chat with `peer`, a bare JID (XEP-0085, section 5.1). This
-    /// sends `<gone/>` to a chat peer that sent us a state in this session and that got a
-    /// state or a message from us. A room and any other case send nothing and return no
-    /// error.
+    /// sends `<gone/>` to a chat peer that sent us a state in this session, once. A room and
+    /// any other case send nothing and return no error.
     pub fn close_chat(&self, peer: String) -> Result<(), ClientError> {
         Jid::new(&peer).map_err(|e| ClientError::Invalid(format!("bad JID {peer}: {e}")))?;
         self.feature(FeatureCommand::ChatStates(Command::CloseChat { peer }))
@@ -303,10 +302,9 @@ fn close_chat(ctx: &mut Ctx<'_>, peer: &str) {
     if muc::is_room(ctx, &bare) || !ctx.state.chat_states.supported.contains(peer) {
         return;
     }
-    // Nothing went out, or `gone` went out already: nothing to end.
-    match ctx.state.chat_states.last_sent.get(peer) {
-        None | Some(ChatState::Gone) => return,
-        Some(_) => {}
+    // `gone` went out already.
+    if ctx.state.chat_states.last_sent.get(peer) == Some(&ChatState::Gone) {
+        return;
     }
     ctx.state
         .chat_states
@@ -648,9 +646,6 @@ mod tests {
         h.with_ctx(|ctx| close_chat(ctx, BOB));
         assert!(sent_states(&mut h).is_empty());
         deliver(&mut h, from_bob(Some(ChatState::Active), None));
-        // We have sent nothing to bob yet.
-        h.with_ctx(|ctx| close_chat(ctx, BOB));
-        assert!(sent_states(&mut h).is_empty());
         h.with_ctx(|ctx| set_typing(ctx, BOB, true));
         sent_states(&mut h);
         h.with_ctx(|ctx| close_chat(ctx, BOB));

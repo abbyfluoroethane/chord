@@ -26,7 +26,7 @@
 //!   read <jid>                      mark as read (also with --offline)
 //!   pm <room> <nick> <text>         private message to a room occupant
 //!   read-private <room> <nick>      mark a private chat as read (also with --offline)
-//!   typing <jid> on|off             send a typing state (XEP-0085)
+//!   typing <jid> on|off|gone        send a typing state, or gone when we close the chat (XEP-0085)
 //!   csi active|inactive [seconds]   client state (XEP-0352). With seconds: stay, print each
 //!                                   event with a time, then send active and watch 5 more seconds
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
@@ -122,7 +122,7 @@ block <jid> [--report spam|abuse] | unblock <jid|--all> | blocked | \
 contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> [--add-back] | contact-rename <jid> [name] | contact-groups <jid> [group...] | idle <seconds-ago>|off [hold-secs] | \
 edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
-read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
+read-private <room> <nick> | typing <jid> on|off|gone | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
 invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] [--protect|--unprotect] | \
 subject <room> <text> | room-role <room> <nick> <none|visitor|participant|moderator> [reason] | \

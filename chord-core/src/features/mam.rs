@@ -285,6 +285,10 @@ fn send_attempt(
         );
         return;
     }
+    log::debug!(
+        "MAM query {:?} {kind:?} at {after:?}, attempt {attempt}",
+        target.archive()
+    );
     // A new query replaces a retry that waits for the same archive.
     ctx.state.mam.retries.retain(|r| r.target != target);
     let queryid = new_id();
@@ -563,6 +567,7 @@ pub(crate) fn on_result(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         return true;
     }
     let target = run.target.clone();
+    log::debug!("MAM result {} for {:?}", result.id, target.archive());
     let timestamp = result
         .forwarded
         .delay

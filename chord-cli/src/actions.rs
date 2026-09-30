@@ -819,12 +819,17 @@ pub async fn read(client: &Client, peer: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `typing <jid> on|off`: send a XEP-0085 typing state.
+/// `typing <jid> on|off|gone`: send a XEP-0085 state. `gone` says that we closed the chat.
 pub async fn typing(client: &Client, peer: &str, state: &str) -> Result<(), CliError> {
     let on = match state {
         "on" => true,
         "off" => false,
-        other => return Err(format!("typing: expected on or off, got {other}").into()),
+        "gone" => {
+            client.handle.close_chat(peer.to_owned()).map_err(err)?;
+            println!("typing gone for {peer}");
+            return Ok(());
+        }
+        other => return Err(format!("typing: expected on, off or gone, got {other}").into()),
     };
     client.handle.set_typing(peer.to_owned(), on).map_err(err)?;
     println!("typing {state} for {peer}");
