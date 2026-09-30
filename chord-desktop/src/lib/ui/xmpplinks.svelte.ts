@@ -12,7 +12,7 @@ import { contactsStore } from './contacts.svelte';
 import { session } from './session.svelte';
 import { spaceKey } from './types';
 import { ui } from './ui.svelte';
-import { parseXmppUri, xmppKey, type KnownXmppLink } from './xmppuri';
+import { parseRegisterLink, parseXmppUri, xmppKey, type KnownXmppLink } from './xmppuri';
 
 /** What the server told us about the target of a link. */
 export type LinkInfo =
@@ -50,7 +50,8 @@ class XmppLinks {
     if (fromOs && uri === this.last.uri && now - this.last.at < REPEAT_MS) return;
     if (fromOs) this.last = { uri, at: now };
     if (parseXmppUri(uri).kind === 'unknown') {
-      ui.say('This link is not valid.');
+      // A sign-up link (XEP-0401) waits for the registration flow. It carries the token.
+      ui.say(parseRegisterLink(uri) ? 'Sign-up links are not supported yet.' : 'This link is not valid.');
       return;
     }
     if (session.state !== 'connected') {
@@ -203,7 +204,7 @@ class XmppLinks {
             contactsStore.message(link.jid);
             return true;
           }
-          const r = contactsStore.add(link.jid);
+          const r = contactsStore.add(link.jid, link.preauth);
           ui.say(r.ok ? r.message : r.error);
           return r.ok;
         }

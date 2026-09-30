@@ -7,16 +7,22 @@
 //            xmpp:SERVICE?;node=NODE                           (the XEP-0503 form with no action)
 //   room     xmpp:ROOM?join[;password=SECRET]
 //   chat     xmpp:USER   and   xmpp:USER?message[;body=TEXT]
-//   contact  xmpp:USER?roster[;name=NAME]   and   xmpp:USER?subscribe
+//   contact  xmpp:USER?roster[;name=NAME][;preauth=TOKEN]   and   xmpp:USER?subscribe[;preauth=TOKEN]
+//            (XEP-0379: the token goes into the subscription request)
+//   register xmpp:DOMAIN?register[;preauth=TOKEN]              (XEP-0401: sign up at a server.
+//            `parseRegisterLink` reads it. `parseXmppUri` gives `unknown` for it.)
 
 export type XmppLink =
   | { kind: 'space'; service: string; node: string }
   | { kind: 'room'; jid: string; password: string | null }
   | { kind: 'chat'; jid: string; body: string | null }
-  | { kind: 'contact'; jid: string; name: string | null }
+  | { kind: 'contact'; jid: string; name: string | null; preauth?: string }
   | { kind: 'unknown' };
 
 export type KnownXmppLink = Exclude<XmppLink, { kind: 'unknown' }>;
+
+/** A XEP-0401 sign-up link: a server domain and an optional invite token. */
+export type RegisterLink = { domain: string; preauth: string | null };
 
 const UNKNOWN: XmppLink = { kind: 'unknown' };
 
@@ -105,28 +111,56 @@ function pairs(parts: string[]): Map<string, string> | null {
   return out;
 }
 
-/** Parse an `xmpp:` URI. Never throws. */
-export function parseXmppUri(input: string): XmppLink {
+/** The XEP-0379 token of a link, as a spread. Nothing when there is none. */
+function preauthOf(params: Map<string, string>): { preauth?: string } {
+  const token = params.get('preauth')?.trim();
+  return token && bytes(token) <= MAX_PART_BYTES ? { preauth: token } : {};
+}
+
+/** The pieces of an `xmpp:` URI that both parsers read. Null if the URI is bad. */
+function split(input: string) {
   const uri = input.trim();
-  if (!uri || uri.length > MAX_URI_LENGTH || !/^xmpp:/i.test(uri)) return UNKNOWN;
-  if (/[\s\u0000-\u001f\u007f]/.test(uri)) return UNKNOWN;
+  if (!uri || uri.length > MAX_URI_LENGTH || !/^xmpp:/i.test(uri)) return null;
+  if (/[\s\u0000-\u001f\u007f]/.test(uri)) return null;
   let rest = uri.slice(5);
   // The fragment has no meaning for Chord.
   const hash = rest.indexOf('#');
   if (hash >= 0) rest = rest.slice(0, hash);
   // `xmpp://authority/path` acts as another account. Chord does not support it.
-  if (rest.startsWith('//')) return UNKNOWN;
+  if (rest.startsWith('//')) return null;
 
   const q = rest.indexOf('?');
   const rawPath = q < 0 ? rest : rest.slice(0, q);
   const query = q < 0 ? null : rest.slice(q + 1);
   const path = decode(rawPath);
-  if (path === null || !path) return UNKNOWN;
+  if (path === null || !path) return null;
 
   const [type, ...rawPairs] = (query ?? '').split(';');
   const action = decode(type)?.toLowerCase();
   const params = pairs(rawPairs);
-  if (action === undefined || !params) return UNKNOWN;
+  if (action === undefined || !params) return null;
+  return { path, query, action, params };
+}
+
+/**
+ * Parse a XEP-0401 sign-up link, `xmpp:DOMAIN?register[;preauth=TOKEN]`. Null for any other
+ * link. The registration flow uses the token. `parseXmppUri` does not know this link.
+ */
+export function parseRegisterLink(input: string): RegisterLink | null {
+  const parts = split(input);
+  if (!parts || parts.action !== 'register') return null;
+  if (parts.path.includes('@') || parts.path.includes('/')) return null;
+  const domain = domainOf(parts.path);
+  if (!domain) return null;
+  const token = parts.params.get('preauth')?.trim();
+  return { domain, preauth: token && bytes(token) <= MAX_PART_BYTES ? token : null };
+}
+
+/** Parse an `xmpp:` URI. Never throws. */
+export function parseXmppUri(input: string): XmppLink {
+  const parts = split(input);
+  if (!parts) return UNKNOWN;
+  const { path, query, action, params } = parts;
 
   if (action === 'pubsub' || (action === '' && params.has('node'))) {
     // A space. `pubsub` needs the `subscribe` action, and the XEP-0503 form has none.
@@ -153,9 +187,9 @@ export function parseXmppUri(input: string): XmppLink {
       return { kind: 'chat', jid, body: body || null };
     }
     case 'roster':
-      return { kind: 'contact', jid, name: params.get('name')?.trim() || null };
+      return { kind: 'contact', jid, name: params.get('name')?.trim() || null, ...preauthOf(params) };
     case 'subscribe':
-      return { kind: 'contact', jid, name: null };
+      return { kind: 'contact', jid, name: null, ...preauthOf(params) };
     default:
       return UNKNOWN;
   }

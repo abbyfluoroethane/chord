@@ -752,6 +752,18 @@ impl ChordClient {
             .await
     }
 
+    /// Add a contact with the XEP-0379 token of a `?roster;preauth=` link.
+    pub async fn add_contact_with_preauth(
+        &self,
+        jid: String,
+        name: Option<String>,
+        preauth: String,
+    ) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.add_contact_with_preauth(jid, name, preauth).await })
+            .await
+    }
+
     /// Remove a contact from the roster.
     pub async fn remove_contact(&self, jid: String) -> Result<(), ChordError> {
         let jid = parse_bare(&jid)?;

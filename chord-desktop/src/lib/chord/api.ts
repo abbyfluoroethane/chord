@@ -335,8 +335,9 @@ export const unblockContact = (jid: string) => invoke<void>('unblock_contact', {
 export const unblockAll = () => invoke<void>('unblock_all');
 /** Reads the stored copy of the blocklist, so it works offline. */
 export const blockedContacts = () => invoke<Jid[]>('blocked_contacts');
-export const addContact = (jid: string, name?: string) =>
-  invoke<void>('add_contact', { jid, name: name ?? null });
+/** `preauth` is the XEP-0379 token of a `?roster;preauth=` link. */
+export const addContact = (jid: string, name?: string, preauth?: string) =>
+  invoke<void>('add_contact', { jid, name: name ?? null, preauth: preauth ?? null });
 export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });
 /** Rename a contact in the roster. An empty name or null clears it. The groups stay. */
 export const renameContact = (jid: string, name: string | null) =>

@@ -476,19 +476,30 @@ pub async fn contacts(opts: &Opts, client: &Client) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `contact-add <jid> [name]`: add the contact and ask to see its presence.
+/// `contact-add <jid> [name] [--preauth TOKEN]`: add the contact and ask to see its
+/// presence. The token is the XEP-0379 token of a `?roster;preauth=` link.
 pub async fn contact_add(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = "usage: contact-add <jid> [name] [--preauth TOKEN]";
+    let (args, preauth) = match args {
+        [rest @ .., "--preauth", token] => (rest, Some((*token).to_owned())),
+        rest => (rest, None),
+    };
     let (jid, name) = match args {
         [jid] => (*jid, None),
         [jid, name] => (*jid, Some((*name).to_owned())),
-        _ => return Err("usage: contact-add <jid> [name]".to_owned().into()),
+        _ => return Err(usage.to_owned().into()),
     };
     let jid = bare(jid)?;
-    client
-        .handle
-        .add_contact(jid.clone(), name)
-        .await
-        .map_err(err)?;
+    match preauth {
+        Some(token) => {
+            client
+                .handle
+                .add_contact_with_preauth(jid.clone(), name, token)
+                .await
+        }
+        None => client.handle.add_contact(jid.clone(), name).await,
+    }
+    .map_err(err)?;
     println!("added {jid} and asked to see their presence");
     Ok(())
 }

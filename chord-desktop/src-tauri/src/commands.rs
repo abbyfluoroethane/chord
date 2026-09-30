@@ -806,8 +806,21 @@ pub async fn contacts(state: State<'_, AppState>) -> Res<Vec<Contact>> {
 }
 
 #[tauri::command]
-pub async fn add_contact(state: State<'_, AppState>, jid: String, name: Option<String>) -> Res<()> {
-    Ok(state.handle()?.add_contact(bare(&jid)?, name).await?)
+pub async fn add_contact(
+    state: State<'_, AppState>,
+    jid: String,
+    name: Option<String>,
+    preauth: Option<String>,
+) -> Res<()> {
+    let handle = state.handle()?;
+    Ok(match preauth.filter(|t| !t.is_empty()) {
+        Some(token) => {
+            handle
+                .add_contact_with_preauth(bare(&jid)?, name, token)
+                .await?
+        }
+        None => handle.add_contact(bare(&jid)?, name).await?,
+    })
 }
 
 #[tauri::command]

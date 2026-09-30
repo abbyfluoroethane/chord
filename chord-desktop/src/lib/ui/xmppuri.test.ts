@@ -3,6 +3,7 @@ import {
   looksLikeXmppUri,
   MAX_URI_LENGTH,
   parseAddress,
+  parseRegisterLink,
   parseXmppUri,
   spaceInviteLink,
   xmppKey
@@ -137,6 +138,39 @@ describe('chat and contact links', () => {
       jid: 'sam@chord.example',
       name: null
     });
+  });
+
+  it('reads the XEP-0379 preauth token of a roster or subscribe link', () => {
+    expect(parseXmppUri('xmpp:sam@chord.example?roster;preauth=abc123')).toEqual({
+      kind: 'contact',
+      jid: 'sam@chord.example',
+      name: null,
+      preauth: 'abc123'
+    });
+    expect(parseXmppUri('xmpp:sam@chord.example?roster;name=Sam;preauth=a%3Db')).toMatchObject({
+      name: 'Sam',
+      preauth: 'a=b'
+    });
+    expect(parseXmppUri('xmpp:sam@chord.example?subscribe;preauth=t0k')).toMatchObject({ preauth: 't0k' });
+    // An empty token is no token.
+    expect(parseXmppUri('xmpp:sam@chord.example?roster;preauth=')).toEqual({
+      kind: 'contact',
+      jid: 'sam@chord.example',
+      name: null
+    });
+  });
+
+  it('reads a XEP-0401 sign-up link with parseRegisterLink only', () => {
+    expect(parseRegisterLink('xmpp:Chord.Example?register;preauth=TOKEN1')).toEqual({
+      domain: 'chord.example',
+      preauth: 'TOKEN1'
+    });
+    expect(parseRegisterLink('xmpp:chord.example?register')).toEqual({ domain: 'chord.example', preauth: null });
+    expect(parseRegisterLink('xmpp:sam@chord.example?register;preauth=x')).toBeNull();
+    expect(parseRegisterLink('xmpp:chord.example?roster;preauth=x')).toBeNull();
+    expect(parseRegisterLink('xmpp:bad_host!?register')).toBeNull();
+    expect(parseRegisterLink('https://chord.example')).toBeNull();
+    expect(parseXmppUri('xmpp:chord.example?register;preauth=TOKEN1')).toEqual(unknown);
   });
 
   it('decodes a percent-encoded address', () => {

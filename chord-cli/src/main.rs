@@ -17,7 +17,7 @@
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
 //!   space-delete <service> <node> | space-leave <service> <node> | space-pending
 //!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
-//!   contacts | contact-add <jid> [name] | contact-approve <jid>
+//!   contacts | contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid>
 //!   block <jid> | unblock <jid|--all> | blocked (blocked works --offline)
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
 //!   pin <item-id> | unpin <chat> <key> | pins [chat]   pinned messages, in a private PEP node
@@ -113,7 +113,7 @@ space-create <name> [--private | --authorize] | space-add-room <service> <node> 
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 block <jid> | unblock <jid|--all> | blocked | \
-contact-add <jid> [name] | contact-approve <jid> | contact-rename <jid> [name] | idle <seconds-ago>|off [hold-secs] | \
+contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> | contact-rename <jid> [name] | idle <seconds-ago>|off [hold-secs] | \
 edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \

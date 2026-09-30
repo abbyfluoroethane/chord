@@ -9,6 +9,8 @@
 //!   presence and then a ping as a barrier. The server sends the roster push before it
 //!   answers the ping. If the push did not set `approved`, the server does not support
 //!   pre-approval, and the command fails with `Unsupported`.
+//! - XEP-0379: `add_contact_with_preauth` puts `<preauth xmlns='urn:xmpp:pars:0' token=.../>`
+//!   into the subscription request. The token comes from a `?roster;preauth=TOKEN` link.
 //! - The `contacts.ask` column holds two bits: 1 for a pending request of ours, 2 for a
 //!   pre-approval. It needs no new column.
 
@@ -18,6 +20,7 @@ use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use rusqlite::{Connection, OptionalExtension, params};
 use xmpp_parsers::iq::Iq;
+use xmpp_parsers::minidom::rxml::NcName;
 use xmpp_parsers::ns;
 use xmpp_parsers::ping::Ping;
 use xmpp_parsers::presence::{Presence, Show, Type};
@@ -39,7 +42,12 @@ pub(crate) struct State {
     preapprovals: HashMap<BareJid, Vec<Reply>>,
     /// The server offers subscription pre-approval (RFC 6121, 3.4).
     pub pre_approval: bool,
+    /// XEP-0379 tokens of the contacts that we are adding, until the roster set answers.
+    preauth: HashMap<BareJid, String>,
 }
+
+/// The namespace of the pre-authenticated roster subscription (XEP-0379).
+pub const NS_PARS: &str = "urn:xmpp:pars:0";
 
 /// The stream feature for subscription pre-approval (RFC 6121, 3.4).
 pub const NS_PRE_APPROVAL: &str = "urn:xmpp:features:pre-approval";
@@ -69,6 +77,13 @@ pub(crate) enum Command {
     Add {
         jid: BareJid,
         name: Option<String>,
+        reply: Reply,
+    },
+    /// `Add` with a XEP-0379 token for the subscription request.
+    AddPreauth {
+        jid: BareJid,
+        name: Option<String>,
+        preauth: String,
         reply: Reply,
     },
     Remove {
@@ -168,6 +183,24 @@ impl ClientHandle {
             .await
     }
 
+    /// Like `add_contact`, with a XEP-0379 token in the subscription request. The token
+    /// comes from an `xmpp:USER?roster;preauth=TOKEN` link. The server that hosts `jid`
+    /// can then accept the request at once. An empty token is the same as no token.
+    pub async fn add_contact_with_preauth(
+        &self,
+        jid: BareJid,
+        name: Option<String>,
+        preauth: String,
+    ) -> Result<(), ClientError> {
+        self.roster_call(|reply| Command::AddPreauth {
+            jid,
+            name,
+            preauth,
+            reply,
+        })
+        .await
+    }
+
     /// Remove a contact from the roster. The server also ends both subscriptions.
     pub async fn remove_contact(&self, jid: BareJid) -> Result<(), ClientError> {
         self.roster_call(|reply| Command::Remove { jid, reply })
@@ -262,10 +295,15 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
         Pending::Get => on_roster_result(ctx, response),
         Pending::Add { jid, reply } => match response {
             IqResponse::Result(_) => {
-                ctx.send(Presence::subscribe().with_to(jid));
+                let mut presence = Presence::subscribe().with_to(jid.clone());
+                if let Some(token) = ctx.state.roster.preauth.remove(&jid) {
+                    presence.payloads.push(preauth_element(&token));
+                }
+                ctx.send(presence);
                 let _ = reply.send(Ok(()));
             }
             other => {
+                ctx.state.roster.preauth.remove(&jid);
                 let _ = reply.send(Err(failure(other)));
             }
         },
@@ -285,6 +323,13 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
         }
         Pending::Preapprove { jid } => on_preapprove_barrier(ctx, jid, response),
     }
+}
+
+/// The XEP-0379 element of a subscription request.
+fn preauth_element(token: &str) -> xmpp_parsers::minidom::Element {
+    xmpp_parsers::minidom::Element::builder("preauth", NS_PARS)
+        .attr(NcName::try_from("token").expect("a valid attribute name"), token)
+        .build()
 }
 
 /// The ping came back, so the roster push of the server, if any, came first.
@@ -356,6 +401,17 @@ fn on_roster_result(ctx: &mut Ctx<'_>, response: IqResponse) {
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
+        Command::AddPreauth {
+            jid,
+            name,
+            preauth,
+            reply,
+        } => {
+            if !preauth.is_empty() {
+                ctx.state.roster.preauth.insert(jid.clone(), preauth);
+            }
+            on_command(ctx, Command::Add { jid, name, reply });
+        }
         Command::Add { jid, name, reply } => {
             // A roster set replaces the groups, so keep the ones that we know.
             let known = read_contact(ctx.store.conn(), ctx.account_id, &jid)
@@ -483,6 +539,7 @@ fn roster_set(item: Item) -> Roster {
 pub(crate) fn offline(command: Command) {
     match command {
         Command::Add { reply, .. }
+        | Command::AddPreauth { reply, .. }
         | Command::Remove { reply, .. }
         | Command::Rename { reply, .. }
         | Command::Approve { reply, .. }
@@ -1413,6 +1470,43 @@ mod tests {
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
         let sent = h.take_sent();
         assert!(matches!(&sent[0], Stanza::Presence(p) if p.type_ == Type::Subscribe));
+    }
+
+    #[test]
+    fn add_contact_with_preauth_puts_the_token_in_the_subscribe() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::AddPreauth {
+                    jid: bare(BOB),
+                    name: None,
+                    preauth: "tok&en".into(),
+                    reply,
+                },
+            )
+        });
+        h.sent_iqs();
+        h.answer(is_add, None);
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        let sent = h.take_sent();
+        let Stanza::Presence(p) = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(p.type_, Type::Subscribe);
+        let el = p.payloads.iter().find(|e| e.is("preauth", NS_PARS)).unwrap();
+        assert_eq!(el.attr("token"), Some("tok&en"));
+        // A later plain add sends no token.
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::Add { jid: bare(BOB), name: None, reply }));
+        h.sent_iqs();
+        h.answer(is_add, None);
+        let sent = h.take_sent();
+        let Stanza::Presence(p) = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert!(p.payloads.is_empty());
     }
 
     #[test]

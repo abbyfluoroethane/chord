@@ -173,8 +173,8 @@ class ContactsStore {
 
   // --- actions -----------------------------------------------------
 
-  /** Send a contact request. Maps to api.addContact(jid). */
-  add(input: string): AddResult {
+  /** Send a contact request. Maps to api.addContact(jid). `preauth` is the XEP-0379 token of a link. */
+  add(input: string, preauth?: string): AddResult {
     const address = input.trim().toLowerCase();
     if (!ADDRESS.test(address)) {
       return { ok: false, error: 'That does not look like an address. Try sam@chord.example.' };
@@ -189,7 +189,7 @@ class ContactsStore {
       this.accept(address);
       return { ok: true, message: `${address} had asked already. You are now contacts.` };
     }
-    this.act(async (b) => b.addContact(address));
+    this.act(async (b) => b.addContact(address, undefined, preauth));
     this.outgoing.push({
       address,
       name: address.split('@')[0],
