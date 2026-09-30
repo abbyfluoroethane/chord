@@ -208,6 +208,15 @@ export const uploadFiles = (to: string) => invoke<string[]>('upload_files', { to
  */
 export const uploadDropped = (to: string, path: string) =>
   invoke<string>('upload_dropped', { to, path });
+/**
+ * Upload a file that the user pasted: the page has the bytes and no path. The bytes go
+ * to Rust as the raw body (25 MB at most). Rust makes the file name from the media type.
+ * Returns the URL.
+ */
+export const uploadPasted = (to: string, type: string, bytes: Uint8Array) =>
+  invoke<string>('upload_pasted', bytes, {
+    headers: { to: encodeURIComponent(to), type: encodeURIComponent(type) }
+  });
 /** Fetch older messages of a chat or a room from the server archive. */
 export const loadOlder = (peer: string) => invoke<void>('load_older', { peer });
 

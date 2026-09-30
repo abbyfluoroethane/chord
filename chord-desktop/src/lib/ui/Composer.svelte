@@ -15,6 +15,7 @@
   import { live } from './bridge';
   import { ui } from './ui.svelte';
   import { typingText } from './format';
+  import { pastedFiles } from './filetransfer';
   import { tooltip } from './tooltip';
   import {
     loadShortcodes,
@@ -200,6 +201,15 @@
     await app.uploadPicked();
   }
 
+  /** A file in the clipboard (a screenshot, for example) goes out as a file. Text pastes as usual. */
+  function paste(e: ClipboardEvent) {
+    const list = pastedFiles(e.clipboardData);
+    if (!list.length) return;
+    e.preventDefault();
+    if (live) for (const f of list) void app.uploadPasted(f);
+    else for (const f of list) app.sendFile(f);
+  }
+
   function picked() {
     for (const f of files?.files ?? []) app.sendFile(f);
     if (files) files.value = '';
@@ -246,6 +256,7 @@
       aria-label={placeholder}
       {placeholder}
       oninput={input}
+      onpaste={paste}
       onkeydown={keydown}
       onclick={scanShortcode}
       onblur={() => (codeMatch = null)}

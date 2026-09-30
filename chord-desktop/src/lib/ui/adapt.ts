@@ -5,6 +5,7 @@ import type {
   ChannelItem as BChannel,
   ChannelScope,
   ConnectError,
+  FileInfo,
   AuthFailure,
   Contact as BContact,
   ListDiff,
@@ -158,8 +159,21 @@ const MIMES: Record<string, string> = {
   txt: 'text/plain'
 };
 
-/** The bridge gives a URL. The name and the type come from the URL. */
-export function toAttachment(url: string): Attachment {
+/** The bridge gives a URL. The name and the type come from the URL, unless the sender sent file metadata. */
+export function toAttachment(url: string, info?: FileInfo | null): Attachment {
+  const a = attachmentFromUrl(url);
+  if (!info) return a;
+  // A media type from a peer picks how the file shows, so only a plain type/subtype counts.
+  const plain = info.mediaType && /^[a-z]+\/[a-z0-9.+-]+$/i.test(info.mediaType);
+  return {
+    ...a,
+    name: info.name || a.name,
+    mime: plain ? info.mediaType!.toLowerCase() : a.mime,
+    size: typeof info.size === 'number' && info.size > 0 ? info.size : a.size
+  };
+}
+
+function attachmentFromUrl(url: string): Attachment {
   let path = url;
   try {
     path = new URL(url).pathname;
@@ -216,7 +230,7 @@ export function toTimelineItem(t: BTimeline, ctx: TimelineContext): TimelineItem
     replyTo: t.replyTo
       ? { id: t.replyTo.id ?? '', senderName: t.replyTo.senderName, body: t.replyTo.body }
       : null,
-    attachment: t.attachment ? toAttachment(t.attachment) : null,
+    attachment: t.attachment ? toAttachment(t.attachment, t.attachmentInfo) : null,
     // The UI has no "received" or "displayed" mark. It shows a failed message.
     status: t.status === 'failed' ? 'failed' : 'sent',
     // The bridge tells about mentions in Notification events. The store adds the flag.

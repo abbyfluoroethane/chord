@@ -11,6 +11,7 @@ import type {
 } from '$lib/chord';
 import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle } from './adapt';
 import { api, live } from './bridge';
+import { pasteProblem } from './filetransfer';
 import { linkPreviews } from './linkpreviews.svelte';
 import { settings } from './local';
 import { bumpReaction, topReactions, type ReactionUse } from './reactions';
@@ -94,6 +95,8 @@ class AppState {
 
   /** Home shows the contacts page instead of a DM. */
   showContacts = $state(live);
+  /** A file is being dragged over the window. The chat shows a drop hint. */
+  dropping = $state(false);
   /** DMs the user closed. They come back when the user opens them again. Local only. */
   hiddenDms = $state<string[]>([]);
 
@@ -623,6 +626,24 @@ class AppState {
     if (!live || !jid) return;
     try {
       await (await api()).uploadDropped(jid, path);
+      ui.say('File sent.');
+    } catch (e) {
+      ui.say(plainError(e));
+    }
+  }
+
+  /** Upload a file that the user pasted: the page has its bytes and no path. Maps to api.uploadPasted(to, type, bytes). */
+  async uploadPasted(file: File) {
+    const jid = this.selectedJid;
+    if (!live || !jid) return;
+    const problem = pasteProblem(file);
+    if (problem) {
+      ui.say(problem);
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await (await api()).uploadPasted(jid, file.type, bytes);
       ui.say('File sent.');
     } catch (e) {
       ui.say(plainError(e));

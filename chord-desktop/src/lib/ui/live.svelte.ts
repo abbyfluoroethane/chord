@@ -18,6 +18,7 @@ import {
   subscribeTimeline
 } from '$lib/chord';
 import { api } from './bridge';
+import { dropAction } from './filetransfer';
 import { beep, shouldChime } from './notices';
 import { prefs } from './prefs.svelte';
 import type {
@@ -404,8 +405,11 @@ class LiveController {
     try {
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');
       const un = await getCurrentWebview().onDragDropEvent((ev) => {
-        if (ev.payload.type !== 'drop' || app.showContacts) return;
-        for (const p of ev.payload.paths) void app.uploadDropped(p);
+        const action = dropAction(ev.payload.type, app.showContacts);
+        app.dropping = action === 'show';
+        if (action === 'upload' && ev.payload.type === 'drop') {
+          for (const p of ev.payload.paths) void app.uploadDropped(p);
+        }
       });
       if (gen !== this.generation) un();
       else this.unlistenDrop = un;

@@ -120,6 +120,24 @@ describe('timeline', () => {
     });
   });
 
+  it('takes the name, type and size that the sender gave', () => {
+    const info = { name: 'Holiday.PNG', size: 2048, mediaType: 'image/png', sha256: null };
+    expect(toAttachment('https://up.example/a/9f3c/x.bin', info)).toMatchObject({
+      name: 'Holiday.PNG',
+      mime: 'image/png',
+      size: 2048
+    });
+  });
+
+  it('keeps the URL for a part that the sender left out or that is not plain', () => {
+    const info = { name: null, size: null, mediaType: 'text/html; charset=x<script>', sha256: null };
+    expect(toAttachment('https://up.example/a/burn.png', info)).toMatchObject({
+      name: 'burn.png',
+      mime: 'image/png',
+      size: 0
+    });
+  });
+
   it('maps the items of a diff', () => {
     expect(mapDiff({ type: 'insert', index: 1, item: 2 }, (n) => n * 2)).toEqual({
       type: 'insert',

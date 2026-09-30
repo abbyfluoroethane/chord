@@ -111,6 +111,15 @@ export interface ReplyPreview {
   body: string;
 }
 
+/** XEP-0446 file metadata. */
+export interface FileInfo {
+  name: string | null;
+  size: number | null;
+  mediaType: string | null;
+  /** SHA-256 of the file, base64. */
+  sha256: string | null;
+}
+
 export interface TimelineItem {
   /** Stable id `m:<row>`. Commands that name a message take it. */
   id: string;
@@ -129,6 +138,8 @@ export interface TimelineItem {
   reactions: ReactionSummary[];
   replyTo: ReplyPreview | null;
   attachment: string | null;
+  /** XEP-0446: what the sender said about the file. Every part can be missing. */
+  attachmentInfo?: FileInfo | null;
   status: DeliveryStatus;
 }
 
