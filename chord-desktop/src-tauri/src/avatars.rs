@@ -86,6 +86,9 @@ pub fn respond(store: &Mutex<(Store, i64)>, path: &str) -> Response<Vec<u8>> {
         .header(header::CONTENT_TYPE, image.mime)
         .header(header::CACHE_CONTROL, cache)
         .header("X-Content-Type-Options", "nosniff")
+        // The profile card reads the pixels for its banner colour. A canvas can do that
+        // only for an image with CORS.
+        .header("Access-Control-Allow-Origin", "*")
         .body(image.data)
         .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR))
 }
@@ -189,6 +192,8 @@ mod tests {
         let ok = respond(&store, "/bob%40example.org");
         assert_eq!(ok.status(), StatusCode::OK);
         assert_eq!(ok.headers()[header::CONTENT_TYPE], "image/png");
+        // The profile card reads the pixels of the avatar for its banner colour.
+        assert_eq!(ok.headers()["Access-Control-Allow-Origin"], "*");
         assert_eq!(ok.body(), &vec![1]);
         assert_eq!(
             respond(&store, "/eve%40example.org").status(),

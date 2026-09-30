@@ -7,6 +7,7 @@
   import { app } from './app.svelte';
   import { contactsStore } from './contacts.svelte';
   import { tint } from './format';
+  import { bannerColor } from './imagecolor';
   import { affiliationLabel, presenceKind, presenceLabel } from './types';
   import { ui, type PopoutState } from './ui.svelte';
 
@@ -17,6 +18,22 @@
   const chip = $derived(
     p.affiliation ? (p.role ? `${affiliationLabel(p.affiliation)} · ${p.role}` : affiliationLabel(p.affiliation)) : null
   );
+
+  // The banner takes its colour from the profile picture. Until the picture is read,
+  // and for a person without one, it uses the colour of the initials.
+  let banner = $state<string | null>(null);
+  $effect(() => {
+    const src = p.avatar;
+    banner = null;
+    if (!src) return;
+    let live = true;
+    void bannerColor(src).then((c) => {
+      if (live) banner = c;
+    });
+    return () => {
+      live = false;
+    };
+  });
 
   let note = $state('');
   let noteEl = $state<HTMLTextAreaElement>();
@@ -44,7 +61,7 @@
 
 <Popover anchor={s.anchor} onclose={close} placement={s.placement} label="Profile of {p.name}">
   <div class="card">
-    <div class="banner" style:background={tint(p.name)}></div>
+    <div class="banner" style:background={banner ?? tint(p.name)}></div>
     <div class="avatar">
       <Avatar name={p.name} src={p.avatar} size={80} presence={kind} cut="var(--surface-300)" />
     </div>
@@ -98,6 +115,12 @@
   .banner {
     height: 60px;
     border-bottom: 1px solid var(--line);
+    transition: background var(--dur-arrive) var(--ease-out);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .banner {
+      transition: none;
+    }
   }
   .avatar {
     position: absolute;
