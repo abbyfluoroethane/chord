@@ -22,6 +22,7 @@
   import { api, live } from './bridge';
   import { watchClientState } from './clientstate';
   import { contactsStore } from './contacts.svelte';
+  import { drafts } from './drafts.svelte';
   import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
   import { session } from './session.svelte';
@@ -32,6 +33,7 @@
   onMount(() => {
     ui.load();
     prefs.load();
+    drafts.load();
     app.loadLocal();
     contactsStore.loadLocal();
     // Tell the server when nobody looks at the window (XEP-0352).

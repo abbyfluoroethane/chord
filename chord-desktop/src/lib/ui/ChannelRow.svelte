@@ -2,6 +2,7 @@
   import Hash from 'lucide-svelte/icons/hash';
   import X from 'lucide-svelte/icons/x';
   import BellOff from 'lucide-svelte/icons/bell-off';
+  import Pencil from 'lucide-svelte/icons/pencil';
   import Avatar from './Avatar.svelte';
   import Settings from 'lucide-svelte/icons/settings';
   import ChannelSettings from './ChannelSettings.svelte';
@@ -10,6 +11,7 @@
   import type { MenuItem } from './Menu.svelte';
   import { channelMenu } from './menus';
   import { app } from './app.svelte';
+  import { drafts } from './drafts.svelte';
   import { tooltip } from './tooltip';
   import { presenceKind, type ChannelItem } from './types';
   import { ui } from './ui.svelte';
@@ -27,6 +29,8 @@
     onclose?: () => void;
   } = $props();
 
+  // A chat that is not open and has an unsent draft shows a pencil.
+  const hasDraft = $derived(!selected && drafts.has(channel.jid));
   const isDm = $derived(channel.kind === 'dm');
   // The bridge sends no presence for a chat that is not open. Then the row shows none.
   const known = $derived(channel.unknownPresence !== true);
@@ -51,6 +55,7 @@
   const desc = $derived(
     `${isDm ? '' : '#'}${channel.name}` +
       (channel.muted ? ', muted' : '') +
+      (hasDraft ? ', draft' : '') +
       (count ? `, ${count} ${isDm ? 'unread' : count === 1 ? 'mention' : 'mentions'}` : unread ? ', unread' : '')
   );
 </script>
@@ -84,6 +89,9 @@
       <span class="hash"><Icon icon={Hash} size={18} /></span>
     {/if}
     <span class="name">{channel.name}</span>
+    {#if hasDraft}
+      <span class="hash" title="Draft"><Icon icon={Pencil} size={14} /></span>
+    {/if}
     {#if channel.muted}
       <span class="hash"><Icon icon={BellOff} size={14} /></span>
     {:else if count > 0}

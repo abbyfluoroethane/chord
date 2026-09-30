@@ -12,6 +12,8 @@
   import Icon from './Icon.svelte';
   import { prefs } from './prefs.svelte';
   import { app } from './app.svelte';
+  import { drafts } from './drafts.svelte';
+  import { findMention, insertMention, suggestNicks, type MentionMatch } from './mentions';
   import { live } from './bridge';
   import { ui } from './ui.svelte';
   import { typingText } from './format';
@@ -60,21 +62,31 @@
     void app.sendGif(gif);
   }
   let files = $state<HTMLInputElement>();
-  // Drafts survive a switch between channels.
-  const drafts: Record<string, string> = {};
+  // One draft for each chat. It survives a switch between chats and a restart: the store
+  // keeps it in the local settings, a moment after the user stops typing.
   let value = $state('');
   let draftFor = '';
 
   $effect(() => {
     const jid = app.selectedJid;
     untrack(() => {
-      if (draftFor) drafts[draftFor] = value;
       draftFor = jid;
-      value = drafts[jid] ?? '';
+      value = drafts.get(jid);
+      codeMatch = null;
+      suggestions = [];
+      mention = null;
     });
     queueMicrotask(() => {
       fit();
       box?.focus();
+    });
+  });
+
+  // Save the draft at each change. The store skips a value that has not changed.
+  $effect(() => {
+    const text = value;
+    untrack(() => {
+      if (draftFor) drafts.set(draftFor, text);
     });
   });
 
@@ -102,6 +114,7 @@
     if (!text.trim()) return;
     value = '';
     codeMatch = null;
+    mention = null;
     queueMicrotask(fit);
     // Other clients do not know :shortcodes:, so the message goes out with real emoji.
     const out = mayHaveShortcode(text)
@@ -150,13 +163,68 @@
     });
   }
 
+  // @nick suggestions: in a room, after "@", the members of the room show above the box.
+  // The nick goes in as plain text. The core reads it as a mention (see mentions.ts).
+  let mention = $state<MentionMatch | null>(null);
+  let chosenNick = $state(0);
+  const nicks = $derived.by(() => {
+    if (!mention || app.channel?.kind !== 'channel') return [];
+    const names = app.membersHere
+      .map((m) => m.nick ?? m.name)
+      .filter((n) => n !== app.me.name);
+    return suggestNicks(names, mention.query, 8);
+  });
+  const nickOpen = $derived(nicks.length > 0);
+
+  function scanMention() {
+    const found = findMention(value, box?.selectionStart ?? 0);
+    if (found?.query !== mention?.query || found?.start !== mention?.start) chosenNick = 0;
+    mention = found;
+  }
+
+  function pickNick(i: number) {
+    const nick = nicks[i];
+    if (!nick || !mention) return;
+    const out = insertMention(value, box?.selectionStart ?? value.length, mention, nick);
+    value = out.text;
+    mention = null;
+    queueMicrotask(() => {
+      box?.setSelectionRange(out.caret, out.caret);
+      box?.focus();
+      fit();
+    });
+  }
+
+  function scan() {
+    scanShortcode();
+    scanMention();
+  }
+
   function input() {
     fit();
-    scanShortcode();
+    scan();
     app.noteTyping(value.trim().length > 0);
   }
 
   function keydown(e: KeyboardEvent) {
+    if (nickOpen && !e.isComposing) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = nicks.length;
+        chosenNick = (chosenNick + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pickNick(chosenNick);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        mention = null;
+        return;
+      }
+    }
     if (listOpen && !e.isComposing) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -210,6 +278,7 @@
     else for (const f of list) app.sendFile(f);
   }
 
+  // Preview only: a browser has no Rust to upload. Live, `upload` never shows the input.
   function picked() {
     for (const f of files?.files ?? []) app.sendFile(f);
     if (files) files.value = '';
@@ -258,13 +327,23 @@
       oninput={input}
       onpaste={paste}
       onkeydown={keydown}
-      onclick={scanShortcode}
-      onblur={() => (codeMatch = null)}
+      onclick={scan}
+      onkeyup={(e) => {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') scan();
+      }}
+      onblur={() => {
+        codeMatch = null;
+        mention = null;
+      }}
       role="combobox"
-      aria-expanded={listOpen}
-      aria-controls="shortcode-list"
+      aria-expanded={listOpen || nickOpen}
+      aria-controls={nickOpen ? 'nick-list' : 'shortcode-list'}
       aria-autocomplete="list"
-      aria-activedescendant={listOpen ? `shortcode-${chosen}` : undefined}
+      aria-activedescendant={nickOpen
+        ? `nick-${chosenNick}`
+        : listOpen
+          ? `shortcode-${chosen}`
+          : undefined}
     ></textarea>
     </div>
     <div class="tools">
@@ -291,7 +370,24 @@
         <Icon icon={Smile} size={20} />
       </button>
     </div>
-    {#if listOpen}
+    {#if nickOpen}
+      <ul class="codes" id="nick-list" role="listbox" aria-label="Member suggestions">
+        {#each nicks as nick, i (nick)}
+          <li
+            id="nick-{i}"
+            role="option"
+            aria-selected={i === chosenNick}
+            class:on={i === chosenNick}
+            onmousedown={(e) => {
+              e.preventDefault();
+              pickNick(i);
+            }}
+          >
+            <span class="name">@{nick}</span>
+          </li>
+        {/each}
+      </ul>
+    {:else if listOpen}
       <ul class="codes" id="shortcode-list" role="listbox" aria-label="Emoji suggestions">
         {#each suggestions as s, i (s.name)}
           <li

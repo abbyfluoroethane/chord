@@ -576,7 +576,11 @@ class AppState {
     return r.ok;
   }
 
-  /** Attach a file. Sample data: the file stays local. */
+  /**
+   * Attach a file. PREVIEW ONLY: the file stays in the page and nothing is uploaded. The
+   * live app never calls this. It uploads through `uploadPicked` and `uploadDropped`, where
+   * Rust reads the file. Do not use this for a new feature that needs a real upload.
+   */
   sendFile(file: File) {
     const list = this.list(this.selectedJid);
     const now = Date.now();
