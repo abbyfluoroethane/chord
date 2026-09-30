@@ -7,6 +7,7 @@
   import X from 'lucide-svelte/icons/x';
   import type { Gif } from '$lib/chord';
   import Emoji from './Emoji.svelte';
+  import { highlightDraft } from './livemarkdown';
   import ExpressionPicker from './ExpressionPicker.svelte';
   import Icon from './Icon.svelte';
   import { prefs } from './prefs.svelte';
@@ -85,7 +86,15 @@
     if (!box) return;
     box.style.height = 'auto';
     box.style.height = `${Math.min(box.scrollHeight, 144)}px`;
+    scrollTop = box.scrollTop;
   }
+
+  // The styled copy of the draft under the text box. The box text is transparent, so
+  // the user sees the copy, with the real caret and selection on top. The copy keeps
+  // every character in the same place: it only changes colours, backgrounds, lines,
+  // and a slant or a shadow for italic and bold, never a width.
+  const styled = $derived(highlightDraft(value));
+  let scrollTop = $state(0);
 
   async function send() {
     const text = value;
@@ -224,9 +233,16 @@
       <Icon icon={Paperclip} size={20} />
     </button>
     <input bind:this={files} type="file" multiple hidden onchange={picked} tabindex="-1" />
+    <div class="editor">
+    <div class="mirror" aria-hidden="true">
+      <div class="mirror-text" style:transform="translateY({-scrollTop}px)"
+        >{#each styled as r, i (i)}<span class={r.cls}>{r.text}</span>{/each}{#if value.endsWith('\n') || !value}&#8203;{/if}</div
+      >
+    </div>
     <textarea
       bind:this={box}
       bind:value
+      onscroll={() => (scrollTop = box?.scrollTop ?? 0)}
       rows="1"
       aria-label={placeholder}
       {placeholder}
@@ -240,6 +256,7 @@
       aria-autocomplete="list"
       aria-activedescendant={listOpen ? `shortcode-${chosen}` : undefined}
     ></textarea>
+    </div>
     <div class="tools">
       {#if prefs.gifPicker}
         <button
@@ -415,16 +432,100 @@
   .upload:hover {
     color: var(--ink);
   }
-  textarea {
+  .editor {
+    position: relative;
     flex: 1;
     min-width: 0;
-    max-height: 144px;
+  }
+  /* The text box and its styled copy share the font, the size, the padding, and the
+     wrap rules, so that each character of the copy lies under the same character. */
+  textarea,
+  .mirror-text {
     padding: 10px var(--space-3);
+    font: inherit;
+    line-height: 22px;
+    letter-spacing: normal;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+    tab-size: 4;
+  }
+  textarea {
+    position: relative;
+    display: block;
+    width: 100%;
+    max-height: 144px;
     resize: none;
     background: none;
     border: 0;
     outline: 0;
-    line-height: 22px;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    caret-color: var(--ink);
+    /* No scroll bar: it would make the box narrower than the copy. */
+    scrollbar-width: none;
+  }
+  textarea::-webkit-scrollbar {
+    display: none;
+  }
+  .mirror {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .mirror-text {
+    color: var(--ink);
+  }
+  .mirror :global(.mk) {
+    color: var(--ink-muted);
+  }
+  /* Bold as a thin shadow: the 600 face is wider, and it would move the caret. */
+  .mirror :global(.b),
+  .mirror :global(.h) {
+    text-shadow:
+      0.02em 0 0 currentColor,
+      -0.02em 0 0 currentColor;
+  }
+  /* No italic face ships, so italic is a slant of the regular face, at the same widths. */
+  .mirror :global(.i) {
+    font-style: italic;
+  }
+  .mirror :global(.u) {
+    text-decoration: underline;
+  }
+  .mirror :global(.s) {
+    text-decoration: line-through;
+  }
+  .mirror :global(.u.s) {
+    text-decoration: underline line-through;
+  }
+  .mirror :global(.code) {
+    background: var(--surface-200);
+    border-radius: var(--radius-sm);
+  }
+  .mirror :global(.sp) {
+    background: color-mix(in srgb, var(--ink-muted) 30%, transparent);
+    border-radius: var(--radius-sm);
+  }
+  .mirror :global(.link) {
+    color: var(--accent);
+  }
+  .mirror :global(.ts) {
+    background: var(--surface-200);
+    border-radius: var(--radius-sm);
+  }
+  .mirror :global(.at) {
+    background: var(--brand-soft);
+    color: var(--brand-ink);
+    border-radius: var(--radius-sm);
+  }
+  .mirror :global(.sc) {
+    color: var(--brand-ink);
+  }
+  .mirror :global(.sub),
+  .mirror :global(.q:not(.mk)) {
+    color: var(--ink-muted);
   }
   textarea::placeholder {
     color: var(--ink-muted);
