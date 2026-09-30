@@ -100,7 +100,7 @@
     onclick={() => app.selectSpace(HOME)}
     oncontextmenu={(e) => contextMenu.open(e, homeMenu(HOME), { label: 'Home menu' })}
   >
-    <ChordMark size={32} />
+    <ChordMark size={28} />
   </RailItem>
 
   <div class="sep" role="separator"></div>
@@ -154,7 +154,7 @@
   {/each}
 
   <RailItem name="Add a space" variant="add" onclick={() => (ui.addCircleOpen = true)}>
-    <Icon icon={Plus} size={24} />
+    <Icon icon={Plus} size={22} />
   </RailItem>
 </nav>
 

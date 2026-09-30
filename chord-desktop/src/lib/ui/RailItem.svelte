@@ -1,6 +1,6 @@
 <script lang="ts">
   // One slot on the circle rail: the left pill, a tile, a mention badge.
-  // The rail stays 64px wide. A round tile is 48px. A squircle tile is 44px, because a
+  // The rail stays 64px wide. A round tile is 44px. A squircle tile is 40px, because a
   // squircle of the same width looks larger than a circle. The two have about the same area.
   import type { Snippet } from 'svelte';
   import type { HTMLAttributes } from 'svelte/elements';
@@ -55,15 +55,15 @@
     align-items: center;
     justify-content: center;
     width: var(--rail-width);
-    height: 56px;
+    height: 52px;
     flex: none;
   }
   .tile {
     position: relative;
     display: grid;
     place-items: center;
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
     /* Round at rest. Hover and selection turn the tile into a squircle. */
     border-radius: 50%;
     border: 2px solid transparent;
@@ -72,7 +72,7 @@
     background: transparent;
     color: var(--ink);
     font-weight: 600;
-    font-size: 16px;
+    font-size: 15px;
     overflow: hidden;
     transition:
       border-width var(--dur-fast) var(--ease-out),
@@ -87,8 +87,8 @@
   .tile:focus-visible,
   .tile.selected,
   .tile.folder {
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     /* A squircle has no ring: the face fills the tile. The pill shows the selection. */
     border-width: 0;
     border-radius: var(--radius-circle-icon);
@@ -139,7 +139,7 @@
     height: 20px;
   }
   .pill.selected {
-    height: 40px;
+    height: 36px;
   }
 
   .badge {
