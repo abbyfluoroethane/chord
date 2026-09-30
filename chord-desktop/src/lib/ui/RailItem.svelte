@@ -67,7 +67,9 @@
     /* Round at rest. Hover and selection turn the tile into a squircle. */
     border-radius: 50%;
     border: 2px solid transparent;
-    background: var(--surface-200);
+    /* A space tile shows its own picture, so the tile itself has no fill. A fill would
+       show as a ring in the 2px border. */
+    background: transparent;
     color: var(--ink);
     font-weight: 600;
     font-size: 16px;
@@ -107,6 +109,11 @@
   .tile.add:hover {
     border-color: var(--accent);
     color: var(--accent);
+  }
+  /* Home and a closed folder sit on a surface one step lighter than the rail. */
+  .tile.home,
+  .tile.folder {
+    background: var(--surface-raised);
   }
   .tile.folder {
     padding: 3px;

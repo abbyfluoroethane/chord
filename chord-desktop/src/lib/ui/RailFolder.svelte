@@ -59,7 +59,7 @@
 
 <style>
   .folder.open {
-    background: var(--surface-200);
+    background: var(--surface-raised);
     border-radius: var(--radius-circle-icon);
     margin: 0 4px;
     width: calc(var(--rail-width) - 8px);

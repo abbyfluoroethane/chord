@@ -72,7 +72,13 @@
 
   /* The colours above are Chord Dark, the default before the theme loads. The active theme
      (theme.svelte.ts) puts its own tokens in a style element. */
+  /* A surface one step lighter than the rail (--surface-300), for the tiles on it. It
+     comes from the theme colours, so every theme gets it. A theme can set its own. */
+  :root {
+    --surface-raised: color-mix(in srgb, var(--ink) 7%, var(--surface-300));
+  }
   :root[data-mode='light'] {
     color-scheme: light;
+    --surface-raised: color-mix(in srgb, #ffffff 60%, var(--surface-300));
   }
 }
