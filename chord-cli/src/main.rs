@@ -9,7 +9,7 @@
 //!   members <room>
 //!   timeline <jid> [--limit N] [--follow]
 //!   state                           spaces, Home channels, and the channels of each space
-//!   join <room> [--nick N]          join and bookmark a room (password: CHORD_ROOM_PASSWORD)
+//!   join <room> [--nick N] [--share-password]   join and bookmark a room (password: CHORD_ROOM_PASSWORD)
 //!   leave <room>
 //!   upload <jid> <file>             XEP-0363 upload, then send the URL
 //!   space-info <service> <node> | room-info <room>   read a space or a room, no join
@@ -36,7 +36,7 @@
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
 //!   nick <room> <nick>              change our nick in a room
 //!   room-member <room> <jid> [member|admin|owner|none|outcast]   set an affiliation
-//!   room-members <room> [affiliation] | invite <room> <jid> [reason]
+//!   room-members <room> [affiliation] | invite <room> <jid> [reason] [--direct]
 //!   room-config <room> [--name N] [--public|--private] [--members-only|--open]
 //!                [--protect|--unprotect]   (--protect: password from CHORD_ROOM_PASSWORD)
 //!   subject <room> <text>           set the subject of a room
@@ -124,7 +124,7 @@ use tokio::task::JoinHandle;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <text> [--wait] | \
 listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
-timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
+timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] [--share-password] | leave <room> | \
 upload <jid> <file> | space-info <service> <node> | room-info <room> | space-browse | space-join <service> <node> | \
 space-create <name> [--private | --authorize] [--description TEXT] | space-add-room <service> <node> <room> [name] | \
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
@@ -138,7 +138,7 @@ edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> |
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off|gone | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
-invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] [--protect|--unprotect] | \
+invite <room> <jid> [reason] [--direct] | room-config <room> [--name N] [--public|--private] [--members-only|--open] [--protect|--unprotect] | \
 subject <room> <text> | room-role <room> <nick> <none|visitor|participant|moderator> [reason] | \
 decline <room> <from-jid> [reason] | room-destroy <room> [reason] [--alternate <room>] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
@@ -440,7 +440,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("members", [room]) => views::members(opts, &client, room).await,
         ("timeline", args) => views::timeline(opts, &client, args).await,
         ("state", []) => views::state(opts, &client).await,
-        ("join", args) => actions::join(&client, args).await,
+        ("join", args) => actions::join(&mut client, args).await,
         ("leave", [room]) => actions::leave(&client, room).await,
         ("upload", [to, file]) => actions::upload(&client, to, file).await,
         ("space-info", [service, node]) => actions::space_info(opts, &client, service, node).await,
@@ -783,6 +783,9 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
                     ""
                 }
             ),
+            ClientEvent::RoomCaptcha { room, .. } => {
+                println!("captcha: {room} asks for a CAPTCHA (join asks for the answer)");
+            }
             ClientEvent::RoomDestroyed {
                 room,
                 reason,

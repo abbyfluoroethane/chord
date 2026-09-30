@@ -95,6 +95,7 @@ pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     for room in expired {
         join_timed_out(ctx, &room);
     }
+    super::rejoin::on_tick(ctx);
 }
 
 /// The room did not answer a join in time. Fail the join, as a join error does. If the

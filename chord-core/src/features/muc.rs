@@ -21,12 +21,17 @@ use xmpp_parsers::presence::{Presence, Show, Type as PresenceType};
 use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
 use xmpp_parsers::stanza_id::OriginId;
 
+mod captcha;
 pub(super) mod health;
+mod password;
+mod rejoin;
+mod status;
 
 use super::chat::{MessageIds, delay_ms};
 use super::message_ext::{self, Incoming, Outgoing};
 use super::{Ctx, IqResponse, bookmarks, mam, new_id, presence as own_presence};
 use crate::actor::{ClientError, ClientEvent, ClientHandle};
+use crate::secrets::SecretStore;
 use crate::store::queries::{self, Direction, KeyKind, MessageExtras, MessageKind, NewMessage};
 use crate::views::{ChannelScope, ViewKey};
 
@@ -43,6 +48,8 @@ const NS_DISCO_INFO: &str = "http://jabber.org/protocol/disco#info";
 const NS_ROOM_INFO: &str = "http://jabber.org/protocol/muc#roominfo";
 /// The disco#info node that answers with our reserved nick (XEP-0045, 7.12).
 const NODE_RESERVED_NICK: &str = "x-roomuser-item";
+/// Mediated invitations that we remember for a possible fallback. Older ones go.
+const MAX_PENDING_INVITES: usize = 64;
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
@@ -146,6 +153,9 @@ pub struct RoomCard {
     /// True when any occupant may change the subject (`muc#roominfo_changesubject`).
     /// False when only moderators may, or when the room does not say.
     pub change_subject: bool,
+    /// Who sees the real addresses: `non-anonymous` (everyone), `semi-anonymous`
+    /// (moderators) or `anonymous` (nobody). `None` when the room does not say.
+    pub anonymity: Option<String>,
 }
 
 /// Join calls that wait for the answer to the question for the reserved nick.
@@ -195,6 +205,31 @@ pub(crate) struct State {
     reserving: HashMap<BareJid, Reserving>,
     /// The self-ping of the rooms (XEP-0410).
     pub(super) ping: health::PingState,
+    /// Rooms that the service removed us from for a reason that passes (332, 333). Each
+    /// one joins again after a wait.
+    rejoin: rejoin::Rejoins,
+    /// Rooms whose disco#info we read again after a configuration change.
+    refreshing: HashSet<BareJid>,
+    /// Mediated invitations that wait for an error, by message id. A room that refuses
+    /// one gets a direct invitation instead.
+    invites: HashMap<String, PendingInvite>,
+    /// The keychain that holds the room passwords, when the client has one.
+    secrets: Option<std::sync::Arc<dyn SecretStore>>,
+}
+
+/// A mediated invitation that we sent and that nobody answered yet.
+#[derive(Debug)]
+struct PendingInvite {
+    room: BareJid,
+    jid: BareJid,
+    reason: Option<String>,
+}
+
+impl State {
+    /// Keep the room passwords in `secrets`.
+    pub(crate) fn set_secret_store(&mut self, secrets: std::sync::Arc<dyn SecretStore>) {
+        self.secrets = Some(secrets);
+    }
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -216,6 +251,8 @@ pub(crate) enum Pending {
         room: BareJid,
         jid: BareJid,
         reason: Option<String>,
+        /// True for a direct invitation (XEP-0249), false for a mediated one.
+        direct: bool,
         reply: Reply,
     },
     /// The configuration form of a room, for `configure_room`.
@@ -231,6 +268,10 @@ pub(crate) enum Pending {
     },
     /// The answer to a XEP-0410 ping of our own occupant JID in the room.
     SelfPing(BareJid),
+    /// The disco#info of a room that changed its configuration (status 104).
+    Refresh(BareJid),
+    /// The answer to a CAPTCHA that we sent to a room (XEP-0158).
+    Captcha(Reply),
 }
 
 /// A command from the public API.
@@ -259,6 +300,9 @@ pub(crate) enum Command {
         name: Option<String>,
         autojoin: bool,
         nick: Option<String>,
+        /// `Some(true)` puts the room password in the bookmark, `Some(false)` keeps it out,
+        /// `None` does what the bookmark did before.
+        share_password: Option<bool>,
         reply: Reply,
     },
     RemoveBookmark {
@@ -289,6 +333,19 @@ pub(crate) enum Command {
         reply: MembersReply,
     },
     Invite {
+        room: BareJid,
+        jid: BareJid,
+        reason: Option<String>,
+        reply: Reply,
+    },
+    /// The answer to the CAPTCHA of a join (XEP-0158), or `None` to give it up.
+    Captcha {
+        room: BareJid,
+        answer: Option<crate::forms::Form>,
+        reply: Reply,
+    },
+    /// A direct invitation (XEP-0249).
+    InviteDirect {
         room: BareJid,
         jid: BareJid,
         reason: Option<String>,
@@ -460,6 +517,30 @@ impl ClientHandle {
             name,
             autojoin,
             nick,
+            share_password: None,
+            reply,
+        })
+        .await
+    }
+
+    /// Like `add_bookmark`, and says if the bookmark carries the password of the room.
+    /// `add_bookmark` puts it in only when an earlier bookmark of the room had it. The
+    /// bookmarks are private to the account, but the password then sits on the server in
+    /// clear text, so the user decides.
+    pub async fn add_bookmark_with_password_choice(
+        &self,
+        room: BareJid,
+        name: Option<String>,
+        autojoin: bool,
+        nick: Option<String>,
+        share_password: bool,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::AddBookmark {
+            room,
+            name,
+            autojoin,
+            nick,
+            share_password: Some(share_password),
             reply,
         })
         .await
@@ -555,6 +636,26 @@ impl ClientHandle {
         .await
     }
 
+    /// Invite a JID to a room with a direct invitation (XEP-0249): a message to the person,
+    /// with no help from the room. Use it for a room that does not pass on mediated
+    /// invitations. `invite_to_room` falls back to it by itself when the room answers
+    /// with an error such as `forbidden` or `not-allowed`. The membership grant works as
+    /// in `invite_to_room`.
+    pub async fn invite_to_room_direct(
+        &self,
+        room: BareJid,
+        jid: BareJid,
+        reason: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.room_command(|reply| Command::InviteDirect {
+            room,
+            jid,
+            reason,
+            reply,
+        })
+        .await
+    }
+
     /// Decline a mediated invitation that a `ClientEvent::RoomInvite` reported.
     pub async fn decline_room_invite(
         &self,
@@ -638,6 +739,7 @@ pub(crate) fn next_session(ctx: &mut Ctx<'_>) -> State {
     }
     State {
         previous,
+        secrets: ctx.state.muc.secrets.take(),
         ..State::default()
     }
 }
@@ -717,6 +819,8 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             }
         }
         Pending::SelfPing(room) => health::on_response(ctx, room, response),
+        Pending::Refresh(room) => status::on_refreshed(ctx, room, response),
+        Pending::Captcha(reply) => captcha::on_answer(ctx, reply, response),
         Pending::Grant { room, jid } => match response {
             IqResponse::Result(_) => log::debug!("made {jid} a member of {room}"),
             IqResponse::Error(e) => {
@@ -753,6 +857,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             room,
             jid,
             reason,
+            direct,
             reply,
         } => {
             match response {
@@ -769,7 +874,11 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                     return;
                 }
             }
-            send_invitation(ctx, &room, &jid, reason);
+            if direct {
+                send_direct_invitation(ctx, &room, &jid, reason);
+            } else {
+                send_invitation(ctx, &room, &jid, reason);
+            }
             let _ = reply.send(Ok(()));
         }
         Pending::SettingsForm(room, settings, reply) => {
@@ -855,8 +964,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             name,
             autojoin,
             nick,
+            share_password,
             reply,
-        } => bookmarks::add(ctx, room, name, autojoin, nick, reply),
+        } => bookmarks::add(ctx, room, name, autojoin, nick, share_password, reply),
         Command::RemoveBookmark { room, reply } => bookmarks::remove(ctx, room, reply),
         Command::RoomService { reply } => {
             let service = ctx.state.disco.services.iter().find_map(|(jid, info)| {
@@ -916,11 +1026,39 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                     room,
                     jid,
                     reason,
+                    direct: false,
                     reply,
                 };
                 ctx.request(iq, super::Pending::Muc(pending));
             } else {
                 send_invitation(ctx, &room, &jid, reason);
+                let _ = reply.send(Ok(()));
+            }
+        }
+        Command::Captcha {
+            room,
+            answer,
+            reply,
+        } => captcha::on_command(ctx, room, answer, reply),
+        Command::InviteDirect {
+            room,
+            jid,
+            reason,
+            reply,
+        } => {
+            // A member enters a members-only room: grant it first, as a mediated invitation does.
+            if can_grant(ctx, &room) {
+                let iq = affiliation_iq(&room, &jid, RoomAffiliation::Member, None);
+                let pending = Pending::InviteGrant {
+                    room,
+                    jid,
+                    reason,
+                    direct: true,
+                    reply,
+                };
+                ctx.request(iq, super::Pending::Muc(pending));
+            } else {
+                send_direct_invitation(ctx, &room, &jid, reason);
                 let _ = reply.send(Ok(()));
             }
         }
@@ -1091,6 +1229,17 @@ fn room_card(room: &BareJid, query: Element) -> Result<RoomCard, ClientError> {
         members_only: feature("membersonly"),
         change_subject: value("muc#roominfo_changesubject")
             .is_some_and(|v| matches!(v.trim(), "1" | "true")),
+        anonymity: ["nonanonymous", "semianonymous", "anonymous"]
+            .into_iter()
+            .find(|name| feature(name))
+            .map(|name| {
+                match name {
+                    "nonanonymous" => "non-anonymous",
+                    "semianonymous" => "semi-anonymous",
+                    _ => "anonymous",
+                }
+                .to_owned()
+            }),
     })
 }
 
@@ -1165,6 +1314,7 @@ fn affiliation_iq(
 
 /// Send a mediated invitation (XEP-0045, section 7.8.2).
 fn send_invitation(ctx: &mut Ctx<'_>, room: &BareJid, jid: &BareJid, reason: Option<String>) {
+    let reason_copy = reason.clone();
     let mut invite = Element::builder("invite", NS_MUC_USER).attr(nc("to"), jid.to_string());
     if let Some(reason) = reason.filter(|r| !r.is_empty()) {
         invite = invite.append(Element::builder("reason", NS_MUC_USER).append(reason));
@@ -1173,8 +1323,44 @@ fn send_invitation(ctx: &mut Ctx<'_>, room: &BareJid, jid: &BareJid, reason: Opt
     let mut message = Message::new(Some(Jid::from(room.clone())));
     // A room takes an invitation in a normal message. A chat message is refused.
     message.type_ = MessageType::Normal;
-    message.id = Some(Id(new_id()));
+    let id = new_id();
+    message.id = Some(Id(id.clone()));
     message.payloads.push(x);
+    // Keep it for a while: a room that refuses it gets a direct invitation instead.
+    if ctx.state.muc.invites.len() >= MAX_PENDING_INVITES {
+        ctx.state.muc.invites.clear();
+    }
+    ctx.state.muc.invites.insert(
+        id,
+        PendingInvite {
+            room: room.clone(),
+            jid: jid.clone(),
+            reason: reason_copy,
+        },
+    );
+    ctx.send(message);
+}
+
+/// Send a direct invitation (XEP-0249): a message to the person, with the room in it. It
+/// does not need the room to pass it on, so it works in a room that refuses mediated
+/// invitations. The password of the room, if we have one, goes with it.
+fn send_direct_invitation(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    jid: &BareJid,
+    reason: Option<String>,
+) {
+    let mut x = Element::builder("x", NS_CONFERENCE).attr(nc("jid"), room.to_string());
+    if let Some(reason) = reason.filter(|r| !r.is_empty()) {
+        x = x.attr(nc("reason"), reason);
+    }
+    if let Some(password) = stored_password(ctx, room) {
+        x = x.attr(nc("password"), password);
+    }
+    let mut message = Message::new(Some(Jid::from(jid.clone())));
+    message.type_ = MessageType::Normal;
+    message.id = Some(Id(new_id()));
+    message.payloads.push(x.build());
     ctx.send(message);
 }
 
@@ -1229,7 +1415,9 @@ fn settings_submit(form: &DataForm, settings: &RoomSettings) -> Element {
 /// (XEP-0249). An archived invitation is old news: it is not a chat message.
 pub(crate) fn is_invitation(message: &Message) -> bool {
     message.payloads.iter().any(|x| {
-        (x.is("x", NS_MUC_USER) && x.has_child("invite", NS_MUC_USER)) || x.is("x", NS_CONFERENCE)
+        (x.is("x", NS_MUC_USER)
+            && (x.has_child("invite", NS_MUC_USER) || x.has_child("decline", NS_MUC_USER)))
+            || x.is("x", NS_CONFERENCE)
     })
 }
 
@@ -1243,6 +1431,29 @@ fn on_invitation(ctx: &mut Ctx<'_>, message: &Message) -> bool {
     // invitation for us.
     let ours = from.to_bare() == *ctx.account;
     for x in &message.payloads {
+        // The person that we invited said no (XEP-0045, 7.8.2). Only a room that we know can
+        // say it.
+        if x.is("x", NS_MUC_USER)
+            && let Some(decline) = x.get_child("decline", NS_MUC_USER)
+            && from.resource().is_none()
+            && is_room(ctx, &from.to_bare())
+        {
+            let who = decline
+                .attr("from")
+                .and_then(|f| f.parse::<Jid>().ok())
+                .map_or_else(|| "Someone".to_owned(), |j| j.to_bare().to_string());
+            let reason = decline
+                .get_child("reason", NS_MUC_USER)
+                .map(Element::text)
+                .filter(|r| !r.trim().is_empty())
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default();
+            ctx.emit(ClientEvent::Notice(format!(
+                "{who} declined your invitation to {}{reason}",
+                from.to_bare()
+            )));
+            return true;
+        }
         if x.is("x", NS_MUC_USER)
             && let Some(invite) = x.get_child("invite", NS_MUC_USER)
         {
@@ -1309,6 +1520,8 @@ pub(crate) fn offline(command: Command) {
     let (Command::Join { reply, .. }
     | Command::SetAffiliation { reply, .. }
     | Command::Invite { reply, .. }
+    | Command::InviteDirect { reply, .. }
+    | Command::Captcha { reply, .. }
     | Command::DeclineInvite { reply, .. }
     | Command::Configure { reply, .. }
     | Command::JoinDefault { reply, .. }
@@ -1363,7 +1576,22 @@ pub(crate) fn is_room(ctx: &Ctx<'_>, room: &BareJid) -> bool {
 
 /// The stored password of a room.
 pub(crate) fn stored_password(ctx: &Ctx<'_>, room: &BareJid) -> Option<String> {
-    room_row(ctx, room).and_then(|row| row.password)
+    password::load(ctx, room, room_row(ctx, room).and_then(|row| row.password))
+}
+
+/// Whether the bookmark of a room carries its password.
+pub(crate) fn password_shared(ctx: &Ctx<'_>, room: &BareJid) -> bool {
+    password::is_shared(ctx, room)
+}
+
+/// Say whether the bookmark of a room carries its password.
+pub(crate) fn set_password_shared(ctx: &Ctx<'_>, room: &BareJid, shared: bool) {
+    password::set_shared(ctx, room, shared);
+}
+
+/// Store the password of a bookmark that came from the account (see `password::on_bookmark`).
+pub(crate) fn on_bookmark_password(ctx: &Ctx<'_>, room: &BareJid, password: Option<&str>) {
+    password::on_bookmark(ctx, room, password);
 }
 
 /// Leave a room because the bookmarks say so. A store error or an unknown room is not
@@ -1381,6 +1609,9 @@ pub(crate) fn is_joined_or_joining(ctx: &Ctx<'_>, room: &BareJid) -> bool {
 
 /// Add a room row, or set its nick and password. `None` keeps the stored value.
 fn ensure_room(ctx: &Ctx<'_>, room: &BareJid, nick: Option<&str>, password: Option<&str>) {
+    // With a keychain the password goes there, and the column stays empty.
+    let in_keychain = password.is_some_and(|p| password::keep(ctx, room, p));
+    let password = if in_keychain { None } else { password };
     db(
         ctx,
         "store a room",
@@ -1392,6 +1623,9 @@ fn ensure_room(ctx: &Ctx<'_>, room: &BareJid, nick: Option<&str>, password: Opti
             params![ctx.account_id, room.as_str(), nick, password],
         ),
     );
+    if in_keychain {
+        password::clear_column(ctx, room);
+    }
 }
 
 fn set_joined(ctx: &Ctx<'_>, room: &BareJid, joined: bool) {
@@ -1478,7 +1712,9 @@ pub(crate) fn join_room(
         .or_else(|| row.as_ref().and_then(|r| r.nick.clone()))
         .or_else(|| ctx.account.node().map(|n| n.as_str().to_owned()))
         .unwrap_or_else(|| "chord".to_owned());
-    let password = password.or_else(|| row.and_then(|r| r.password));
+    // A password that the caller gives is stored. One that we load is stored already.
+    let given = password.clone();
+    let password = password.or_else(|| password::load(ctx, room, row.and_then(|r| r.password)));
 
     let current = ctx.state.muc.nicks.get(room).cloned();
     if current.as_deref() == Some(nick.as_str()) {
@@ -1507,7 +1743,7 @@ pub(crate) fn join_room(
             return;
         }
     };
-    ensure_room(ctx, room, Some(&nick), password.as_deref());
+    ensure_room(ctx, room, Some(&nick), given.as_deref());
     let mut presence = room_presence(ctx).with_to(target);
     // A nick change is a plain presence to the new nick (XEP-0045, 7.6).
     if current.is_none() {
@@ -1551,7 +1787,7 @@ pub(crate) fn send_presence_to_rooms(ctx: &mut Ctx<'_>, presence: &Presence) {
 }
 
 /// The XEP-0421 occupant-id in a list of payloads.
-fn occupant_id(payloads: &[Element]) -> Option<String> {
+pub(crate) fn occupant_id(payloads: &[Element]) -> Option<String> {
     payloads
         .iter()
         .find(|e| e.is("occupant-id", NS_OCCUPANT_ID))
@@ -1591,6 +1827,7 @@ fn leave(ctx: &mut Ctx<'_>, room: &BareJid) -> Result<(), ClientError> {
     let Some(row) = room_row(ctx, room) else {
         return Err(ClientError::Invalid(format!("unknown room {room}")));
     };
+    rejoin::cancel(ctx, room);
     let pending = ctx.state.muc.joins.remove(room);
     let nick = ctx
         .state
@@ -1996,8 +2233,17 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         return false;
     }
     health::heard_from(ctx, &room);
+    // A room that holds our join asks for a CAPTCHA (XEP-0158).
+    if from.resource().is_none() && captcha::on_challenge(ctx, &room, &message.payloads) {
+        return true;
+    }
     match message.type_ {
         MessageType::Groupchat => {
+            if from.resource().is_none() {
+                // A message from the room: a configuration change (XEP-0045, 10.2.1).
+                let codes = status::codes(&message.payloads);
+                status::on_room_codes(ctx, &room, &codes, true);
+            }
             if let Some((_, subject)) = message.get_best_subject(vec![]) {
                 set_subject(ctx, &room, subject);
                 // The room announces our own change: the change is done.
@@ -2046,14 +2292,39 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
                 .any(|x| x.is("x", NS_MUC_USER) && x.has_child("invite", NS_MUC_USER))
             {
                 // The room refused our invitation, for example when we are not in it.
-                let text = message
+                let error = message
                     .payloads
                     .iter()
-                    .find_map(|p| StanzaError::try_from(p.clone()).ok())
-                    .map_or_else(|| "error".to_owned(), |e| error_text(&e));
-                ctx.emit(ClientEvent::Notice(format!(
-                    "The room {room} refused the invitation: {text}"
-                )));
+                    .find_map(|p| StanzaError::try_from(p.clone()).ok());
+                let sent = message
+                    .id
+                    .as_ref()
+                    .and_then(|id| ctx.state.muc.invites.remove(&id.0));
+                let direct_helps = error.as_ref().is_some_and(|e| {
+                    matches!(
+                        e.defined_condition,
+                        DefinedCondition::Forbidden
+                            | DefinedCondition::NotAllowed
+                            | DefinedCondition::NotAcceptable
+                            | DefinedCondition::ServiceUnavailable
+                    )
+                });
+                if let Some(invite) = sent.filter(|_| direct_helps) {
+                    // The room does not pass invitations on. The person can still get one
+                    // from us (XEP-0249).
+                    ctx.emit(ClientEvent::Notice(format!(
+                        "The room {room} does not pass on invitations. Chord sent {} a direct invitation",
+                        invite.jid
+                    )));
+                    send_direct_invitation(ctx, &invite.room, &invite.jid, invite.reason);
+                } else {
+                    let text = error
+                        .as_ref()
+                        .map_or_else(|| "error".to_owned(), error_text);
+                    ctx.emit(ClientEvent::Notice(format!(
+                        "The room {room} refused the invitation: {text}"
+                    )));
+                }
             } else {
                 log::warn!("error message from the room {from}");
             }
@@ -2191,6 +2462,17 @@ fn store(
     };
     match queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         Ok(Some(stored)) => {
+            // XEP-0421: who wrote it, whatever the nick is now or becomes later.
+            if let Some(occupant) = occupant_id(&message.payloads) {
+                db(
+                    ctx,
+                    "store the occupant id of a message",
+                    ctx.store.conn().execute(
+                        "UPDATE messages SET occupant_id = ?2 WHERE id = ?1",
+                        params![stored.rowid, occupant],
+                    ),
+                );
+            }
             message_ext::after_store(ctx, &incoming, &stored, live);
             if live {
                 ctx.emit(ClientEvent::MessageReceived(stored));
@@ -2232,14 +2514,15 @@ pub(crate) fn on_presence(ctx: &mut Ctx<'_>, presence: &Presence) -> bool {
 }
 
 fn muc_user(presence: &Presence) -> Option<MucUser> {
-    presence
-        .payloads
-        .iter()
-        .find_map(|p| MucUser::try_from(p.clone()).ok())
+    status::muc_user(&presence.payloads)
 }
 
 /// The error of a join, or of a later presence.
 fn on_error(ctx: &mut Ctx<'_>, room: &BareJid, nick: Option<&str>, presence: &Presence) {
+    // The error can carry a CAPTCHA (XEP-0158). The join waits for the answer.
+    if captcha::on_challenge(ctx, room, &presence.payloads) {
+        return;
+    }
     let error = presence
         .payloads
         .iter()
@@ -2304,6 +2587,7 @@ fn on_destroyed(
         return;
     }
     ctx.state.muc.nicks.remove(room);
+    rejoin::cancel(ctx, room);
     if let Some(join) = ctx.state.muc.joins.remove(room) {
         for reply in join.replies {
             let _ = reply.send(Err(ClientError::Server("the room was destroyed".into())));
@@ -2362,22 +2646,19 @@ fn on_unavailable(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Pres
         set_joined(ctx, room, false);
         clear_occupants(ctx, room);
         if was_in {
+            let codes = status::codes(&presence.payloads);
             let reason = user
                 .as_ref()
                 .and_then(|u| u.items.first())
                 .and_then(|i| i.reason.as_ref())
-                .map(|r| format!(": {}", r.0))
-                .unwrap_or_default();
-            let what = if has(Status::Banned) {
-                "banned from"
-            } else if has(Status::Kicked) {
-                "kicked from"
-            } else {
-                "removed from"
-            };
-            ctx.emit(ClientEvent::Notice(format!(
-                "You were {what} {room}{reason}"
+                .map(|r| r.0.as_str());
+            ctx.emit(ClientEvent::Notice(status::removal_text(
+                room, &codes, reason,
             )));
+            // A service that shuts down, or fails, comes back: join again after a wait.
+            if status::is_temporary(&codes) {
+                rejoin::schedule(ctx, room);
+            }
         }
     }
     mark_room(ctx, room);
@@ -2412,15 +2693,20 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
         .and_then(|i| i.jid.as_ref())
         .map(|jid| jid.to_bare().to_string());
     let show = presence.show.as_ref().map(show_str);
+    // XEP-0421: the id of the occupant outlives a nick change, and a nick that another
+    // person takes later has another id.
+    let occupant = occupant_id(&presence.payloads);
     db(
         ctx,
         "store an occupant",
         ctx.store.conn().execute(
-            "INSERT INTO occupants (account_id, room, nick, real_jid, affiliation, role, show)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO occupants
+                (account_id, room, nick, real_jid, affiliation, role, show, occupant_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT (account_id, room, nick) DO UPDATE SET
                 real_jid = excluded.real_jid, affiliation = excluded.affiliation,
-                role = excluded.role, show = excluded.show",
+                role = excluded.role, show = excluded.show,
+                occupant_id = COALESCE(excluded.occupant_id, occupant_id)",
             params![
                 ctx.account_id,
                 room.as_str(),
@@ -2428,7 +2714,8 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
                 real_jid,
                 affiliation,
                 role,
-                show
+                show,
+                occupant
             ],
         ),
     );
@@ -2442,9 +2729,22 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
             ctx.state.muc.occupant_ids.insert(room.clone(), id);
         }
     }
+    if is_self {
+        // A status 100 in our own presence says that the room is non-anonymous.
+        status::on_room_codes(ctx, room, &status::codes(&presence.payloads), false);
+    }
     if is_self && let Some(join) = ctx.state.muc.joins.remove(room) {
         ctx.state.muc.nicks.insert(room.clone(), nick.to_owned());
+        rejoin::cancel(ctx, room);
         set_joined(ctx, room, true);
+        // The service can give another nick than the one that we asked for (status 210,
+        // XEP-0045, 7.2.7). Keep the nick that we have, so that the next join uses it.
+        if has(Status::AssignedNick) || join.nick != nick {
+            ensure_room(ctx, room, Some(nick), None);
+            ctx.emit(ClientEvent::Notice(format!(
+                "{room} gave you the nick {nick}"
+            )));
+        }
         if has(Status::RoomHasBeenCreated) {
             // The join completes when the room is configured and unlocked.
             unlock_room(ctx, room, join.replies);
@@ -2643,6 +2943,9 @@ pub(crate) fn error_text(error: &StanzaError) -> String {
         _ => condition.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod room_tests;
 
 #[cfg(test)]
 mod tests {

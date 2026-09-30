@@ -242,7 +242,13 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     };
     let sender = match (incoming.direction, incoming.kind) {
         (Direction::Out, _) => ctx.account.to_string(),
-        (_, MessageKind::Groupchat) => incoming.sender.to_owned(),
+        // XEP-0421: the occupant-id names the person through nick changes, so that a new
+        // nick does not add a second set of reactions. Without it the occupant JID does.
+        (_, MessageKind::Groupchat) => super::muc::occupant_id(&incoming.message.payloads)
+            .map_or_else(
+                || incoming.sender.to_owned(),
+                |id| format!("occupant-id:{id}"),
+            ),
         // A private message: the occupant JID names the sender.
         (_, MessageKind::Chat) if message_ext::is_private(peer) => incoming.sender.to_owned(),
         (_, MessageKind::Chat) => incoming

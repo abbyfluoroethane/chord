@@ -23,28 +23,58 @@ fn err(e: impl std::fmt::Display) -> CliError {
 /// `join <room> [--nick N]`: join the room, and bookmark it with autojoin, so that it
 /// stays in Home and the next session joins it again. A room password comes from
 /// CHORD_ROOM_PASSWORD, never from an argument.
-pub async fn join(client: &Client, args: &[&str]) -> Result<(), CliError> {
-    let usage = || CliError::from("usage: join <room> [--nick N]".to_owned());
-    let (room, nick) = match args {
-        [room] => (*room, None),
-        [room, "--nick", nick] => (*room, Some((*nick).to_owned())),
-        _ => return Err(usage()),
+pub async fn join(client: &mut Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || CliError::from("usage: join <room> [--nick N] [--share-password]".to_owned());
+    let Some((room, mut rest)) = args.split_first() else {
+        return Err(usage());
     };
+    let mut nick = None;
+    let mut share_password = false;
+    while let Some((flag, tail)) = rest.split_first() {
+        match *flag {
+            "--nick" => {
+                let (value, tail) = tail.split_first().ok_or_else(usage)?;
+                nick = Some((*value).to_owned());
+                rest = tail;
+            }
+            "--share-password" => {
+                share_password = true;
+                rest = tail;
+            }
+            _ => return Err(usage()),
+        }
+    }
     let room = bare(room)?;
     let password = std::env::var("CHORD_ROOM_PASSWORD").ok();
     // With no nick, the room may have reserved one for us (XEP-0045, 7.12).
-    let joined = match &nick {
-        Some(nick) => {
-            client
-                .handle
-                .join_room(room.clone(), nick.clone(), password)
-                .await
-        }
-        None => {
-            client
-                .handle
-                .join_room_default_nick(room.clone(), password, None)
-                .await
+    let joined = {
+        let join = async {
+            match &nick {
+                Some(nick) => {
+                    client
+                        .handle
+                        .join_room(room.clone(), nick.clone(), password)
+                        .await
+                }
+                None => {
+                    client
+                        .handle
+                        .join_room_default_nick(room.clone(), password, None)
+                        .await
+                }
+            }
+        };
+        tokio::pin!(join);
+        // A room can hold the join until we solve a CAPTCHA (XEP-0158).
+        loop {
+            tokio::select! {
+                result = &mut join => break result,
+                Some(event) = crate::next(&mut client.events) => {
+                    if let chord_core::actor::ClientEvent::RoomCaptcha { room, form } = event {
+                        crate::forms::answer_captcha(&client.handle, room, form).await?;
+                    }
+                }
+            }
         }
     };
     if let Err(e) = &joined
@@ -56,11 +86,20 @@ pub async fn join(client: &Client, args: &[&str]) -> Result<(), CliError> {
         .into());
     }
     joined.map_err(err)?;
-    client
-        .handle
-        .add_bookmark(room.clone(), None, true, nick.clone())
-        .await
-        .map_err(err)?;
+    // The password goes into the bookmark only when the user asks for it.
+    if share_password {
+        client
+            .handle
+            .add_bookmark_with_password_choice(room.clone(), None, true, nick.clone(), true)
+            .await
+            .map_err(err)?;
+    } else {
+        client
+            .handle
+            .add_bookmark(room.clone(), None, true, nick.clone())
+            .await
+            .map_err(err)?;
+    }
     match nick {
         Some(nick) => println!("joined {room} as {nick}"),
         None => println!("joined {room}"),
@@ -307,6 +346,7 @@ pub async fn room_info(opts: &Opts, client: &Client, room: &str) -> Result<(), C
                 .bool("password_protected", c.password_protected)
                 .bool("members_only", c.members_only)
                 .bool("change_subject", c.change_subject)
+                .opt_str("anonymity", c.anonymity.as_deref())
                 .finish()
         );
     } else {
@@ -319,6 +359,9 @@ pub async fn room_info(opts: &Opts, client: &Client, room: &str) -> Result<(), C
         }
         if c.change_subject {
             println!("  anyone may change the subject");
+        }
+        if let Some(a) = &c.anonymity {
+            println!("  {a}");
         }
     }
     Ok(())
@@ -1078,17 +1121,34 @@ pub async fn room_members(client: &Client, args: &[&str]) -> Result<(), CliError
     Ok(())
 }
 
-/// `invite <room> <jid> [reason]`: invite a JID. An owner or admin adds it as a member.
+/// `invite <room> <jid> [reason] [--direct]`: invite a JID. An owner or admin adds it as a
+/// member. With `--direct`, send a direct invitation (XEP-0249) for a room that does not
+/// pass on invitations.
 pub async fn invite(client: &Client, args: &[&str]) -> Result<(), CliError> {
-    let (room, jid, reason) = match args {
+    let direct = args.contains(&"--direct");
+    let args: Vec<&str> = args.iter().copied().filter(|a| *a != "--direct").collect();
+    let (room, jid, reason) = match args.as_slice() {
         [room, jid] => (*room, *jid, None),
         [room, jid, reason] => (*room, *jid, Some((*reason).to_owned())),
-        _ => return Err("usage: invite <room> <jid> [reason]".to_owned().into()),
+        _ => {
+            return Err("usage: invite <room> <jid> [reason] [--direct]"
+                .to_owned()
+                .into());
+        }
     };
     let room = bare(room)?;
     // The room takes an invitation from an occupant only, and an owner grants membership
     // only from inside the room.
     enter(client, &room).await?;
+    if direct {
+        client
+            .handle
+            .invite_to_room_direct(room.clone(), bare(jid)?, reason)
+            .await
+            .map_err(err)?;
+        println!("sent {jid} a direct invitation to {room}");
+        return Ok(());
+    }
     client
         .handle
         .invite_to_room(room.clone(), bare(jid)?, reason)

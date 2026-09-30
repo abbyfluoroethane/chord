@@ -487,3 +487,98 @@ mod tests {
         assert!(json.contains(r#""var":"a""#) && json.contains(r#""type":"list-multi""#));
     }
 }
+
+/// Answer the CAPTCHA of a room (XEP-0158): show the form, write the image to a file, ask
+/// for each text field on the terminal, and send the answer.
+pub async fn answer_captcha(
+    handle: &chord_core::actor::ClientHandle,
+    room: BareJid,
+    mut form: Form,
+) -> Result<(), CliError> {
+    println!("{room} asks for a CAPTCHA:");
+    print_form(&form);
+    for media in form.fields.iter().flat_map(|f| &f.media) {
+        let Some((head, data)) = media.uri.split_once(',') else {
+            continue;
+        };
+        if !head.starts_with("data:") {
+            continue;
+        }
+        if let Some(bytes) = decode_base64(data) {
+            let ext = head
+                .strip_prefix("data:image/")
+                .and_then(|t| t.split(';').next())
+                .unwrap_or("png");
+            let path = std::env::temp_dir().join(format!("chord-captcha.{ext}"));
+            std::fs::write(&path, bytes).map_err(err)?;
+            println!("  the image is in {}", path.display());
+        }
+    }
+    let asked: Vec<usize> = form
+        .fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| {
+            f.var.is_some()
+                && matches!(f.kind, FieldKind::TextSingle | FieldKind::TextPrivate)
+                && f.values.is_empty()
+        })
+        .map(|(i, _)| i)
+        .collect();
+    for i in asked {
+        let name = form.fields[i]
+            .label
+            .clone()
+            .or_else(|| form.fields[i].var.clone())
+            .unwrap_or_default();
+        println!("{name}:");
+        let line = tokio::task::spawn_blocking(|| {
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line).map(|_| line)
+        })
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+        form.fields[i].values = vec![line.trim().to_owned()];
+    }
+    handle.answer_room_captcha(room, form).await.map_err(err)
+}
+
+/// Decode base64 (RFC 4648, with or without padding). `None` for a bad character.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let mut bits = 0u32;
+    let mut count = 0;
+    for c in text.bytes().filter(|c| !c.is_ascii_whitespace()) {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        };
+        bits = (bits << 6) | u32::from(value);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod captcha_tests {
+    use super::decode_base64;
+
+    #[test]
+    fn base64_decodes_with_and_without_padding() {
+        assert_eq!(decode_base64("aGVsbG8=").as_deref(), Some(&b"hello"[..]));
+        assert_eq!(decode_base64("aGVsbG8").as_deref(), Some(&b"hello"[..]));
+        assert_eq!(decode_base64("AAAA").as_deref(), Some(&[0u8, 0, 0][..]));
+        assert_eq!(decode_base64("a*b"), None);
+    }
+}

@@ -320,4 +320,18 @@ pub const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (account_id, service, node)
     );
     "#,
+    // 15: room details (XEP-0045, XEP-0402, XEP-0421). The anonymity of a room from its
+    // disco#info. The raw `<extensions/>` child of the room bookmark, so that a republish
+    // keeps what other clients wrote. Whether the bookmark carries the room password (the
+    // user agreed, or another client published it). The XEP-0421 occupant-id of each
+    // occupant and of each room message.
+    r#"
+    ALTER TABLE rooms ADD COLUMN anonymity TEXT;              -- non-anonymous, semi-anonymous, anonymous
+    ALTER TABLE rooms ADD COLUMN bookmark_extensions TEXT;    -- XML of the bookmark extensions
+    ALTER TABLE rooms ADD COLUMN password_shared INTEGER NOT NULL DEFAULT 0;
+    -- Before this version every bookmark of a room with a password carried it.
+    UPDATE rooms SET password_shared = 1 WHERE bookmarked = 1 AND password IS NOT NULL;
+    ALTER TABLE occupants ADD COLUMN occupant_id TEXT;
+    ALTER TABLE messages ADD COLUMN occupant_id TEXT;
+    "#,
 ];

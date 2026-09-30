@@ -130,6 +130,8 @@ struct Row {
     attachment: Option<String>,
     file: FileMeta,
     status: String,
+    /// XEP-0421: the occupant that wrote a room message.
+    occupant_id: Option<String>,
 }
 
 /// The `peer` value of a timeline: the room or the chat peer, or `room/nick` for the
@@ -154,7 +156,8 @@ pub(crate) fn query(
                 kind, edited_body IS NOT NULL, retracted_at IS NOT NULL, reply_to,
                 reply_to_sender, oob_url,
                 file_name, file_size, file_type, file_hash,
-                CASE WHEN failed_at IS NOT NULL THEN 'failed' ELSE status END
+                CASE WHEN failed_at IS NOT NULL THEN 'failed' ELSE status END,
+                occupant_id
          FROM messages
          WHERE account_id = ?1 AND peer = ?2
            AND NOT (failed_at IS NOT NULL AND retracted_at IS NOT NULL)
@@ -184,21 +187,31 @@ pub(crate) fn query(
                 sha256: row.get(16)?,
             },
             status: row.get(17)?,
+            occupant_id: row.get(18)?,
         })
     })?;
     let mut rows: Vec<Row> = rows.collect::<rusqlite::Result<_>>()?;
     rows.reverse();
 
     let mut items: Vec<TimelineItem> = Vec::with_capacity(rows.len());
+    let mut previous_occupant: Option<String> = None;
     for row in rows {
         let (sender_name, avatar_owner) = display_name(q, &row.sender, row.groupchat)?;
         let avatar = match row.sender.split_once('/') {
             Some((room, nick)) if row.groupchat => occupant_avatar_hash(q, room, nick)?,
             _ => avatar_hash(q, &avatar_owner)?,
         };
-        let same_sender_as_previous = items
-            .last()
-            .is_some_and(|p| p.sender == row.sender && row.timestamp - p.timestamp < GROUP_GAP_MS);
+        // The same nick is the same person only if the occupant-id agrees (XEP-0421): a nick
+        // that another person took later is not the same sender.
+        let same_occupant = match (&previous_occupant, &row.occupant_id) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
+        };
+        let same_sender_as_previous = same_occupant
+            && items.last().is_some_and(|p| {
+                p.sender == row.sender && row.timestamp - p.timestamp < GROUP_GAP_MS
+            });
+        previous_occupant = row.occupant_id.clone();
         let reply_to = match &row.reply_to {
             Some(id) => Some(reply_preview(
                 q,

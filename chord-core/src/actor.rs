@@ -142,6 +142,12 @@ pub enum ClientEvent {
         reason: Option<String>,
         alternate: Option<BareJid>,
     },
+    /// A room holds our join until we solve a CAPTCHA (XEP-0158). Show the form, then call
+    /// `answer_room_captcha` with the filled form, or `cancel_room_captcha`.
+    RoomCaptcha {
+        room: BareJid,
+        form: crate::forms::Form,
+    },
     /// The people who type in a conversation changed (XEP-0085). `peer` is the bare JID of
     /// a chat or a room, or room@service/nick for a private message. `typers` holds bare
     /// JIDs in a chat and nicks in a room. An empty list means nobody types now.
@@ -464,6 +470,12 @@ enum Next<E> {
 }
 
 impl<S: Session> Actor<S> {
+    /// Keep the room passwords in `secrets` (the system keychain) instead of the database.
+    /// Call it before `run`. A password that the database holds moves over at its next use.
+    pub fn set_secret_store(&mut self, secrets: std::sync::Arc<dyn crate::secrets::SecretStore>) {
+        self.state.muc.set_secret_store(secrets);
+    }
+
     /// Run until every `ClientHandle` is dropped. Then close the session.
     pub async fn run(mut self) {
         loop {

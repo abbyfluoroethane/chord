@@ -7,7 +7,7 @@
 use futures_channel::oneshot;
 use jid::BareJid;
 use rusqlite::params;
-use xmpp_parsers::bookmarks2::Conference;
+use xmpp_parsers::bookmarks2::{Conference, Extensions};
 use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::jid::ResourcePart;
@@ -18,6 +18,8 @@ use xmpp_parsers::pubsub::{ItemId, NodeName};
 use xmpp_parsers::stanza_error::DefinedCondition;
 
 use super::pubsub::NODE_BOOKMARKS;
+
+const NS_BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
 use super::{Ctx, IqResponse, Pending as FeaturePending, muc};
 use crate::actor::ClientError;
 use crate::views::ViewKey;
@@ -40,6 +42,9 @@ pub(crate) struct Bookmark {
     pub autojoin: bool,
     pub nick: Option<String>,
     pub password: Option<String>,
+    /// The elements of the `<extensions/>` child that other clients wrote (XEP-0402). `None`
+    /// when the bookmark has no such child. Chord keeps them and writes them back.
+    pub extensions: Option<Vec<Element>>,
 }
 
 impl Bookmark {
@@ -59,6 +64,7 @@ impl Bookmark {
             autojoin: conference.autojoin,
             nick: conference.nick.map(|n| n.as_str().to_owned()),
             password: conference.password,
+            extensions: conference.extensions.map(|e| e.payloads),
         })
     }
 
@@ -70,6 +76,10 @@ impl Bookmark {
             conference.nick = Some(ResourcePart::new(nick).ok()?.into());
         }
         conference.password = self.password.clone();
+        conference.extensions = self
+            .extensions
+            .clone()
+            .map(|payloads| Extensions { payloads });
         Some(conference)
     }
 }
@@ -86,7 +96,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
         Pending::Publish { bookmark, reply } => {
             let result = match response {
                 IqResponse::Result(_) => {
-                    upsert(ctx, &bookmark);
+                    upsert_row(ctx, &bookmark);
                     muc::mark_room(ctx, &bookmark.room);
                     Ok(())
                 }
@@ -205,16 +215,30 @@ pub(crate) fn add(
     name: Option<String>,
     autojoin: bool,
     nick: Option<String>,
+    share_password: Option<bool>,
     reply: Reply,
 ) {
-    let password = muc::stored_password(ctx, &room);
+    // The password goes into the bookmark only when the user agreed, or when the bookmark
+    // carried it already (another client published it). The bookmark node is private, but
+    // the password would then sit on the server in clear text.
+    let share = share_password.unwrap_or_else(|| muc::password_shared(ctx, &room));
+    let password = if share {
+        muc::stored_password(ctx, &room)
+    } else {
+        None
+    };
+    // Say it before the publish: our own event comes back, and it must not remove a
+    // password that the user chose to keep to himself.
+    muc::set_password_shared(ctx, &room, password.is_some());
     let nick = nick.or_else(|| muc::our_nick(ctx, &room));
+    let extensions = stored_extensions(ctx, &room);
     let bookmark = Bookmark {
         room,
         name,
         autojoin,
         nick,
         password,
+        extensions,
     };
     let Some(conference) = bookmark.conference() else {
         let _ = reply.send(Err(ClientError::Invalid("the nick is not valid".into())));
@@ -276,25 +300,60 @@ pub(crate) fn remove(ctx: &mut Ctx<'_>, room: BareJid, reply: Reply) {
     );
 }
 
+/// Store a bookmark that came from the account. Its password goes to `muc`, which keeps it
+/// in the keychain when the client has one.
 fn upsert(ctx: &Ctx<'_>, bookmark: &Bookmark) {
+    upsert_row(ctx, bookmark);
+    muc::on_bookmark_password(ctx, &bookmark.room, bookmark.password.as_deref());
+}
+
+/// The row of a bookmark, without the password.
+fn upsert_row(ctx: &Ctx<'_>, bookmark: &Bookmark) {
     let result = ctx.store.conn().execute(
-        "INSERT INTO rooms (account_id, jid, name, nick, password, autojoin, bookmarked)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+        "INSERT INTO rooms (account_id, jid, name, nick, autojoin, bookmarked,
+                            bookmark_extensions)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
          ON CONFLICT (account_id, jid) DO UPDATE SET
             name = excluded.name, nick = COALESCE(excluded.nick, nick),
-            password = excluded.password, autojoin = excluded.autojoin, bookmarked = 1",
+            autojoin = excluded.autojoin, bookmarked = 1,
+            bookmark_extensions = excluded.bookmark_extensions",
         params![
             ctx.account_id,
             bookmark.room.as_str(),
             bookmark.name,
             bookmark.nick,
-            bookmark.password,
-            bookmark.autojoin
+            bookmark.autojoin,
+            extensions_xml(bookmark.extensions.as_deref()),
         ],
     );
     if let Err(e) = result {
         ctx.store_error("store a bookmark", e);
     }
+}
+
+/// The extension elements as one `<extensions/>` element in text, for the database.
+fn extensions_xml(payloads: Option<&[Element]>) -> Option<String> {
+    let payloads = payloads?;
+    let extensions = Element::builder("extensions", NS_BOOKMARKS2)
+        .append_all(payloads.iter().cloned())
+        .build();
+    Some(String::from(&extensions))
+}
+
+/// The extension elements that the stored bookmark of `room` has.
+fn stored_extensions(ctx: &Ctx<'_>, room: &BareJid) -> Option<Vec<Element>> {
+    let xml: Option<String> = ctx
+        .store
+        .conn()
+        .query_row(
+            "SELECT bookmark_extensions FROM rooms WHERE account_id = ?1 AND jid = ?2",
+            params![ctx.account_id, room.as_str()],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    let element: Element = xml?.parse().ok()?;
+    Some(element.children().cloned().collect())
 }
 
 fn unmark(ctx: &Ctx<'_>, room: &BareJid) {
@@ -363,6 +422,7 @@ mod tests {
 
     const A: &str = "a@rooms.chord.localhost";
     const B: &str = "b@rooms.chord.localhost";
+    const ACCOUNT: &str = crate::features::testing::ACCOUNT;
 
     fn conference(autojoin: bool, nick: &str) -> Element {
         let mut c = Conference::new();
@@ -423,6 +483,7 @@ mod tests {
                     autojoin: true,
                     nick: None,
                     password: None,
+                    extensions: None,
                 },
             )
         });
@@ -463,6 +524,7 @@ mod tests {
                     autojoin: true,
                     nick: Some("al".into()),
                     password: None,
+                    extensions: None,
                 },
             )
         });
@@ -557,6 +619,7 @@ mod tests {
                 Some("Room".into()),
                 true,
                 Some("al".into()),
+                None,
                 reply,
             )
         });
@@ -614,7 +677,7 @@ mod tests {
         });
         h.take_sent();
         let (reply, _answer) = oneshot::channel();
-        h.with_ctx(|ctx| add(ctx, BareJid::new(A).unwrap(), None, true, None, reply));
+        h.with_ctx(|ctx| add(ctx, BareJid::new(A).unwrap(), None, true, None, None, reply));
         let iqs = h.sent_iqs();
         let Iq::Set { payload, .. } = &iqs[0] else {
             panic!("not a set")
@@ -633,7 +696,17 @@ mod tests {
     fn add_error_and_lost_answer_the_command() {
         let mut h = Harness::new();
         let (reply, mut answer) = oneshot::channel();
-        h.with_ctx(|ctx| add(ctx, BareJid::new(A).unwrap(), None, false, None, reply));
+        h.with_ctx(|ctx| {
+            add(
+                ctx,
+                BareJid::new(A).unwrap(),
+                None,
+                false,
+                None,
+                None,
+                reply,
+            )
+        });
         let error = StanzaError::new(
             ErrorType::Cancel,
             DefinedCondition::Forbidden,
@@ -648,7 +721,17 @@ mod tests {
         assert_eq!(row(&h, A), None);
 
         let (reply, mut answer) = oneshot::channel();
-        h.with_ctx(|ctx| add(ctx, BareJid::new(A).unwrap(), None, false, None, reply));
+        h.with_ctx(|ctx| {
+            add(
+                ctx,
+                BareJid::new(A).unwrap(),
+                None,
+                false,
+                None,
+                None,
+                reply,
+            )
+        });
         h.respond(is_bookmarks, IqResponse::Lost);
         assert_eq!(
             answer.try_recv().unwrap(),
@@ -664,6 +747,7 @@ mod tests {
                 None,
                 false,
                 Some(String::new()),
+                None,
                 reply,
             )
         });
@@ -776,5 +860,210 @@ mod tests {
         });
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
         assert!(h.sent_iqs().is_empty());
+    }
+
+    fn conference_xml(inner: &str) -> Element {
+        format!(
+            "<conference xmlns='urn:xmpp:bookmarks:1' autojoin='false' name='N'><nick>al</nick>{inner}</conference>"
+        )
+        .parse()
+        .unwrap()
+    }
+
+    /// The conference element of the last publish that the harness sent.
+    fn published(h: &mut Harness) -> Conference {
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!("not a set")
+        };
+        let PubSub::Publish { publish, .. } = PubSub::try_from(payload.clone()).unwrap() else {
+            panic!("not a publish")
+        };
+        Conference::try_from(publish.items[0].payload.clone().unwrap()).unwrap()
+    }
+
+    fn republish(h: &mut Harness, share: Option<bool>) -> Conference {
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            add(
+                ctx,
+                BareJid::new(A).unwrap(),
+                None,
+                false,
+                None,
+                share,
+                reply,
+            )
+        });
+        published(h)
+    }
+
+    fn column_password(h: &Harness) -> Option<String> {
+        h.store
+            .conn()
+            .query_row(
+                "SELECT password FROM rooms WHERE account_id = ?1 AND jid = ?2",
+                params![h.account_id, A],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_republish_keeps_the_extensions_that_another_client_wrote() {
+        let mut h = Harness::new();
+        let with = conference_xml(
+            "<extensions><state xmlns='urn:example:state' read='5'/><other xmlns='urn:example:o'>x</other></extensions>",
+        );
+        h.with_ctx(|ctx| on_event(ctx, event(vec![(A, with)], vec![])));
+        let conference = republish(&mut h, None);
+        let extensions = conference.extensions.expect("the extensions stay");
+        assert_eq!(extensions.payloads.len(), 2);
+        assert!(extensions.payloads[0].is("state", "urn:example:state"));
+        assert_eq!(extensions.payloads[0].attr("read"), Some("5"));
+        assert!(extensions.payloads[1].is("other", "urn:example:o"));
+        assert_eq!(extensions.payloads[1].text(), "x");
+    }
+
+    #[test]
+    fn an_empty_extensions_element_stays_and_no_element_stays_absent() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| {
+            on_event(
+                ctx,
+                event(vec![(A, conference_xml("<extensions/>"))], vec![]),
+            )
+        });
+        let conference = republish(&mut h, None);
+        assert!(conference.extensions.is_some_and(|e| e.payloads.is_empty()));
+
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| on_event(ctx, event(vec![(A, conference_xml(""))], vec![])));
+        assert!(republish(&mut h, None).extensions.is_none());
+    }
+
+    #[test]
+    fn a_fetched_bookmark_parses_its_extensions() {
+        let payload = conference_xml("<extensions><x xmlns='urn:example:x'/></extensions>");
+        let bookmark = Bookmark::parse(Some(&ItemId(A.into())), Some(&payload)).unwrap();
+        let extensions = bookmark.extensions.clone().expect("extensions");
+        assert_eq!(extensions.len(), 1);
+        let again = bookmark.conference().unwrap();
+        assert_eq!(again.extensions.unwrap().payloads.len(), 1);
+    }
+
+    #[test]
+    fn the_extensions_of_a_bookmark_that_the_user_changes_in_place_are_not_lost() {
+        let mut h = Harness::new();
+        let with = conference_xml("<extensions><k xmlns='urn:example:k'/></extensions>");
+        h.with_ctx(|ctx| on_event(ctx, event(vec![(A, with)], vec![])));
+        // Publish twice, with the answer of the server in between.
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| add(ctx, BareJid::new(A).unwrap(), None, true, None, None, reply));
+        published(&mut h);
+        h.answer(is_bookmarks, None);
+        let conference = republish(&mut h, None);
+        assert_eq!(conference.extensions.unwrap().payloads.len(), 1);
+    }
+
+    #[test]
+    fn a_bookmark_carries_the_password_only_when_the_user_agrees() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| {
+            muc::join_room(
+                ctx,
+                &BareJid::new(A).unwrap(),
+                Some("al".into()),
+                Some("hunter2".into()),
+                None,
+            )
+        });
+        h.take_sent();
+        // No choice, and the bookmark never had it: no password.
+        assert_eq!(republish(&mut h, None).password, None);
+        // The user agrees.
+        assert_eq!(
+            republish(&mut h, Some(true)).password.as_deref(),
+            Some("hunter2")
+        );
+        // The bookmark had it, so a republish with no choice keeps it.
+        assert_eq!(republish(&mut h, None).password.as_deref(), Some("hunter2"));
+        // The user withdraws. The password stays on this device.
+        assert_eq!(republish(&mut h, Some(false)).password, None);
+        assert_eq!(column_password(&h).as_deref(), Some("hunter2"));
+        assert_eq!(republish(&mut h, None).password, None);
+    }
+
+    #[test]
+    fn the_echo_of_our_own_bookmark_without_the_password_keeps_the_local_password() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| {
+            muc::join_room(
+                ctx,
+                &BareJid::new(A).unwrap(),
+                Some("al".into()),
+                Some("hunter2".into()),
+                None,
+            )
+        });
+        republish(&mut h, Some(true));
+        republish(&mut h, Some(false));
+        // The event that our publish causes comes back with no password.
+        h.with_ctx(|ctx| on_event(ctx, event(vec![(A, conference_xml(""))], vec![])));
+        assert_eq!(column_password(&h).as_deref(), Some("hunter2"));
+    }
+
+    #[test]
+    fn a_password_that_another_client_published_is_kept_and_published_again() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| {
+            on_event(
+                ctx,
+                event(
+                    vec![(A, conference_xml("<password>from-phone</password>"))],
+                    vec![],
+                ),
+            )
+        });
+        assert_eq!(column_password(&h).as_deref(), Some("from-phone"));
+        assert_eq!(
+            republish(&mut h, None).password.as_deref(),
+            Some("from-phone")
+        );
+        // The other client removes the password from the bookmark: it goes from here too.
+        h.with_ctx(|ctx| on_event(ctx, event(vec![(A, conference_xml(""))], vec![])));
+        assert_eq!(column_password(&h), None);
+    }
+
+    #[test]
+    fn a_password_from_a_bookmark_goes_to_the_keychain() {
+        use crate::secrets::testing::MemorySecrets;
+        let mut h = Harness::new();
+        let secrets = std::sync::Arc::new(MemorySecrets::default());
+        h.state.muc.set_secret_store(secrets.clone());
+        h.with_ctx(|ctx| {
+            on_event(
+                ctx,
+                event(
+                    vec![(A, conference_xml("<password>from-phone</password>"))],
+                    vec![],
+                ),
+            )
+        });
+        assert_eq!(column_password(&h), None);
+        assert_eq!(
+            secrets
+                .map
+                .lock()
+                .unwrap()
+                .get(&crate::secrets::room_password_key(ACCOUNT, A))
+                .map(String::as_str),
+            Some("from-phone")
+        );
+        // And the republish reads it from there.
+        assert_eq!(
+            republish(&mut h, None).password.as_deref(),
+            Some("from-phone")
+        );
     }
 }
