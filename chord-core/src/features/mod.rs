@@ -33,6 +33,7 @@ pub mod pins;
 pub mod presence;
 pub mod pubsub;
 pub mod push;
+pub mod register;
 pub mod reactions;
 pub mod replies;
 pub mod retraction;
@@ -72,6 +73,8 @@ pub(crate) enum Effect {
     Download {
         request: spaces::DownloadRequest,
     },
+    /// The password of the account changed. The session uses it for the next login.
+    NewPassword(String),
 }
 
 /// A result from work outside the session, for example an HTTP upload.
@@ -100,6 +103,7 @@ pub(crate) enum Pending {
     Extdisco(extdisco::Pending),
     Adhoc(adhoc::Pending),
     Pins(pins::Pending),
+    Register(register::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -172,6 +176,7 @@ pub(crate) enum FeatureCommand {
     Jmi(jmi::Command),
     Adhoc(adhoc::Command),
     Pins(pins::Command),
+    Register(register::Command),
 }
 
 /// Everything a feature function can use.
@@ -401,6 +406,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Extdisco(p) => extdisco::on_response(ctx, p, response),
         Pending::Adhoc(p) => adhoc::on_response(ctx, p, response),
         Pending::Pins(p) => pins::on_response(ctx, p, response),
+        Pending::Register(p) => register::on_response(ctx, p, response),
     }
 }
 
@@ -472,6 +478,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Jmi(c) => jmi::on_command(ctx, c),
         FeatureCommand::Adhoc(c) => adhoc::on_command(ctx, c),
         FeatureCommand::Pins(c) => pins::on_command(ctx, c),
+        FeatureCommand::Register(c) => register::on_command(ctx, c),
     }
 }
 
@@ -519,6 +526,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Jmi(c) => jmi::offline(c),
         FeatureCommand::Adhoc(c) => adhoc::offline(c),
         FeatureCommand::Pins(c) => pins::offline(store, account_id, c),
+        FeatureCommand::Register(c) => register::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.

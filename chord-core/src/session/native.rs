@@ -15,7 +15,7 @@ use core::time::Duration;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use futures_core::Stream;
 use jid::Jid;
@@ -81,6 +81,8 @@ pub struct NativeSession {
     commands: mpsc::Sender<Command>,
     events: Option<NativeEvents>,
     task: JoinHandle<()>,
+    /// The password that a reconnect uses. `set_password` changes it.
+    password: Option<Arc<Mutex<String>>>,
 }
 
 /// The event stream of a `NativeSession`.
@@ -145,6 +147,12 @@ impl Session for NativeSession {
             .map_err(|_| SessionError::Closed)
     }
 
+    fn set_password(&self, password: &str) {
+        if let Some(current) = &self.password {
+            *current.lock().unwrap_or_else(|e| e.into_inner()) = password.to_owned();
+        }
+    }
+
     fn events(&mut self) -> Option<NativeEvents> {
         self.events.take()
     }
@@ -167,11 +175,17 @@ async fn start<C: ServerConnector>(
         .await
         .map_err(|_| ConnectError::Timeout)??;
 
+    // A password change (XEP-0077) must reach the next reconnect.
+    let password = Arc::new(Mutex::new(password));
+    let shared = Arc::clone(&password);
     let attempt = move || {
-        let (server, jid, password) = (server.clone(), jid.clone(), password.clone());
+        let (server, jid) = (server.clone(), jid.clone());
+        let password = password.lock().unwrap_or_else(|e| e.into_inner()).clone();
         async move { login(server, &jid, &password).await }
     };
-    Ok(NativeSession::spawn(Some(first), attempt, login_timeout))
+    let mut session = NativeSession::spawn(Some(first), attempt, login_timeout);
+    session.password = Some(shared);
+    Ok(session)
 }
 
 /// The first login. Retries only a temporary SASL failure, until the caller's timeout.
@@ -235,6 +249,7 @@ impl NativeSession {
             commands,
             events: Some(NativeEvents(event_rx)),
             task,
+            password: None,
         }
     }
 }

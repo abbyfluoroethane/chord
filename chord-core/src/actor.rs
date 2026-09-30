@@ -513,6 +513,11 @@ impl<S: Session> Actor<S> {
                 Effect::Download { request } => {
                     features::spaces::start_download(request, self.internal_tx.clone());
                 }
+                Effect::NewPassword(password) => {
+                    if let Some(online) = &self.online {
+                        online.session.set_password(&password);
+                    }
+                }
             }
         }
         // A logout that waited for queued stanzas can go on now.

@@ -2,6 +2,7 @@
 
 pub mod actor;
 pub mod features;
+pub mod forms;
 pub mod runtime;
 pub mod session;
 pub mod store;

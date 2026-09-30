@@ -279,6 +279,10 @@ pub trait Session: Sized {
     /// `<inactive/>` for `false`. Queued like a stanza, and in order with the stanzas.
     async fn send_client_state(&self, active: bool) -> Result<(), SessionError>;
 
+    /// Use a new password for the next login. The account changed its password on the
+    /// server. A session that never logs in again has nothing to do.
+    fn set_password(&self, _password: &str) {}
+
     /// Take the event stream. The first call returns it. Each later call returns `None`.
     fn events(&mut self) -> Option<Self::Events>;
 
