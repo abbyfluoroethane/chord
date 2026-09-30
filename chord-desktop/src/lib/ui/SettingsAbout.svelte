@@ -26,6 +26,8 @@
   <li>Lucide icons, ISC License.</li>
   <li>PhotoSwipe image viewer, MIT License.</li>
   <li>Video.js media player, Apache License 2.0.</li>
+  <li>Emojibase emoji data, MIT License.</li>
+  <li>GIF search powered by KLIPY.</li>
 </ul>
 
 <style>

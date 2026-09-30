@@ -1,9 +1,14 @@
 <script lang="ts">
-  // Composer: upload, autosizing textarea (144px max), reply banner, typing line.
+  // Composer: upload, autosizing textarea (144px max), GIF and emoji picker, reply banner,
+  // typing line.
   import { untrack } from 'svelte';
   import Paperclip from 'lucide-svelte/icons/paperclip';
+  import Smile from 'lucide-svelte/icons/smile';
   import X from 'lucide-svelte/icons/x';
+  import type { Gif } from '$lib/chord';
+  import ExpressionPicker from './ExpressionPicker.svelte';
   import Icon from './Icon.svelte';
+  import { prefs } from './prefs.svelte';
   import { app } from './app.svelte';
   import { live } from './bridge';
   import { ui } from './ui.svelte';
@@ -11,6 +16,40 @@
   import { tooltip } from './tooltip';
 
   let box = $state<HTMLTextAreaElement>();
+  let boxWrap = $state<HTMLDivElement>();
+  let picker = $state<'gif' | 'emoji' | null>(null);
+  let pickerTab = $state<'gif' | 'emoji'>('emoji');
+
+  function openPicker(tab: 'gif' | 'emoji') {
+    if (picker === tab) {
+      picker = null;
+      return;
+    }
+    picker = tab;
+    pickerTab = tab;
+  }
+
+  function closePicker() {
+    picker = null;
+    box?.focus();
+  }
+
+  /** Put the emoji where the caret is, and keep the caret after it. */
+  function insertEmoji(emoji: string) {
+    const at = box?.selectionStart ?? value.length;
+    const end = box?.selectionEnd ?? at;
+    value = value.slice(0, at) + emoji + value.slice(end);
+    closePicker();
+    queueMicrotask(() => {
+      box?.setSelectionRange(at + emoji.length, at + emoji.length);
+      fit();
+    });
+  }
+
+  function sendGif(gif: Gif) {
+    closePicker();
+    void app.sendGif(gif);
+  }
   let files = $state<HTMLInputElement>();
   // Drafts survive a switch between channels.
   const drafts: Record<string, string> = {};
@@ -105,7 +144,7 @@
       </button>
     </div>
   {/if}
-  <div class="box" class:has-reply={!!app.replyingTo}>
+  <div class="box" class:has-reply={!!app.replyingTo} bind:this={boxWrap}>
     <button
       class="upload"
       aria-label="Upload a file"
@@ -124,7 +163,40 @@
       oninput={input}
       onkeydown={keydown}
     ></textarea>
+    <div class="tools">
+      {#if prefs.gifPicker}
+        <button
+          class="tool"
+          class:on={picker === 'gif'}
+          aria-label="Send a GIF"
+          aria-expanded={picker === 'gif'}
+          use:tooltip={{ text: 'Send a GIF', side: 'top' }}
+          onclick={() => openPicker('gif')}
+        >
+          <span class="gif-mark" aria-hidden="true">GIF</span>
+        </button>
+      {/if}
+      <button
+        class="tool"
+        class:on={picker === 'emoji'}
+        aria-label="Add an emoji"
+        aria-expanded={picker === 'emoji'}
+        use:tooltip={{ text: 'Add an emoji', side: 'top' }}
+        onclick={() => openPicker('emoji')}
+      >
+        <Icon icon={Smile} size={20} />
+      </button>
+    </div>
   </div>
+  {#if picker && boxWrap}
+    <ExpressionPicker
+      anchor={boxWrap}
+      bind:tab={pickerTab}
+      onemoji={insertEmoji}
+      ongif={sendGif}
+      onclose={closePicker}
+    />
+  {/if}
   <div class="typing" aria-live="polite">
     {#if typing}
       <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -210,6 +282,38 @@
   }
   textarea::placeholder {
     color: var(--ink-muted);
+  }
+  .tools {
+    display: flex;
+    flex: none;
+    gap: 2px;
+    padding: 6px var(--space-2) 0 0;
+  }
+  .tool {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    color: var(--ink-muted);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .tool:hover,
+  .tool.on {
+    background: var(--hover);
+    color: var(--ink);
+  }
+  /* The GIF mark: a small outlined label with the 1.5px line of the icons. */
+  .gif-mark {
+    padding: 1px 3px;
+    border: 1.5px solid currentColor;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 12px;
+    letter-spacing: 0.02em;
   }
   .typing {
     display: flex;

@@ -513,3 +513,18 @@ export const sharedContacts: Record<string, string[]> = {
   'jo@foid.space': ['rin@foid.space', 'kit@foid.space'],
   'bay@foid.space': ['rin@foid.space', 'ivy@foid.space', 'kit@foid.space']
 };
+
+/** Sample GIF results for the picker in the preview. Real results come from KLIPY. */
+export const gifs: import('$lib/chord').Gif[] = [
+  ['wave', 'Wave', 320, 240, '#c47b0c', '#3a2c16'],
+  ['launch', 'Rocket launch', 240, 320, '#0a655c', '#111316'],
+  ['thumbs-up', 'Thumbs up', 320, 180, '#f2a93b', '#21252b'],
+  ['party', 'Party', 280, 280, '#4cc3b5', '#181b20'],
+  ['coffee', 'Coffee time', 320, 200, '#7a4a00', '#111316'],
+  ['fire', 'This is fine', 300, 220, '#f0676b', '#3a2c16'],
+  ['cat', 'Cat typing', 240, 240, '#5bc46e', '#181b20'],
+  ['nod', 'Nod', 320, 260, '#9aa0a8', '#21252b']
+].map(([slug, title, w, h, a, b]) => {
+  const file = { url: pic(w as number, h as number, a as string, b as string), width: w as number, height: h as number };
+  return { slug: slug as string, title: title as string, preview: file, full: file };
+});

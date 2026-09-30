@@ -30,6 +30,18 @@
   />
 </SettingRow>
 
+<h2 class="section">GIFs</h2>
+<SettingRow
+  title="Show the GIF picker"
+  hint="The GIF search goes to KLIPY, so KLIPY sees what you search for and your IP address. A GIF that you send is a link: the people in the chat load it from KLIPY."
+>
+  <Toggle
+    checked={prefs.gifPicker}
+    label="Show the GIF picker"
+    onchange={(v) => prefs.set('gifPicker', v)}
+  />
+</SettingRow>
+
 <h2 class="section">Contact requests</h2>
 <SettingRow
   title="Approve contact requests automatically"

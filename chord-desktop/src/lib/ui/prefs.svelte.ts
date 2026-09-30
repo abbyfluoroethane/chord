@@ -13,6 +13,7 @@ interface Saved {
   autoApprove: boolean;
   display: DisplayMode;
   fontSize: number;
+  gifPicker: boolean;
 }
 
 const LEVELS: NotificationLevel[] = ['all', 'mentions', 'nothing'];
@@ -26,6 +27,8 @@ class Prefs {
   autoApprove = $state(false);
   display = $state<DisplayMode>('cozy');
   fontSize = $state(15);
+  /** The GIF picker sends the search text to KLIPY. On by default, off in Privacy. */
+  gifPicker = $state(true);
 
   load() {
     try {
@@ -39,6 +42,7 @@ class Prefs {
         if (typeof v.muteDms === 'boolean') this.muteDms = v.muteDms;
         if (typeof v.autoApprove === 'boolean') this.autoApprove = v.autoApprove;
         if (v.display === 'cozy' || v.display === 'compact') this.display = v.display;
+        if (typeof v.gifPicker === 'boolean') this.gifPicker = v.gifPicker;
         if (typeof v.fontSize === 'number') this.fontSize = Math.min(20, Math.max(12, v.fontSize));
       }
     } catch {
@@ -59,7 +63,8 @@ class Prefs {
         muteDms: this.muteDms,
         autoApprove: this.autoApprove,
         display: this.display,
-        fontSize: this.fontSize
+        fontSize: this.fontSize,
+        gifPicker: this.gifPicker
       };
       localStorage.setItem(KEY, JSON.stringify(out));
     } catch {

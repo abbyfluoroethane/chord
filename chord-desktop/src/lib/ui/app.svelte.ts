@@ -4,6 +4,7 @@
 import * as fx from '$lib/fixtures/data';
 import type {
   Availability,
+  Gif,
   NotificationSetting,
   SpaceAccess,
   TimelineSubscription
@@ -516,6 +517,30 @@ class AppState {
     }
   }
 
+  /**
+   * Send a GIF as a link with an embed (XEP-0066), so that clients show it inline. Maps to
+   * api.sendLink(to, url). Sample data: the GIF shows as a local attachment.
+   */
+  async sendGif(gif: Gif): Promise<boolean> {
+    const jid = this.selectedJid;
+    if (!jid) return false;
+    if (!live) {
+      this.pushLocal(jid, '');
+      const list = this.list(jid);
+      list[list.length - 1].attachment = {
+        url: gif.full.url,
+        name: gif.title || 'GIF',
+        mime: 'image/gif',
+        size: 0,
+        width: gif.full.width || null,
+        height: gif.full.height || null
+      };
+      return true;
+    }
+    const r = await this.call((b) => b.sendLink(jid, gif.full.url));
+    return r.ok;
+  }
+
   /** Attach a file. Sample data: the file stays local. */
   sendFile(file: File) {
     const list = this.list(this.selectedJid);
@@ -606,7 +631,7 @@ class AppState {
   toggleReaction(id: string, emoji: string) {
     // Count the reactions that we add. A removed one does not count.
     const shown = (this.timelines[this.selectedJid] ?? []).find((x) => x.id === id);
-    if (!shown?.reactions.some((r) => r.emoji === emoji && r.mine)) this.countReaction(emoji);
+    if (!shown?.reactions.some((r) => r.emoji === emoji && r.mine)) this.countEmoji(emoji);
     if (live) {
       void this.call(async (b) => b.toggleReaction(id, emoji));
       return;
@@ -626,7 +651,8 @@ class AppState {
     }
   }
 
-  private countReaction(emoji: string) {
+  /** Count one use of an emoji, for the quick reactions and "Frequently used". */
+  countEmoji(emoji: string) {
     this.reactionUse = bumpReaction(this.reactionUse, emoji);
     if (live) {
       settings.set('reactionUse', $state.snapshot(this.reactionUse));

@@ -7,11 +7,11 @@ import type {
   ChannelItem,
   ChannelScope,
   ChordError,
-  OwnPresence,
   ClientEvent,
   Contact,
-  JoinOutcome,
+  GifPage,
   Jid,
+  JoinOutcome,
   JoinRequest,
   LinkPreview,
   ListDiff,
@@ -19,6 +19,7 @@ import type {
   NotificationLevel,
   NotificationSetting,
   OpenInfo,
+  OwnPresence,
   PendingJoin,
   PushRegistration,
   RoomAffiliation,
@@ -27,7 +28,7 @@ import type {
   SpaceAccess,
   SpaceInfo,
   SpaceItem,
-  TimelineItem,
+  TimelineItem
 } from './types';
 
 /** True if `error` has the shape of a `ChordError`. */
@@ -163,6 +164,8 @@ export const subscribePrivateTimeline = (
 
 /** Send a chat message. Returns its origin-id. */
 export const sendChat = (to: string, body: string) => invoke<string>('send_chat', { to, body });
+/** Send an https link that clients show inline (XEP-0066), for example a GIF. */
+export const sendLink = (to: string, url: string) => invoke<string>('send_link', { to, url });
 export const editMessage = (itemId: string, body: string) =>
   invoke<void>('edit_message', { itemId, body });
 export const retractMessage = (itemId: string) => invoke<void>('retract_message', { itemId });
@@ -300,3 +303,6 @@ export const setSettings = (value: Settings) => invoke<void>('set_settings', { v
 /** Download the image at `url` to `path`. Public addresses only, 50 MB at most. */
 export const saveImage = (url: string, path: string) => invoke<void>('save_image', { url, path });
 export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_preview', { url });
+/** Search KLIPY GIFs, or get the trending ones for an empty query. `page` starts at 1. */
+export const gifSearch = (query: string, page: number) =>
+  invoke<GifPage>('gif_search', { query, page });

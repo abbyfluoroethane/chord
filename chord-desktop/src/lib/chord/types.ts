@@ -293,3 +293,26 @@ export interface LinkPreview {
   imageWidth: number | null;
   imageHeight: number | null;
 }
+
+/** One file of a GIF. Matches gif.rs GifFile. */
+export interface GifFile {
+  url: string;
+  width: number;
+  height: number;
+}
+
+/** One GIF from the KLIPY search. Matches gif.rs Gif. */
+export interface Gif {
+  slug: string;
+  title: string;
+  /** A small file for the picker grid. */
+  preview: GifFile;
+  /** The file to send. */
+  full: GifFile;
+}
+
+/** One page of GIF results. Matches gif.rs GifPage. */
+export interface GifPage {
+  items: Gif[];
+  hasNext: boolean;
+}
