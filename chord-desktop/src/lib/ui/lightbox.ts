@@ -1,6 +1,6 @@
 // Full-screen image viewer: PhotoSwipe 5 (MIT). It loads on the first open only.
 // It pages through the images of the open channel, in timeline order.
-// Motion: open 150ms, close 90ms, the style guide ease-out cubic-bezier(.2,0,0,1),
+// Motion: open 240ms (--dur-arrive), close 120ms (--dur-fast), the style guide ease-out cubic-bezier(.2,0,0,1),
 // and none with reduced motion.
 
 import 'photoswipe/style.css';
@@ -12,8 +12,8 @@ export interface LightboxImage {
 }
 
 const EASE_OUT = 'cubic-bezier(.2, 0, 0, 1)';
-const OPEN_MS = 150;
-const CLOSE_MS = 90;
+const OPEN_MS = 240;
+const CLOSE_MS = 120;
 /** The longest wait for the full photo to decode before the viewer opens. */
 const DECODE_WAIT_MS = 150;
 /** A size for an image that is not measured yet. PhotoSwipe fits it to the screen. */
