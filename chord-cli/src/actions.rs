@@ -352,6 +352,19 @@ pub async fn contact_add(client: &Client, args: &[&str]) -> Result<(), CliError>
     Ok(())
 }
 
+/// `contact-approve <jid>`: accept the subscription request of `jid`. The contact then sees
+/// our presence.
+pub async fn contact_approve(client: &Client, jid: &str) -> Result<(), CliError> {
+    let jid = bare(jid)?;
+    client
+        .handle
+        .approve_subscription(jid.clone())
+        .await
+        .map_err(err)?;
+    println!("approved {jid}");
+    Ok(())
+}
+
 /// `block <jid>`: block an address (XEP-0191).
 pub async fn block(client: &Client, jid: &str) -> Result<(), CliError> {
     let jid = bare(jid)?;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Hover toolbar: react, reply, edit (own messages), more.
+  // Hover toolbar: react, reply, edit (your last message), more.
   import Ellipsis from 'lucide-svelte/icons/ellipsis';
   import Pencil from 'lucide-svelte/icons/pencil';
   import Reply from 'lucide-svelte/icons/reply';

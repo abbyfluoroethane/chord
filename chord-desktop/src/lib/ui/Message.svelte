@@ -118,7 +118,7 @@
   {#if !item.retracted && !editing}
     <div class="toolbar">
       <MessageToolbar
-        own={item.outgoing}
+        own={app.canEdit(item)}
         onreact={(a) => (picker = a)}
         onreply={() => app.startReply(item)}
         onedit={() => (app.editingId = item.id)}

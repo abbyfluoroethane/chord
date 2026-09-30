@@ -17,7 +17,7 @@
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
 //!   space-delete <service> <node> | space-leave <service> <node> | space-pending
 //!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
-//!   contacts | contact-add <jid> [name]
+//!   contacts | contact-add <jid> [name] | contact-approve <jid>
 //!   block <jid> | unblock <jid|--all> | blocked (blocked works --offline)
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
 //!   reply <item-id> <text>          <item-id> is the id in `timeline --json`
@@ -91,7 +91,7 @@ space-create <name> [--private | --authorize] | space-add-room <service> <node> 
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 block <jid> | unblock <jid|--all> | blocked | \
-contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
+contact-add <jid> [name] | contact-approve <jid> | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
@@ -254,6 +254,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "unblock",
         "blocked",
         "contact-add",
+        "contact-approve",
         "edit",
         "retract",
         "react",
@@ -356,6 +357,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("unblock", args) => actions::unblock(&client, args).await,
         ("blocked", []) => actions::blocked(opts, &client).await,
         ("contact-add", args) => actions::contact_add(&client, args).await,
+        ("contact-approve", [jid]) => actions::contact_approve(&client, jid).await,
         ("edit", [item, text]) => actions::edit(&client, item, text).await,
         ("retract", [item]) => actions::retract(&client, item).await,
         ("react", args) => actions::react(&client, args).await,

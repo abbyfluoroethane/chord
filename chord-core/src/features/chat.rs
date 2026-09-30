@@ -206,6 +206,8 @@ pub(crate) fn send_message(ctx: &mut Ctx<'_>, to: Jid, body: String, out: Outgoi
             id: origin_id.clone(),
         });
     message.payloads.extend(message_ext::outgoing_payloads(ctx));
+    // XEP-0184: ask for a receipt. Only a chat message has one, not a room message.
+    message.payloads.push(super::markers::request_payload());
     message.payloads.extend(out.payloads);
     message.id = Some(Id(origin_id.clone()));
     ctx.send(message);
@@ -323,6 +325,52 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect()
+    }
+
+    #[test]
+    fn a_live_request_from_a_contact_gets_a_receipt_and_the_archive_copy_does_not() {
+        use xmpp_parsers::stanza::Stanza;
+        let mut h = Harness::new();
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO contacts (account_id, jid, subscription) VALUES (?1, ?2, 'both')",
+                rusqlite::params![h.account_id, PEER],
+            )
+            .unwrap();
+        let mut m = incoming(Some("m-1"), None);
+        m.payloads.push(super::super::markers::request_payload());
+        h.with_ctx(|ctx| on_message(ctx, &m));
+        let sent = h.take_sent();
+        let [Stanza::Message(receipt)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert!(
+            receipt
+                .payloads
+                .iter()
+                .any(|p| p.is("received", "urn:xmpp:receipts") && p.attr("id") == Some("m-1"))
+        );
+        let mut old = incoming(Some("m-2"), None);
+        old.payloads.push(super::super::markers::request_payload());
+        h.with_ctx(|ctx| store_archived(ctx, &old, "s-2", Some(1000)));
+        assert!(h.take_sent().is_empty());
+    }
+
+    #[test]
+    fn an_outgoing_chat_message_asks_for_a_receipt() {
+        use xmpp_parsers::stanza::Stanza;
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| send(ctx, Jid::new(PEER).unwrap(), "hello".into()));
+        let sent = h.take_sent();
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert!(
+            m.payloads
+                .iter()
+                .any(|p| p.is("request", "urn:xmpp:receipts"))
+        );
     }
 
     #[test]

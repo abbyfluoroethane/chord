@@ -726,6 +726,11 @@ class AppState {
     return null;
   }
 
+  /** Only the last own message of a chat can change (XEP-0308, section 3). */
+  canEdit(m: TimelineItem): boolean {
+    return !!m.body && this.lastOwn()?.id === m.id;
+  }
+
   startReply(m: TimelineItem) {
     this.editingId = null;
     this.replyingTo = m;

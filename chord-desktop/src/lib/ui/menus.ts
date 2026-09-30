@@ -113,7 +113,7 @@ export function messageMenu(
 
   const act: MenuItem[] = [];
   if (!gone) {
-    if (item.outgoing && item.body) {
+    if (app.canEdit(item)) {
       act.push({ label: 'Edit message', icon: Pencil, onselect: () => (app.editingId = item.id) });
     }
     act.push({ label: 'Reply', icon: Reply, onselect: () => app.startReply(item) });

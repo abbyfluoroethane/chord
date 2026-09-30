@@ -8,13 +8,17 @@
 //! A `mark_read` while offline sends its marker at the next session (`on_connected`).
 //! `read_state.marker_sent` holds the newest message that a marker went out for.
 //!
-//! We never send `<received/>` markers on our own, for privacy. `mark_read` sends a
-//! `<displayed/>` marker, because the user asks for it.
+//! XEP-0184 receipts: a 1:1 message of ours carries `<request/>` (`request_payload`). We
+//! answer a `<request/>` with `<received/>` (`after_store`) only for a live message in a
+//! 1:1 chat, from a contact who sees our presence (subscription `from` or `both`). A
+//! stranger gets none, because the answer would show that we are online. A message from the
+//! archive or with a delay, a message of a room, and a private message of a room get none.
+//! `mark_read` sends a `<displayed/>` marker, because the user asks for it.
 
 use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use rusqlite::{OptionalExtension, params};
-use xmpp_parsers::message::{Id, Message};
+use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::minidom::rxml::NcName;
 
@@ -214,9 +218,20 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
                 Ok(false)
             }
         }
-        Direction::In => set_status(ctx, peer, level, target.rowid, false),
-        // A marker from our own account only counts when it says displayed.
-        Direction::Out if level == Level::Displayed && !receipt => {
+        // A marker from the peer of a 1:1 chat (or an occupant of a private chat) names
+        // one of our messages. One room member who read a message says nothing about the
+        // others, so a room keeps the `sent` state (XEP-0333, 5).
+        Direction::In
+            if incoming.kind == MessageKind::Chat && target.direction == Direction::Out =>
+        {
+            set_status(ctx, peer, level, target.rowid, false)
+        }
+        Direction::In => Ok(false),
+        // A marker from our own account only counts when it says displayed, and when it
+        // names a message that we received.
+        Direction::Out
+            if level == Level::Displayed && !receipt && target.direction == Direction::In =>
+        {
             set_last_read(ctx.store, ctx.account_id, peer, target.rowid, true).map(|()| true)
         }
         Direction::Out => Ok(false),
@@ -449,8 +464,72 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
     }
 }
 
-/// A new message is in the store. Nothing to do: we never send a marker on our own.
-pub(crate) fn after_store(_ctx: &mut Ctx<'_>, _incoming: &Incoming<'_>, _stored: &StoredMessage) {}
+/// A new message is in the store. Answer its XEP-0184 `<request/>` when the rules in the
+/// module text allow it.
+pub(crate) fn after_store(
+    ctx: &mut Ctx<'_>,
+    incoming: &Incoming<'_>,
+    _stored: &StoredMessage,
+    live: bool,
+) {
+    let message = incoming.message;
+    if !live
+        || incoming.direction != Direction::In
+        || incoming.kind != MessageKind::Chat
+        || message_ext::is_private(incoming.peer)
+        || message.type_ == MessageType::Groupchat
+        || super::chat::delay_ms(message).is_some()
+        || !message
+            .payloads
+            .iter()
+            .any(|p| p.is("request", NS_RECEIPTS))
+    {
+        return;
+    }
+    // The receipt names the `id` attribute of the message (XEP-0184, section 5.1).
+    let Some(id) = message.id.as_ref().filter(|id| !id.0.is_empty()) else {
+        return;
+    };
+    let Ok(to) = incoming.sender.parse::<Jid>() else {
+        return;
+    };
+    // Only a contact who sees our presence: a stranger would learn that we are online.
+    let sees_us = ctx
+        .store
+        .conn()
+        .query_row(
+            "SELECT 1 FROM contacts WHERE account_id = ?1 AND jid = ?2
+               AND subscription IN ('from', 'both')",
+            params![ctx.account_id, to.to_bare().as_str()],
+            |_| Ok(()),
+        )
+        .optional();
+    match sees_us {
+        Ok(Some(())) => {}
+        Ok(None) => return,
+        Err(e) => {
+            ctx.store_error("read the roster for a receipt", e);
+            return;
+        }
+    }
+    let mut receipt = Message::chat(to);
+    receipt.id = Some(Id(new_id()));
+    receipt.payloads.push(
+        Element::builder("received", NS_RECEIPTS)
+            .attr(nc("id"), id.0.as_str())
+            .build(),
+    );
+    receipt
+        .payloads
+        .push(Element::builder("store", NS_HINTS).build());
+    log::debug!("receipt for {} to {}", id.0, incoming.sender);
+    ctx.send(receipt);
+}
+
+/// The XEP-0184 `<request/>` for a message of ours in a 1:1 chat.
+pub(crate) fn request_payload() -> Element {
+    Element::builder("request", NS_RECEIPTS).build()
+}
 
 /// Payloads for every outgoing message: `<markable/>`.
 pub(crate) fn outgoing_payloads(_ctx: &mut Ctx<'_>) -> Vec<Element> {
@@ -551,6 +630,143 @@ mod tests {
             .unwrap()
     }
 
+    fn contact(h: &Harness, jid: &str, subscription: &str) {
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO contacts (account_id, jid, subscription) VALUES (?1, ?2, ?3)",
+                params![h.account_id, jid, subscription],
+            )
+            .unwrap();
+    }
+
+    fn requesting(id: Option<&str>) -> Message {
+        let mut m = Message::chat(None).with_body("".into(), "hi".into());
+        m.id = id.map(|i| Id(i.into()));
+        m.payloads
+            .push(Element::builder("request", NS_RECEIPTS).build());
+        m
+    }
+
+    /// Run `after_store` for an incoming message. Returns the stanzas that went out.
+    fn receipts(
+        h: &mut Harness,
+        m: &Message,
+        live: bool,
+        kind: MessageKind,
+        peer: &str,
+        sender: &str,
+    ) -> Vec<Stanza> {
+        let incoming = Incoming {
+            message: m,
+            kind,
+            direction: Direction::In,
+            peer,
+            sender,
+            timestamp: None,
+        };
+        let stored = StoredMessage {
+            rowid: 1,
+            kind,
+            key_kind: crate::store::queries::KeyKind::OriginId,
+            key: "k".into(),
+            direction: Direction::In,
+            peer: peer.into(),
+            sender: sender.into(),
+            body: "hi".into(),
+            timestamp: 0,
+        };
+        h.with_ctx(|ctx| after_store(ctx, &incoming, &stored, live));
+        h.take_sent()
+    }
+
+    const FROM: &str = "bob@chord.localhost/laptop";
+
+    #[test]
+    fn a_request_from_a_contact_gets_a_receipt() {
+        let mut h = Harness::new();
+        contact(&h, PEER, "both");
+        let sent = receipts(
+            &mut h,
+            &requesting(Some("m1")),
+            true,
+            MessageKind::Chat,
+            PEER,
+            FROM,
+        );
+        let [Stanza::Message(m)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(m.to, Some(Jid::new(FROM).unwrap()));
+        let (level, id, receipt) = marker_of(m).unwrap();
+        assert!(level == Level::Received && receipt);
+        assert_eq!(id, "m1");
+        // A contact that sees our presence, with no subscription of ours, counts too.
+        let mut h = Harness::new();
+        contact(&h, PEER, "from");
+        let sent = receipts(
+            &mut h,
+            &requesting(Some("m1")),
+            true,
+            MessageKind::Chat,
+            PEER,
+            FROM,
+        );
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn no_receipt_for_a_stranger_or_a_contact_who_cannot_see_us() {
+        let mut h = Harness::new();
+        let m = requesting(Some("m1"));
+        assert!(receipts(&mut h, &m, true, MessageKind::Chat, PEER, FROM).is_empty());
+        contact(&h, PEER, "to");
+        assert!(receipts(&mut h, &m, true, MessageKind::Chat, PEER, FROM).is_empty());
+    }
+
+    #[test]
+    fn no_receipt_for_history_rooms_delays_or_a_message_without_request() {
+        let mut h = Harness::new();
+        contact(&h, PEER, "both");
+        let m = requesting(Some("m1"));
+        // From the archive.
+        assert!(receipts(&mut h, &m, false, MessageKind::Chat, PEER, FROM).is_empty());
+        // A room message.
+        let mut g = requesting(Some("m1"));
+        g.type_ = MessageType::Groupchat;
+        assert!(receipts(&mut h, &g, true, MessageKind::Groupchat, ROOM, PEER).is_empty());
+        // A private message of a room.
+        let private = format!("{ROOM}/bob");
+        assert!(receipts(&mut h, &m, true, MessageKind::Chat, &private, &private).is_empty());
+        // A delayed copy (offline storage).
+        let mut d = requesting(Some("m1"));
+        d.payloads.push(
+            Element::builder("delay", "urn:xmpp:delay")
+                .attr(nc("stamp"), "2026-01-01T00:00:00Z")
+                .build(),
+        );
+        assert!(receipts(&mut h, &d, true, MessageKind::Chat, PEER, FROM).is_empty());
+        // No request, and no id.
+        let plain = Message::chat(None).with_body("".into(), "hi".into());
+        assert!(receipts(&mut h, &plain, true, MessageKind::Chat, PEER, FROM).is_empty());
+        assert!(
+            receipts(
+                &mut h,
+                &requesting(None),
+                true,
+                MessageKind::Chat,
+                PEER,
+                FROM
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_request_payload_is_a_receipts_request() {
+        assert!(request_payload().is("request", NS_RECEIPTS));
+    }
+
     #[test]
     fn adds_markable() {
         let mut h = Harness::new();
@@ -620,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn room_marker_from_another_occupant_marks_own_messages() {
+    fn room_marker_from_another_occupant_leaves_own_messages_alone() {
         let mut h = Harness::new();
         let room = BareJid::new(ROOM).unwrap();
         put(&h, "s1", Direction::Out, MessageKind::Groupchat, ROOM);
@@ -633,8 +849,31 @@ mod tests {
             MessageKind::Groupchat,
             room.as_str()
         ));
-        assert_eq!(statuses(&h), ["displayed"]);
+        assert_eq!(statuses(&h), ["sent"]);
         assert_eq!(last_read(&h, ROOM), None);
+    }
+
+    #[test]
+    fn a_marker_for_a_message_of_the_peer_changes_nothing() {
+        let mut h = Harness::new();
+        let p = peer();
+        put(&h, "a", Direction::Out, MessageKind::Chat, PEER);
+        put(&h, "b", Direction::In, MessageKind::Chat, PEER);
+        // The peer names its own message: it cannot mark ours.
+        let m = marker("displayed", NS_MARKERS, "b");
+        deliver(&mut h, &m, Direction::In, MessageKind::Chat, &p);
+        assert_eq!(statuses(&h), ["sent"]);
+        assert!(h.take_dirty().is_empty());
+    }
+
+    #[test]
+    fn own_displayed_for_our_own_message_is_ignored() {
+        let mut h = Harness::new();
+        let p = peer();
+        put(&h, "a", Direction::Out, MessageKind::Chat, PEER);
+        let m = marker("displayed", NS_MARKERS, "a");
+        deliver(&mut h, &m, Direction::Out, MessageKind::Chat, &p);
+        assert_eq!(last_read(&h, PEER), None);
     }
 
     #[test]

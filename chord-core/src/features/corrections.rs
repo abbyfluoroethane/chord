@@ -13,7 +13,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::stanza_id::OriginId;
 
 use super::message_ext::{self, Incoming};
-use super::{Ctx, new_id};
+use super::{Ctx, new_id, orphans};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, Direction, MessageKind, MessageRow};
 
@@ -36,8 +36,9 @@ impl ClientHandle {
     /// `TimelineItem::id` of the message. The row changes at once, and a correction
     /// goes to the peer or the room.
     ///
-    /// Fails with `Invalid` for a message from another sender, a retracted message, and a
-    /// room that we have not joined.
+    /// Fails with `Invalid` for a message from another sender, a retracted message, a
+    /// message that is not our last one in its chat (XEP-0308, section 3), and a room that
+    /// we have not joined.
     pub async fn edit_message(&self, item_id: String, body: String) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(super::FeatureCommand::Corrections(Command::Edit {
@@ -135,6 +136,13 @@ fn edit(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), ClientErro
     if body.is_empty() {
         return Err(ClientError::Invalid("the new text is empty".into()));
     }
+    // XEP-0308, section 3: only the last message of the sender. Other clients ignore a
+    // correction of an older message, so we do not send one.
+    if !is_last_own(ctx, &row)? {
+        return Err(ClientError::Invalid(
+            "only the last message of the chat can change".into(),
+        ));
+    }
     let original = original_id(&row)
         .ok_or_else(|| ClientError::Invalid("the message has no id".into()))?
         .to_owned();
@@ -146,6 +154,22 @@ fn edit(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), ClientErro
     message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
     apply(ctx, &row, &body, None);
     Ok(())
+}
+
+/// True if `row` is the last of our own messages in its chat, room, or private chat, not
+/// counting retracted ones. The desktop UI offers an edit for this message only.
+fn is_last_own(ctx: &Ctx<'_>, row: &MessageRow) -> Result<bool, ClientError> {
+    let last: Option<i64> = ctx
+        .store
+        .conn()
+        .query_row(
+            "SELECT MAX(id) FROM messages
+             WHERE account_id = ?1 AND peer = ?2 AND direction = 'out' AND retracted_at IS NULL",
+            params![ctx.account_id, row.peer],
+            |r| r.get(0),
+        )
+        .map_err(|e| ClientError::Invalid(format!("store: {e}")))?;
+    Ok(last == Some(row.rowid))
 }
 
 /// Set the edited text of a message, unless a newer edit is there already. Marks the
@@ -169,8 +193,9 @@ fn apply(ctx: &mut Ctx<'_>, row: &MessageRow, body: &str, timestamp: Option<i64>
 }
 
 /// A message that corrects an earlier message. Returns true if this module handled it, so
-/// that no new timeline row appears. A correction with no known target is a new message
-/// (XEP-0308, section 3.1), so it returns false.
+/// that no new timeline row appears. A live correction with no known target is a new
+/// message (XEP-0308, section 3.1), so it returns false. One with a time (history) waits
+/// for its target.
 pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let Some(replace) = incoming
         .message
@@ -191,6 +216,12 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     );
     let row = match target {
         Ok(Some(row)) => row,
+        // A correction from the archive or a delay (it has a time) can run ahead of its
+        // original: keep it for the original. A live one is a new message (section 3.1).
+        Ok(None) if incoming.timestamp.is_some() => {
+            orphans::stash(ctx, incoming, &replace.id.0, orphans::Change::Edit);
+            return true;
+        }
         Ok(None) => return false,
         Err(e) => {
             ctx.store_error("find the message to correct", e);
@@ -333,7 +364,18 @@ pub(crate) mod tests {
     fn edit_before_target_falls_through() {
         let mut h = Harness::new();
         let m = correction("missing", "new");
-        assert!(!deliver(&mut h, &m, BOB));
+        // A live correction (no time) with no target is a new message.
+        let incoming = Incoming {
+            message: &m,
+            kind: MessageKind::Chat,
+            direction: Direction::In,
+            peer: BOB,
+            sender: BOB,
+            timestamp: None,
+        };
+        assert!(!h.with_ctx(|ctx| on_message(ctx, &incoming)));
+        // One from the archive waits for its target (orphans.rs).
+        assert!(deliver(&mut h, &m, BOB));
     }
 
     #[test]
@@ -403,6 +445,32 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(replace.id.0, "m1");
         assert_eq!(row(&h, &item).body, "fixed");
+    }
+
+    #[test]
+    fn only_the_last_own_message_can_change() {
+        let mut h = Harness::new();
+        let me = "alice@chord.localhost";
+        let first = store_row(&h, MessageKind::Chat, Direction::Out, BOB, me, "m1", None);
+        let second = store_row(&h, MessageKind::Chat, Direction::Out, BOB, me, "m2", None);
+        // A message of the peer in between does not count.
+        store_row(&h, MessageKind::Chat, Direction::In, BOB, BOB, "p1", None);
+        // The same id in another chat does not count.
+        store_row(
+            &h,
+            MessageKind::Chat,
+            Direction::Out,
+            "eve@chord.localhost",
+            me,
+            "m3",
+            None,
+        );
+        assert!(h.with_ctx(|ctx| edit(ctx, &first, "x".into())).is_err());
+        assert!(h.take_sent().is_empty());
+        assert_eq!(row(&h, &first).body, "old");
+        h.with_ctx(|ctx| edit(ctx, &second, "fixed".into()))
+            .unwrap();
+        assert_eq!(row(&h, &second).body, "fixed");
     }
 
     #[test]
