@@ -8,20 +8,20 @@ This file tracks the fixes from the audit of 2026-09-30. Nine read-only agents c
 
 | Area | Report | High | Medium | Low | Info | Done |
 |---|---|---|---|---|---|---|
-| RFC 6120 and RFC 6121 core session audit | [01-core-session.md](01-core-session.md) | 1 | 7 | 10 | 4 | 1 |
-| One-to-one messaging extensions | [02-messaging.md](02-messaging.md) | 3 | 7 | 10 | 5 | 3 |
-| XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 2 |
-| XEP-0503 Spaces, Pubsub, Avatars, Profiles, Bookmarks, and xmpp: URIs | [04-spaces-pubsub.md](04-spaces-pubsub.md) | 0 | 7 | 20 | 3 | 0 |
-| End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 1 |
-| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 6 |
-| Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 2 |
-| Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 2 |
-| Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 2 |
-| **All** | | **19** | **77** | **97** | **25** | **19** |
+| RFC 6120 and RFC 6121 core session audit | [01-core-session.md](01-core-session.md) | 1 | 7 | 10 | 4 | 8 |
+| One-to-one messaging extensions | [02-messaging.md](02-messaging.md) | 3 | 7 | 10 | 5 | 9 |
+| XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 11 |
+| XEP-0503 Spaces, Pubsub, Avatars, Profiles, Bookmarks, and xmpp: URIs | [04-spaces-pubsub.md](04-spaces-pubsub.md) | 0 | 7 | 20 | 3 | 6 |
+| End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 3 |
+| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 13 |
+| Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 12 |
+| Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 7 |
+| Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 5 |
+| **All** | | **19** | **77** | **97** | **25** | **74** |
 
 No finding is Critical. Update the Done column when you tick boxes.
 
-On 2026-09-30, all 19 High findings closed. The Android app work of CALLSPUSHPRESENCE-07 (#118) moved to #198. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
+On 2026-09-30, all 19 High findings closed. The Android app work of CALLSPUSHPRESENCE-07 (#118) moved to #198. Later that night, 55 of the 77 Medium findings closed. The 22 open Medium findings wait for an epic (OMEMO #194, sign-in #196, calls #195, Android #198), for a decision (#199, #200), or have a partial fix with the rest named in the issue. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
 
 ## Decisions needed
 
@@ -36,20 +36,20 @@ On 2026-09-30, all 19 High findings closed. The Android app work of CALLSPUSHPRE
 - [x] Keep a 1:1 message that has no stanza-id and no origin-id (MESSAGING-02).
 - [x] Show a bounced message (`type=error`) as failed, with a retry (MESSAGING-03).
 - [x] Add and remove room bookmarks from the desktop app, so a room that the user leaves stays gone (MUC-01, MUC-02).
-- [ ] Save the display name for real, or remove the field (SPACESPUBSUB-05).
+- [x] Save the display name for real, or remove the field (SPACESPUBSUB-05).
 - [x] Make the header search work, or remove it until it works (DESKTOPGAPS-01).
 - [x] Read the five notification settings in the app and the bridge (DESKTOPGAPS-02).
 
 ### Wave 2: compliance quick wins (about 2 to 3 days)
 
-- [ ] Advertise the features that Chord implements in disco#info and caps: markers, corrections, retraction, reactions, replies, fallback, OOB, hints, direct invites. Stop advertising MAM (MESSAGING-01, CORESESSION-08, COMPLIANCEXEPS-07).
+- [x] Advertise the features that Chord implements in disco#info and caps: markers, corrections, retraction, reactions, replies, fallback, OOB, hints, direct invites. Stop advertising MAM (MESSAGING-01, CORESESSION-08, COMPLIANCEXEPS-07).
 - [x] Send a roster version only when the server offers `rosterver` (CORESESSION-01, RFC 6121 2.6.2).
 - [x] Add Client State Indication, XEP-0352 (CALLSPUSHPRESENCE-06, COMPLIANCEXEPS-01).
-- [ ] Add client ping, XEP-0199, and shorter dead-connection detection (CORESESSION-06, CORESESSION-07).
+- [x] Add client ping, XEP-0199, and shorter dead-connection detection (CORESESSION-06, CORESESSION-07).
 - [x] Show `/me` messages as actions, XEP-0245 (COMPLIANCEXEPS-02).
-- [ ] Send delivery receipts, XEP-0184 (MESSAGING-05).
-- [ ] Add direct TLS and the `_xmpps-client` SRV lookup, XEP-0368 (CORESESSION-02, COMPLIANCEXEPS-03).
-- [ ] Add MUC self-ping and a join timeout, XEP-0410 (MUC-03).
+- [x] Send delivery receipts, XEP-0184 (MESSAGING-05).
+- [x] Add direct TLS and the `_xmpps-client` SRV lookup, XEP-0368 (CORESESSION-02, COMPLIANCEXEPS-03).
+- [x] Add MUC self-ping and a join timeout, XEP-0410 (MUC-03).
 
 ### Large features (weeks each)
 
@@ -73,13 +73,13 @@ Report: [01-core-session.md](01-core-session.md)
 
 **Medium**
 
-- [ ] **CORESESSION-02** ([#2](https://github.com/abbyfluoroethane/chord/issues/2)) (Missing XEP, XEP-0368, RFC 7590): Add a `ServerAddr::DirectTls` variant.
-- [ ] **CORESESSION-03** ([#3](https://github.com/abbyfluoroethane/chord/issues/3)) (Bug (Unverified interop risk), XEP-0440): If a server lists only `tls-unique` in `sasl-channel-binding`, but offers -PLUS, the attempt can fail with `not-authorized`.
-- [ ] **CORESESSION-06** ([#6](https://github.com/abbyfluoroethane/chord/issues/6)) (Missing XEP, XEP-0352): Add a `set_client_state(active/inactive)` command.
-- [ ] **CORESESSION-07** ([#7](https://github.com/abbyfluoroethane/chord/issues/7)) (Bug, XEP-0199, XEP-0198): A dead TCP link can stay unnoticed for up to 10 minutes.
-- [ ] **CORESESSION-08** ([#8](https://github.com/abbyfluoroethane/chord/issues/8)) (Bug, XEP-0030, XEP-0115): Other clients cannot see that Chord supports these features.
-- [ ] **CORESESSION-12** ([#12](https://github.com/abbyfluoroethane/chord/issues/12)) (Bug (Unverified), RFC 6120 8.2.3, 4.9.3): A peer that gets a malformed IQ or message through the server can kill our session on each delivery.
-- [ ] **CORESESSION-13** ([#13](https://github.com/abbyfluoroethane/chord/issues/13)) (Bug (Unverified), XEP-0198 section 5): A message that was queued when the stream died without a resume can vanish.
+- [x] **CORESESSION-02** ([#2](https://github.com/abbyfluoroethane/chord/issues/2)) (Missing XEP, XEP-0368, RFC 7590): Add a `ServerAddr::DirectTls` variant.
+- [x] **CORESESSION-03** ([#3](https://github.com/abbyfluoroethane/chord/issues/3)) (Bug (Unverified interop risk), XEP-0440): If a server lists only `tls-unique` in `sasl-channel-binding`, but offers -PLUS, the attempt can fail with `not-authorized`.
+- [x] **CORESESSION-06** ([#6](https://github.com/abbyfluoroethane/chord/issues/6)) (Missing XEP, XEP-0352): Add a `set_client_state(active/inactive)` command.
+- [x] **CORESESSION-07** ([#7](https://github.com/abbyfluoroethane/chord/issues/7)) (Bug, XEP-0199, XEP-0198): A dead TCP link can stay unnoticed for up to 10 minutes.
+- [x] **CORESESSION-08** ([#8](https://github.com/abbyfluoroethane/chord/issues/8)) (Bug, XEP-0030, XEP-0115): Other clients cannot see that Chord supports these features.
+- [x] **CORESESSION-12** ([#12](https://github.com/abbyfluoroethane/chord/issues/12)) (Bug (Unverified), RFC 6120 8.2.3, 4.9.3): A peer that gets a malformed IQ or message through the server can kill our session on each delivery.
+- [x] **CORESESSION-13** ([#13](https://github.com/abbyfluoroethane/chord/issues/13)) (Bug (Unverified), XEP-0198 section 5): A message that was queued when the stream died without a resume can vanish.
 
 **Low**
 
@@ -113,13 +113,13 @@ Report: [02-messaging.md](02-messaging.md)
 
 **Medium**
 
-- [ ] **MESSAGING-04** ([#22](https://github.com/abbyfluoroethane/chord/issues/22)) (Bug, XEP-0308, XEP-0424, XEP-0444): Keep orphan edits, retractions and reactions in a small table by target id.
-- [ ] **MESSAGING-05** ([#23](https://github.com/abbyfluoroethane/chord/issues/23)) (Missing feature, XEP-0184): Add an option: send `<received/>` for incoming `<request/>` (1:1 only, not for strangers).
-- [ ] **MESSAGING-06** ([#24](https://github.com/abbyfluoroethane/chord/issues/24)) (Missing XEP, XEP-0446, XEP-0447): Send `<file-sharing>` with `<file>` metadata (name, size, media-type, hash) and the HTTP source.
+- [x] **MESSAGING-04** ([#22](https://github.com/abbyfluoroethane/chord/issues/22)) (Bug, XEP-0308, XEP-0424, XEP-0444): Keep orphan edits, retractions and reactions in a small table by target id.
+- [x] **MESSAGING-05** ([#23](https://github.com/abbyfluoroethane/chord/issues/23)) (Missing feature, XEP-0184): Add an option: send `<received/>` for incoming `<request/>` (1:1 only, not for strangers).
+- [x] **MESSAGING-06** ([#24](https://github.com/abbyfluoroethane/chord/issues/24)) (Missing XEP, XEP-0446, XEP-0447): Send `<file-sharing>` with `<file>` metadata (name, size, media-type, hash) and the HTTP source.
 - [ ] **MESSAGING-07** ([#25](https://github.com/abbyfluoroethane/chord/issues/25)) (UX gap, XEP-0393, XEP-0394): Peers that use XEP-0393 send `*bold*` and `~strike~`.
-- [ ] **MESSAGING-08** ([#26](https://github.com/abbyfluoroethane/chord/issues/26)) (Bug, XEP-0333 5): In a room, mark only when the marker sender is the peer of a 1:1 chat.
-- [ ] **MESSAGING-09** ([#27](https://github.com/abbyfluoroethane/chord/issues/27)) (Bug, XEP-0308): XEP-0308 section 3 says only the last message.
-- [ ] **MESSAGING-10** ([#28](https://github.com/abbyfluoroethane/chord/issues/28)) (Bug, XEP-0363): Whole file sits in memory, and again when it is copied to the request.
+- [x] **MESSAGING-08** ([#26](https://github.com/abbyfluoroethane/chord/issues/26)) (Bug, XEP-0333 5): In a room, mark only when the marker sender is the peer of a 1:1 chat.
+- [x] **MESSAGING-09** ([#27](https://github.com/abbyfluoroethane/chord/issues/27)) (Bug, XEP-0308): XEP-0308 section 3 says only the last message.
+- [x] **MESSAGING-10** ([#28](https://github.com/abbyfluoroethane/chord/issues/28)) (Bug, XEP-0363): Whole file sits in memory, and again when it is copied to the request.
 
 **Low**
 
@@ -153,15 +153,15 @@ Report: [03-muc.md](03-muc.md)
 
 **Medium**
 
-- [ ] **MUC-03** ([#41](https://github.com/abbyfluoroethane/chord/issues/41)) (Missing XEP, XEP-0410): After a resume, after a long idle time and on a timer, ping the room JID with the nick.
-- [ ] **MUC-04** ([#42](https://github.com/abbyfluoroethane/chord/issues/42)) (UX gap, XEP-0045 section 7.8.2, XEP-0249): Show an invite card with Accept and Decline.
-- [ ] **MUC-05** ([#43](https://github.com/abbyfluoroethane/chord/issues/43)) (Missing feature, XEP-0045 section 10.9): Read the `destroy` child in an unavailable presence (raw Element).
-- [ ] **MUC-06** ([#44](https://github.com/abbyfluoroethane/chord/issues/44)) (UX gap, XEP-0045 sections 7.2.5, 7.2.6, 7.2.9): On `not-authorized`, ask for a password and retry.
-- [ ] **MUC-07** ([#45](https://github.com/abbyfluoroethane/chord/issues/45)) (Missing feature, XEP-0045 section 8.1): Add `set_room_subject`.
-- [ ] **MUC-08** ([#46](https://github.com/abbyfluoroethane/chord/issues/46)) (Missing feature, XEP-0045 sections 8.2, 8.3, 9.1, 9.2): Add `set_room_role` (kick = role none, mute = visitor, grant voice = participant).
-- [ ] **MUC-09** ([#47](https://github.com/abbyfluoroethane/chord/issues/47)) (Missing feature, XEP-0045 sections 7.10, 7.12): Read the reserved nick with disco#info node `x-roomuser-item` before the first join.
-- [ ] **MUC-10** ([#48](https://github.com/abbyfluoroethane/chord/issues/48)) (Missing feature, XEP-0045 section 10.2, `muc#roomconfig`): Show the whole owner form (a generic data form renderer).
-- [ ] **MUC-11** ([#49](https://github.com/abbyfluoroethane/chord/issues/49)) (Missing feature, XEP-0045 section 7.9): Show visitors in the member list.
+- [x] **MUC-03** ([#41](https://github.com/abbyfluoroethane/chord/issues/41)) (Missing XEP, XEP-0410): After a resume, after a long idle time and on a timer, ping the room JID with the nick.
+- [x] **MUC-04** ([#42](https://github.com/abbyfluoroethane/chord/issues/42)) (UX gap, XEP-0045 section 7.8.2, XEP-0249): Show an invite card with Accept and Decline.
+- [x] **MUC-05** ([#43](https://github.com/abbyfluoroethane/chord/issues/43)) (Missing feature, XEP-0045 section 10.9): Read the `destroy` child in an unavailable presence (raw Element).
+- [x] **MUC-06** ([#44](https://github.com/abbyfluoroethane/chord/issues/44)) (UX gap, XEP-0045 sections 7.2.5, 7.2.6, 7.2.9): On `not-authorized`, ask for a password and retry.
+- [x] **MUC-07** ([#45](https://github.com/abbyfluoroethane/chord/issues/45)) (Missing feature, XEP-0045 section 8.1): Add `set_room_subject`.
+- [x] **MUC-08** ([#46](https://github.com/abbyfluoroethane/chord/issues/46)) (Missing feature, XEP-0045 sections 8.2, 8.3, 9.1, 9.2): Add `set_room_role` (kick = role none, mute = visitor, grant voice = participant).
+- [x] **MUC-09** ([#47](https://github.com/abbyfluoroethane/chord/issues/47)) (Missing feature, XEP-0045 sections 7.10, 7.12): Read the reserved nick with disco#info node `x-roomuser-item` before the first join.
+- [x] **MUC-10** ([#48](https://github.com/abbyfluoroethane/chord/issues/48)) (Missing feature, XEP-0045 section 10.2, `muc#roomconfig`): Show the whole owner form (a generic data form renderer).
+- [x] **MUC-11** ([#49](https://github.com/abbyfluoroethane/chord/issues/49)) (Missing feature, XEP-0045 section 7.9): Show visitors in the member list.
 
 **Low**
 
@@ -188,13 +188,13 @@ Report: [04-spaces-pubsub.md](04-spaces-pubsub.md)
 
 **Medium**
 
-- [ ] **SPACESPUBSUB-01** ([#61](https://github.com/abbyfluoroethane/chord/issues/61)) (Bug, XEP-0060 6.2, 5.6): At start, list the distinct services in the `spaces` table.
+- [x] **SPACESPUBSUB-01** ([#61](https://github.com/abbyfluoroethane/chord/issues/61)) (Bug, XEP-0060 6.2, 5.6): At start, list the distinct services in the `spaces` table.
 - [ ] **SPACESPUBSUB-02** ([#62](https://github.com/abbyfluoroethane/chord/issues/62)) (Security, RFC 6120 (privacy of s2s), n/a): Do not query a domain that the user has no relation to until the user clicks.
-- [ ] **SPACESPUBSUB-03** ([#63](https://github.com/abbyfluoroethane/chord/issues/63)) (UX gap, XEP-0060 6.5.4, 4.5): Separate "the node does not exist" (item-not-found) from "the server refuses" (forbidden, not-allowed).
-- [ ] **SPACESPUBSUB-04** ([#64](https://github.com/abbyfluoroethane/chord/issues/64)) (Missing feature, XEP-0503 (Membership advertising)): When the owner adds a room to a space, set `muc#roomconfig_pubsub` to `xmpp:SERVICE?;node=NODE` in the room config.
-- [ ] **SPACESPUBSUB-05** ([#65](https://github.com/abbyfluoroethane/chord/issues/65)) (Bug, XEP-0054, XEP-0292, XEP-0172): Remove the false "Saved." message now.
-- [ ] **SPACESPUBSUB-06** ([#66](https://github.com/abbyfluoroethane/chord/issues/66)) (Missing XEP, XEP-0292 (vCard4 over XMPP), XEP-0163): Plan XEP-0292 read (and later write).
-- [ ] **SPACESPUBSUB-08** ([#68](https://github.com/abbyfluoroethane/chord/issues/68)) (Missing XEP, XEP-0490): Publish `urn:xmpp:mds:displayed:0` items with the stanza-id on `mark_read`.
+- [x] **SPACESPUBSUB-03** ([#63](https://github.com/abbyfluoroethane/chord/issues/63)) (UX gap, XEP-0060 6.5.4, 4.5): Separate "the node does not exist" (item-not-found) from "the server refuses" (forbidden, not-allowed).
+- [x] **SPACESPUBSUB-04** ([#64](https://github.com/abbyfluoroethane/chord/issues/64)) (Missing feature, XEP-0503 (Membership advertising)): When the owner adds a room to a space, set `muc#roomconfig_pubsub` to `xmpp:SERVICE?;node=NODE` in the room config.
+- [x] **SPACESPUBSUB-05** ([#65](https://github.com/abbyfluoroethane/chord/issues/65)) (Bug, XEP-0054, XEP-0292, XEP-0172): Remove the false "Saved." message now.
+- [x] **SPACESPUBSUB-06** ([#66](https://github.com/abbyfluoroethane/chord/issues/66)) (Missing XEP, XEP-0292 (vCard4 over XMPP), XEP-0163): Plan XEP-0292 read (and later write).
+- [x] **SPACESPUBSUB-08** ([#68](https://github.com/abbyfluoroethane/chord/issues/68)) (Missing XEP, XEP-0490): Publish `urn:xmpp:mds:displayed:0` items with the stanza-id on `mark_read`.
 
 **Low**
 
@@ -247,9 +247,9 @@ Report: [05-security-auth.md](05-security-auth.md)
 - [ ] **SECURITYAUTH-13** ([#100](https://github.com/abbyfluoroethane/chord/issues/100)) (UX gap, RFC 7590 / RFC 6120 13.7): Add an opt-in per-account pin (TOFU): show the SHA-256 fingerprint, store it, and compare it on later connects.
 - [ ] **SECURITYAUTH-17** ([#104](https://github.com/abbyfluoroethane/chord/issues/104)) (Security): Unverified: the Android app may use the Android Keystore.
 - [ ] **SECURITYAUTH-18** ([#105](https://github.com/abbyfluoroethane/chord/issues/105)) (Missing XEP, XEP-0077 (in-band registration)): Add a `register` flow before login: read the form (`jabber:iq:register`, or the XEP-0004 data form), submit it, then log in.
-- [ ] **SECURITYAUTH-19** ([#106](https://github.com/abbyfluoroethane/chord/issues/106)) (Missing feature, XEP-0077 section 3.3 (change password)): Add `change_password`.
+- [x] **SECURITYAUTH-19** ([#106](https://github.com/abbyfluoroethane/chord/issues/106)) (Missing feature, XEP-0077 section 3.3 (change password)): Add `change_password`.
 - [ ] **SECURITYAUTH-21** ([#108](https://github.com/abbyfluoroethane/chord/issues/108)) (Missing XEP, XEP-0401 (easy onboarding) and XEP-0445): Parse `xmpp:domain?register;preauth=TOKEN` and `xmpp:jid?roster;preauth=TOKEN`.
-- [ ] **SECURITYAUTH-22** ([#109](https://github.com/abbyfluoroethane/chord/issues/109)) (Missing XEP, XEP-0379 (pre-authenticated roster subscription)): Add a `preauth` token to `add_contact`.
+- [x] **SECURITYAUTH-22** ([#109](https://github.com/abbyfluoroethane/chord/issues/109)) (Missing XEP, XEP-0379 (pre-authenticated roster subscription)): Add a `preauth` token to `add_contact`.
 
 **Low**
 
@@ -283,14 +283,14 @@ Report: [06-calls-push-presence.md](06-calls-push-presence.md)
 
 - [ ] **CALLSPUSHPRESENCE-04** ([#115](https://github.com/abbyfluoroethane/chord/issues/115)) (Missing feature, XEP-0272 (Muji) or SFU): Decide the design first.
 - [ ] **CALLSPUSHPRESENCE-05** ([#116](https://github.com/abbyfluoroethane/chord/issues/116)) (Missing feature, XEP-0166 (screen share as a second content)): Do this after 1:1 calls.
-- [ ] **CALLSPUSHPRESENCE-08** ([#119](https://github.com/abbyfluoroethane/chord/issues/119)) (Bug, XEP-0357 section 4): On connect, do not trust the local table.
-- [ ] **CALLSPUSHPRESENCE-09** ([#120](https://github.com/abbyfluoroethane/chord/issues/120)) (Spec violation, XEP-0357 section 5 (publish options)): Low risk.
-- [ ] **CALLSPUSHPRESENCE-10** ([#121](https://github.com/abbyfluoroethane/chord/issues/121)) (Bug, XEP-0016, XEP-0126): Check `disco.server_has("jabber:iq:privacy")` first.
-- [ ] **CALLSPUSHPRESENCE-11** ([#122](https://github.com/abbyfluoroethane/chord/issues/122)) (Missing XEP, XEP-0186): Add XEP-0186 (`urn:xmpp:invisible:0`) as the first choice when the server advertises it.
-- [ ] **CALLSPUSHPRESENCE-14** ([#125](https://github.com/abbyfluoroethane/chord/issues/125)) (Missing XEP, XEP-0319): Send `<idle since=.../>` in presence when the OS reports idle.
+- [x] **CALLSPUSHPRESENCE-08** ([#119](https://github.com/abbyfluoroethane/chord/issues/119)) (Bug, XEP-0357 section 4): On connect, do not trust the local table.
+- [x] **CALLSPUSHPRESENCE-09** ([#120](https://github.com/abbyfluoroethane/chord/issues/120)) (Spec violation, XEP-0357 section 5 (publish options)): Low risk.
+- [x] **CALLSPUSHPRESENCE-10** ([#121](https://github.com/abbyfluoroethane/chord/issues/121)) (Bug, XEP-0016, XEP-0126): Check `disco.server_has("jabber:iq:privacy")` first.
+- [x] **CALLSPUSHPRESENCE-11** ([#122](https://github.com/abbyfluoroethane/chord/issues/122)) (Missing XEP, XEP-0186): Add XEP-0186 (`urn:xmpp:invisible:0`) as the first choice when the server advertises it.
+- [x] **CALLSPUSHPRESENCE-14** ([#125](https://github.com/abbyfluoroethane/chord/issues/125)) (Missing XEP, XEP-0319): Send `<idle since=.../>` in presence when the OS reports idle.
 - [ ] **CALLSPUSHPRESENCE-16** ([#127](https://github.com/abbyfluoroethane/chord/issues/127)) (Missing XEP, XEP-0107, XEP-0108, XEP-0118 (PEP)): For Discord activities ("Playing X", "Listening to Y"), use XEP-0118 (tune) and XEP-0108 (activity).
-- [ ] **CALLSPUSHPRESENCE-17** ([#128](https://github.com/abbyfluoroethane/chord/issues/128)) (Missing feature, XEP-0004 (rendering)): Add a generic XEP-0004 form renderer (text, boolean, list, jid, hidden, fixed).
-- [ ] **CALLSPUSHPRESENCE-18** ([#129](https://github.com/abbyfluoroethane/chord/issues/129)) (Missing XEP, XEP-0050): Add ad-hoc commands: list with disco, execute, and step through forms.
+- [x] **CALLSPUSHPRESENCE-17** ([#128](https://github.com/abbyfluoroethane/chord/issues/128)) (Missing feature, XEP-0004 (rendering)): Add a generic XEP-0004 form renderer (text, boolean, list, jid, hidden, fixed).
+- [x] **CALLSPUSHPRESENCE-18** ([#129](https://github.com/abbyfluoroethane/chord/issues/129)) (Missing XEP, XEP-0050): Add ad-hoc commands: list with disco, execute, and step through forms.
 
 **Low**
 
@@ -317,16 +317,16 @@ Report: [07-desktop-gaps.md](07-desktop-gaps.md)
 
 **Medium**
 
-- [ ] **DESKTOPGAPS-03** ([#137](https://github.com/abbyfluoroethane/chord/issues/137)) (Bug): Read the setting in Rust.
-- [ ] **DESKTOPGAPS-04** ([#138](https://github.com/abbyfluoroethane/chord/issues/138)) (Bug): Move prefs to `get_settings` and `set_settings`.
-- [ ] **DESKTOPGAPS-05** ([#139](https://github.com/abbyfluoroethane/chord/issues/139)) (Missing feature): Add @nick autocomplete from `app.members`.
-- [ ] **DESKTOPGAPS-06** ([#140](https://github.com/abbyfluoroethane/chord/issues/140)) (Missing feature): Save drafts through `settings`.
-- [ ] **DESKTOPGAPS-07** ([#141](https://github.com/abbyfluoroethane/chord/issues/141)) (Missing feature, XEP-0363): Add drop and paste on the composer and message list.
-- [ ] **DESKTOPGAPS-08** ([#142](https://github.com/abbyfluoroethane/chord/issues/142)) (Bug): Fine for the preview.
-- [ ] **DESKTOPGAPS-09** ([#143](https://github.com/abbyfluoroethane/chord/issues/143)) (UX gap): Add a rename call in the core and the bridge.
-- [ ] **DESKTOPGAPS-11** ([#145](https://github.com/abbyfluoroethane/chord/issues/145)) (Missing feature, XEP-0045 s10.1): Add "Set topic" (subject message, XEP-0045 section 8.1) for members with the right.
-- [ ] **DESKTOPGAPS-12** ([#146](https://github.com/abbyfluoroethane/chord/issues/146)) (UX gap, XEP-0045 s10.1, s8.2): Add "Kick" and "Mute" to the menu.
-- [ ] **DESKTOPGAPS-18** ([#152](https://github.com/abbyfluoroethane/chord/issues/152)) (Missing feature): Use XEP-0223 or a bookmark node for pins.
+- [x] **DESKTOPGAPS-03** ([#137](https://github.com/abbyfluoroethane/chord/issues/137)) (Bug): Read the setting in Rust.
+- [x] **DESKTOPGAPS-04** ([#138](https://github.com/abbyfluoroethane/chord/issues/138)) (Bug): Move prefs to `get_settings` and `set_settings`.
+- [x] **DESKTOPGAPS-05** ([#139](https://github.com/abbyfluoroethane/chord/issues/139)) (Missing feature): Add @nick autocomplete from `app.members`.
+- [x] **DESKTOPGAPS-06** ([#140](https://github.com/abbyfluoroethane/chord/issues/140)) (Missing feature): Save drafts through `settings`.
+- [x] **DESKTOPGAPS-07** ([#141](https://github.com/abbyfluoroethane/chord/issues/141)) (Missing feature, XEP-0363): Add drop and paste on the composer and message list.
+- [x] **DESKTOPGAPS-08** ([#142](https://github.com/abbyfluoroethane/chord/issues/142)) (Bug): Fine for the preview.
+- [x] **DESKTOPGAPS-09** ([#143](https://github.com/abbyfluoroethane/chord/issues/143)) (UX gap): Add a rename call in the core and the bridge.
+- [x] **DESKTOPGAPS-11** ([#145](https://github.com/abbyfluoroethane/chord/issues/145)) (Missing feature, XEP-0045 s10.1): Add "Set topic" (subject message, XEP-0045 section 8.1) for members with the right.
+- [x] **DESKTOPGAPS-12** ([#146](https://github.com/abbyfluoroethane/chord/issues/146)) (UX gap, XEP-0045 s10.1, s8.2): Add "Kick" and "Mute" to the menu.
+- [x] **DESKTOPGAPS-18** ([#152](https://github.com/abbyfluoroethane/chord/issues/152)) (Missing feature): Use XEP-0223 or a bookmark node for pins.
 
 **Low**
 
@@ -363,12 +363,12 @@ Report: [08-bridge-security.md](08-bridge-security.md)
 
 **Medium**
 
-- [ ] **BRIDGESECURITY-03** ([#165](https://github.com/abbyfluoroethane/chord/issues/165)) (Security): Attack: a stranger in a public room sends a message with an XEP-0066 URL (`message_ext.rs:76` takes any string).
-- [ ] **BRIDGESECURITY-04** ([#166](https://github.com/abbyfluoroethane/chord/issues/166)) (Security): The Rust side fetches the page with the SSRF filter, but the webview then loads the `og:image` URL from the user's IP with no filter.
-- [ ] **BRIDGESECURITY-05** ([#167](https://github.com/abbyfluoroethane/chord/issues/167)) (Security): Attack: a user imports a theme from a GitHub raw link.
-- [ ] **BRIDGESECURITY-06** ([#168](https://github.com/abbyfluoroethane/chord/issues/168)) (Security): Attack: the sender sets an OOB URL to `https://evil.example/login` with an unknown extension.
+- [x] **BRIDGESECURITY-03** ([#165](https://github.com/abbyfluoroethane/chord/issues/165)) (Security): Attack: a stranger in a public room sends a message with an XEP-0066 URL (`message_ext.rs:76` takes any string).
+- [x] **BRIDGESECURITY-04** ([#166](https://github.com/abbyfluoroethane/chord/issues/166)) (Security): The Rust side fetches the page with the SSRF filter, but the webview then loads the `og:image` URL from the user's IP with no filter.
+- [x] **BRIDGESECURITY-05** ([#167](https://github.com/abbyfluoroethane/chord/issues/167)) (Security): Attack: a user imports a theme from a GitHub raw link.
+- [x] **BRIDGESECURITY-06** ([#168](https://github.com/abbyfluoroethane/chord/issues/168)) (Security): Attack: the sender sets an OOB URL to `https://evil.example/login` with an unknown extension.
 - [ ] **BRIDGESECURITY-07** ([#169](https://github.com/abbyfluoroethane/chord/issues/169)) (Security): The key is in the binary as plain text.
-- [ ] **BRIDGESECURITY-08** ([#170](https://github.com/abbyfluoroethane/chord/issues/170)) (Security): If the UI is compromised, `login` with no password uses the saved keychain password, and `server` can be any `starttls://host:port`.
+- [x] **BRIDGESECURITY-08** ([#170](https://github.com/abbyfluoroethane/chord/issues/170)) (Security): If the UI is compromised, `login` with no password uses the saved keychain password, and `server` can be any `starttls://host:port`.
 
 **Low**
 
@@ -399,11 +399,11 @@ Report: [09-compliance-xeps.md](09-compliance-xeps.md)
 
 **Medium**
 
-- [ ] **COMPLIANCEXEPS-03** ([#182](https://github.com/abbyfluoroethane/chord/issues/182)) (Missing XEP, XEP-0368 + RFC 7590, Core Advanced): Try `_xmpps-client._tcp` first.
-- [ ] **COMPLIANCEXEPS-04** ([#183](https://github.com/abbyfluoroethane/chord/issues/183)) (Missing XEP, XEP-0184, IM Advanced): Only the receive side exists.
+- [x] **COMPLIANCEXEPS-03** ([#182](https://github.com/abbyfluoroethane/chord/issues/182)) (Missing XEP, XEP-0368 + RFC 7590, Core Advanced): Try `_xmpps-client._tcp` first.
+- [x] **COMPLIANCEXEPS-04** ([#183](https://github.com/abbyfluoroethane/chord/issues/183)) (Missing XEP, XEP-0184, IM Advanced): Only the receive side exists.
 - [ ] **COMPLIANCEXEPS-05** ([#184](https://github.com/abbyfluoroethane/chord/issues/184)) (Missing XEP, XEP-0234 + XEP-0261 (Jingle file transfer), IM Advanced): Low priority.
 - [ ] **COMPLIANCEXEPS-06** ([#185](https://github.com/abbyfluoroethane/chord/issues/185)) (Missing XEP, XEP-0166/0167/0176/0320/0353/0215, A/V Calling Core): Large task (weeks).
-- [ ] **COMPLIANCEXEPS-07** ([#186](https://github.com/abbyfluoroethane/chord/issues/186)) (Bug, XEP-0115 section 5, XEP-0030): Add the features that Chord really handles.
+- [x] **COMPLIANCEXEPS-07** ([#186](https://github.com/abbyfluoroethane/chord/issues/186)) (Bug, XEP-0115 section 5, XEP-0030): Add the features that Chord really handles.
 - [ ] **COMPLIANCEXEPS-08** ([#187](https://github.com/abbyfluoroethane/chord/issues/187)) (Missing XEP, XEP-0384 (OMEMO), not in suite): Rank 1 for user impact.
 
 **Low**
