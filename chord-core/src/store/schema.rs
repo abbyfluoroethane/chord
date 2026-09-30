@@ -261,4 +261,11 @@ pub const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX pending_changes_by_target ON pending_changes (account_id, peer, target);
     "#,
+    // 11: XEP-0446 file metadata of an attachment: name, size, media type, SHA-256 (base64).
+    r#"
+    ALTER TABLE messages ADD COLUMN file_name TEXT;
+    ALTER TABLE messages ADD COLUMN file_size INTEGER;
+    ALTER TABLE messages ADD COLUMN file_type TEXT;
+    ALTER TABLE messages ADD COLUMN file_hash TEXT;
+    "#,
 ];

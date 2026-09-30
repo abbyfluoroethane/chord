@@ -106,6 +106,12 @@ impl Show for TimelineItem {
             && *url != self.body
         {
             text.push_str(&format!(" [file: {url}]"));
+            if let Some(info) = &self.attachment_info {
+                let name = info.name.as_deref().unwrap_or("?");
+                let size = info.size.map_or("?".to_owned(), |s| s.to_string());
+                let kind = info.media_type.as_deref().unwrap_or("?");
+                text.push_str(&format!(" [name: {name}, size: {size}, type: {kind}]"));
+            }
         }
         if !self.reactions.is_empty() {
             let list: Vec<String> = self
@@ -172,6 +178,31 @@ impl Show for TimelineItem {
                 ),
             )
             .opt_str("attachment", self.attachment.as_deref())
+            .opt_str(
+                "attachment_name",
+                self.attachment_info
+                    .as_ref()
+                    .and_then(|i| i.name.as_deref()),
+            )
+            .opt_num(
+                "attachment_size",
+                self.attachment_info
+                    .as_ref()
+                    .and_then(|i| i.size)
+                    .and_then(|s| i64::try_from(s).ok()),
+            )
+            .opt_str(
+                "attachment_type",
+                self.attachment_info
+                    .as_ref()
+                    .and_then(|i| i.media_type.as_deref()),
+            )
+            .opt_str(
+                "attachment_sha256",
+                self.attachment_info
+                    .as_ref()
+                    .and_then(|i| i.sha256.as_deref()),
+            )
             .str(
                 "status",
                 match self.status {

@@ -4,6 +4,7 @@ use jid::BareJid;
 use rusqlite::{OptionalExtension, params};
 
 use super::{QueryCtx, ViewItem};
+use crate::store::queries::FileMeta;
 
 /// The id of a timeline item: stable for the life of the stored row, also when the key of
 /// a sent message changes to its stanza-id. `find_by_timeline_id` reads it.
@@ -53,6 +54,8 @@ pub struct TimelineItem {
     pub reply_to: Option<ReplyPreview>,
     /// XEP-0066: an attachment URL (for example from an upload).
     pub attachment: Option<String>,
+    /// XEP-0446: what the sender said about the attached file.
+    pub attachment_info: Option<FileMeta>,
     /// XEP-0333: for an outgoing message, how far it got.
     pub status: DeliveryStatus,
 }
@@ -125,6 +128,7 @@ struct Row {
     reply_to: Option<String>,
     reply_to_sender: Option<String>,
     attachment: Option<String>,
+    file: FileMeta,
     status: String,
 }
 
@@ -149,6 +153,7 @@ pub(crate) fn query(
         "SELECT id, stanza_id, origin_id, direction, sender, COALESCE(edited_body, body), timestamp,
                 kind, edited_body IS NOT NULL, retracted_at IS NOT NULL, reply_to,
                 reply_to_sender, oob_url,
+                file_name, file_size, file_type, file_hash,
                 CASE WHEN failed_at IS NOT NULL THEN 'failed' ELSE status END
          FROM messages
          WHERE account_id = ?1 AND peer = ?2
@@ -170,7 +175,15 @@ pub(crate) fn query(
             reply_to: row.get(10)?,
             reply_to_sender: row.get(11)?,
             attachment: row.get(12)?,
-            status: row.get(13)?,
+            file: FileMeta {
+                name: row.get(13)?,
+                size: row
+                    .get::<_, Option<i64>>(14)?
+                    .and_then(|s| u64::try_from(s).ok()),
+                media_type: row.get(15)?,
+                sha256: row.get(16)?,
+            },
+            status: row.get(17)?,
         })
     })?;
     let mut rows: Vec<Row> = rows.collect::<rusqlite::Result<_>>()?;
@@ -219,6 +232,11 @@ pub(crate) fn query(
                 reactions(q, row.rowid)?
             },
             reply_to,
+            attachment_info: if row.retracted || row.attachment.is_none() {
+                None
+            } else {
+                Some(row.file).filter(|f| *f != FileMeta::default())
+            },
             attachment: if row.retracted { None } else { row.attachment },
             status: match row.status.as_str() {
                 "failed" => DeliveryStatus::Failed,

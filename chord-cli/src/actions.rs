@@ -76,7 +76,7 @@ pub async fn leave(client: &Client, room: &str) -> Result<(), CliError> {
 pub async fn upload(client: &Client, to: &str, file: &str) -> Result<(), CliError> {
     let to = Jid::new(to).map_err(|e| format!("bad JID {to}: {e}"))?;
     let path = Path::new(file);
-    let data = std::fs::read(path).map_err(|e| format!("cannot read {file}: {e}"))?;
+    let file_handle = std::fs::File::open(path).map_err(|e| format!("cannot read {file}: {e}"))?;
     let filename = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -85,7 +85,7 @@ pub async fn upload(client: &Client, to: &str, file: &str) -> Result<(), CliErro
     let content_type = content_type(&filename).to_owned();
     let url = client
         .handle
-        .upload(to.clone(), filename, content_type, data)
+        .upload_file(to.clone(), filename, content_type, file_handle)
         .await
         .map_err(err)?;
     println!("sent {url} to {to}");

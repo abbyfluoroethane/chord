@@ -19,7 +19,8 @@ use xmpp_parsers::oob::Oob;
 
 use super::chat::MessageIds;
 use super::{
-    Ctx, chat_states, corrections, markers, muc, notify, orphans, reactions, replies, retraction,
+    Ctx, chat_states, corrections, file_sharing, markers, muc, notify, orphans, reactions, replies,
+    retraction,
 };
 use crate::actor::ClientError;
 use crate::store::queries::{Direction, MessageExtras, MessageKind, StoredMessage};
@@ -70,6 +71,11 @@ pub(crate) fn extras(message: &Message, ids: &MessageIds) -> MessageExtras {
         Some((id, to)) => (Some(id), to),
         None => (None, None),
     };
+    // XEP-0447: the metadata of a shared file. Its source stands in for a missing XEP-0066 link.
+    let (file, sfs_url) = match file_sharing::parse(message) {
+        Some((meta, url)) => (Some(meta), url),
+        None => (None, None),
+    };
     MessageExtras {
         message_id: message.id.as_ref().map(|id| id.0.clone()),
         origin_id: ids.origin_id.clone(),
@@ -80,7 +86,9 @@ pub(crate) fn extras(message: &Message, ids: &MessageIds) -> MessageExtras {
             .payloads
             .iter()
             .find_map(|p| Oob::try_from(p.clone()).ok())
-            .map(|oob| oob.url),
+            .map(|oob| oob.url)
+            .or(sfs_url),
+        file,
     }
 }
 

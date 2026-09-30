@@ -19,6 +19,8 @@ serde = ["dep:serde", "jid/serde"]
 [dependencies]
 xmpp-parsers.workspace = true
 sha1.workspace = true
+# The SHA-256 of an uploaded file (XEP-0446).
+sha2 = "0.10"
 jid.workspace = true
 futures-core.workspace = true
 rusqlite.workspace = true
@@ -32,7 +34,7 @@ tokio-xmpp = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time", "io-util"] }
 
 # HTTP PUT for XEP-0363 upload. Only runtime-gated code in features/upload.rs uses it.
-reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls", "stream"] }
 
 # xmpp-parsers and xso use uuid. On wasm32-unknown-unknown it needs a JS randomness source.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -122,6 +122,24 @@ pub struct MessageExtras {
     pub reply_to_sender: Option<String>,
     /// XEP-0066: an attachment URL.
     pub oob_url: Option<String>,
+    /// XEP-0446: the metadata of the attached file.
+    pub file: Option<FileMeta>,
+}
+
+/// XEP-0446 file metadata. Every part is optional: a peer sends what it has.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct FileMeta {
+    pub name: Option<String>,
+    /// Size in bytes.
+    pub size: Option<u64>,
+    pub media_type: Option<String>,
+    /// SHA-256 of the file, base64.
+    pub sha256: Option<String>,
 }
 
 /// A chat message, as stored.
@@ -200,9 +218,10 @@ pub fn insert_message(
             &format!(
                 "INSERT INTO messages
                     (account_id, key_kind, key, direction, peer, sender, body, timestamp, kind,
-                     message_id, origin_id, stanza_id, reply_to, reply_to_sender, oob_url)
+                     message_id, origin_id, stanza_id, reply_to, reply_to_sender, oob_url,
+                     file_name, file_size, file_type, file_hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE(?8, {NOW_MS}), ?9,
-                         ?10, ?11, ?12, ?13, ?14, ?15)
+                         ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
                  ON CONFLICT (account_id, key_kind, key) DO NOTHING
                  RETURNING id, timestamp"
             ),
@@ -222,6 +241,10 @@ pub fn insert_message(
                 x.reply_to,
                 x.reply_to_sender,
                 x.oob_url,
+                x.file.as_ref().and_then(|f| f.name.as_deref()),
+                x.file.as_ref().and_then(|f| f.size.map(|s| s as i64)),
+                x.file.as_ref().and_then(|f| f.media_type.as_deref()),
+                x.file.as_ref().and_then(|f| f.sha256.as_deref()),
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

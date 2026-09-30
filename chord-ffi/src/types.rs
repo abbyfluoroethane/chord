@@ -960,6 +960,7 @@ mod tests {
                 body: "q".into(),
             }),
             attachment: None,
+            attachment_info: None,
             status: core_views::DeliveryStatus::Displayed,
         };
         let t: TimelineItem = core.into();

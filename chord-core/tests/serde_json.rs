@@ -39,6 +39,7 @@ fn item() -> TimelineItem {
             body: "yo".into(),
         }),
         attachment: None,
+        attachment_info: None,
         status: DeliveryStatus::Displayed,
     }
 }
@@ -64,6 +65,7 @@ fn timeline_item_uses_camel_case_names() {
             "reactions": [{"emoji": "+1", "count": 2, "mine": true}],
             "replyTo": {"id": "m:3", "senderName": "amy", "body": "yo"},
             "attachment": null,
+            "attachmentInfo": null,
             "status": "displayed"
         })
     );

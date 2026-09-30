@@ -21,6 +21,7 @@ pub mod corrections;
 pub mod csi;
 pub mod disco;
 pub mod extdisco;
+pub mod file_sharing;
 pub mod jmi;
 pub mod mam;
 pub mod markers;

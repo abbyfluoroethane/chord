@@ -54,6 +54,8 @@ pub const FEATURES: &[&str] = &[
     "urn:xmpp:hints",
     // Direct invites (XEP-0249): muc.rs reads the invite and shows it.
     "jabber:x:conference",
+    // Stateless file sharing (XEP-0447): sent with an upload, read from a message.
+    "urn:xmpp:sfs:0",
 ];
 
 /// Our disco#info answer.
@@ -260,6 +262,7 @@ mod tests {
             "urn:xmpp:hints",
             "urn:xmpp:receipts",
             "jabber:x:conference",
+            "urn:xmpp:sfs:0",
         ] {
             assert!(FEATURES.contains(&f), "{f}");
         }
@@ -281,7 +284,7 @@ mod tests {
         // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
         // not from the code under test. Update it when `FEATURES` changes.
         let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "1ea4fe87dd6eb18adf0769eb305c2c7a8756985e");
+        assert_eq!(hex, "2a4c6def271da37976d79c4c5b234477d87cc4be");
     }
 
     #[test]
@@ -319,7 +322,8 @@ mod tests {
             to: Jid::new("bob@chord.localhost").unwrap(),
             filename: "a.txt".into(),
             content_type: "text/plain".into(),
-            data: vec![1],
+            source: crate::features::upload::Source::Memory(vec![1]),
+            size: 1,
             reply,
         });
         h.with_ctx(|ctx| on_command(ctx, command));
@@ -367,7 +371,8 @@ mod tests {
             to: Jid::new("bob@chord.localhost").unwrap(),
             filename: "a.txt".into(),
             content_type: "text/plain".into(),
-            data: vec![1],
+            source: crate::features::upload::Source::Memory(vec![1]),
+            size: 1,
             reply,
         });
         // The command arrives after login, before `Connected`.
