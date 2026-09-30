@@ -209,7 +209,7 @@
       {/if}
       {#if cards.length}
         <div class="previews">
-          {#each cards as uri (uri)}<XmppLinkCard {uri} />{/each}
+          {#each cards as uri (uri)}<XmppLinkCard {uri} {trusted} />{/each}
         </div>
       {/if}
       {#if candidates.length && !trusted}

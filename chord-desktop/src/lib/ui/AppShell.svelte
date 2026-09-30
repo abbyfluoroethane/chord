@@ -20,6 +20,8 @@
   import PasswordModal from './PasswordModal.svelte';
   import RoomAlertCards from './RoomAlertCards.svelte';
   import XmppLinkModal from './XmppLinkModal.svelte';
+  import ExternalLinkModal from './ExternalLinkModal.svelte';
+  import { leaving } from './leaving.svelte';
   import Toast from './Toast.svelte';
   import { app, HOME } from './app.svelte';
   import { api, live } from './bridge';
@@ -144,6 +146,9 @@
 {/if}
 {#if xmppLinks.asking}
   <XmppLinkModal link={xmppLinks.asking} onclose={() => xmppLinks.dismiss()} />
+{/if}
+{#if leaving.asking}
+  <ExternalLinkModal href={leaving.asking.href} text={leaving.asking.text} onclose={() => leaving.dismiss()} />
 {/if}
 <RoomAlertCards />
 {#if ui.passwordAsk}

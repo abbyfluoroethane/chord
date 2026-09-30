@@ -10,6 +10,8 @@
   import { loadShortcodes, mayHaveShortcode, shortcodesNow, type Shortcodes } from './shortcodes';
   import TimeChip from './TimeChip.svelte';
   import { xmppLinks } from './xmpplinks.svelte';
+  import { leaving } from './leaving.svelte';
+  import { maskedMismatch, maskedTitle } from './linkguard';
 
   let { body }: { body: string } = $props();
 
@@ -22,6 +24,21 @@
       .then((m) => (codes = m))
       .catch(() => {});
   });
+
+  /** The plain text of link children, as the message shows it. */
+  function textOf(nodes: Inline[]): string {
+    return nodes
+      .map((n) => ('v' in n && typeof n.v === 'string' ? n.v : 'children' in n ? textOf(n.children) : ''))
+      .join('');
+  }
+
+  // A masked link whose text names another host asks "Leave Chord?" first (BRIDGESECURITY-12).
+  function leave(e: MouseEvent, href: string, children: Inline[]) {
+    const text = textOf(children);
+    if (!maskedMismatch(text, href)) return;
+    e.preventDefault();
+    leaving.ask(href, text);
+  }
 
   const parsed = $derived(
     parseMarkdown(body, {
@@ -43,7 +60,8 @@
         }}>{@render inline(n.children)}</a
       >{:else if n.t === 'link'}<a
         href={n.href}
-        title={n.masked ? n.href : undefined}
+        title={n.masked ? maskedTitle(n.href) : undefined}
+        onclick={n.masked ? (e) => leave(e, n.href, n.children) : undefined}
         target="_blank"
         rel="noopener noreferrer">{@render inline(n.children)}</a
       >{:else if n.t === 'mention'}<span class="mention" class:me={n.me}>{n.v}</span

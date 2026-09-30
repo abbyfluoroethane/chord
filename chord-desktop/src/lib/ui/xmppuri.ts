@@ -3,14 +3,20 @@
 // that asks for an action that Chord does not know, gives `{ kind: 'unknown' }`.
 //
 // Forms that Chord knows:
-//   space    xmpp:SERVICE?pubsub;action=subscribe;node=NODE    (XEP-0503: a space is a pubsub node)
-//            xmpp:SERVICE?;node=NODE                           (the XEP-0503 form with no action)
+//   space    xmpp:SERVICE?;node=NODE                           (XEP-0503: a space is a pubsub node. Chord writes this form.)
+//            xmpp:SERVICE?pubsub;action=subscribe;node=NODE    (the XEP-0147 form. Chord reads it.)
 //   room     xmpp:ROOM?join[;password=SECRET]
 //   chat     xmpp:USER   and   xmpp:USER?message[;body=TEXT]
 //   contact  xmpp:USER?roster[;name=NAME][;preauth=TOKEN]   and   xmpp:USER?subscribe[;preauth=TOKEN]
 //            (XEP-0379: the token goes into the subscription request)
 //   register xmpp:DOMAIN?register[;preauth=TOKEN]              (XEP-0401: sign up at a server.
 //            `parseRegisterLink` reads it. `parseXmppUri` gives `unknown` for it.)
+//
+// Case (RFC 5122 3.2, XEP-0147): the RFC says nothing about the case of the query type or of
+// the keys. Its grammar is plain text, and the registry of XEP-0147 lists the names in lower
+// case. Chord reads the query type in any case, as a kindness, but the keys (`node`,
+// `action`, `password`, `body`, `name`, `preauth`) are case sensitive: `Node=` is not `node=`.
+// A link that spells a key another way is an unknown key, which RFC 5122 3.1 says to ignore.
 
 export type XmppLink =
   | { kind: 'space'; service: string; node: string }
@@ -37,17 +43,37 @@ const encoder = new TextEncoder();
 const BAD_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\ufffe\uffff]/;
 /** Characters that RFC 7622 does not allow in the local part of a JID. */
 const BAD_LOCAL = /[\s"&'/:<>@]/;
-const LABEL = /^[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?$/u;
+/** One label of an ASCII (A-label) domain. The underscore is not an RFC 1123 host name
+ *  character, but real DNS names and test servers have it, so it is allowed here. */
+const LABEL = /^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?$/;
+/** Characters that change how `URL` reads a host. The domain must not hold them. */
+const HOST_SYNTAX = /[\\/?#@:%[\]<>^|\s]/;
 
 function bytes(s: string): number {
   return encoder.encode(s).length;
 }
 
-/** A domain name: labels of letters, digits, and hyphens. Lower case. Null if it is bad. */
+/**
+ * A domain name in its ASCII form. Lower case. Null if it is bad.
+ *
+ * The browser `URL` does the IDNA work (UTS 46: NFC, case folding, Punycode), so `Bücher.example`
+ * gives `xn--bcher-kva.example`. The result is always the A-label form, so two spellings of a
+ * name compare equal and a look-alike name shows its real form (BRIDGESECURITY-13). Limits:
+ * this is the WHATWG form of IDNA, not IDNA 2008 with its strict checks, and a stored Unicode
+ * JID of a contact does not match the A-label form of a link. The labels need 1 to 63
+ * letters, digits, hyphens or underscores after the conversion.
+ */
 function domainOf(domain: string): string | null {
-  const d = domain.toLowerCase().replace(/\.$/, '');
-  if (!d || bytes(d) > MAX_PART_BYTES) return null;
-  return d.split('.').every((l) => l.length > 0 && l.length <= 63 && LABEL.test(l)) ? d : null;
+  const d = domain.replace(/\.$/, '');
+  if (!d || bytes(d) > MAX_PART_BYTES || HOST_SYNTAX.test(d)) return null;
+  let host: string;
+  try {
+    host = new URL(`http://${d}/`).hostname;
+  } catch {
+    return null;
+  }
+  if (!host || host.length > 253) return null;
+  return host.split('.').every((l) => l.length > 0 && l.length <= 63 && LABEL.test(l)) ? host : null;
 }
 
 /** The parts of a JID: local part (or null), domain, and resource (or null). */
@@ -68,7 +94,8 @@ function splitJid(s: string): { local: string | null; domain: string; resource: 
     local = rest.slice(0, at);
     rest = rest.slice(at + 1);
     if (!local || bytes(local) > MAX_PART_BYTES || BAD_LOCAL.test(local)) return null;
-    local = local.toLowerCase();
+    // A simple form of RFC 7622 (UsernameCaseMapped): NFC and lower case. No full PRECIS.
+    local = local.normalize('NFC').toLowerCase();
   }
   const domain = domainOf(rest);
   return domain ? { local, domain, resource } : null;
@@ -212,7 +239,35 @@ export function xmppKey(link: KnownXmppLink): string {
   }
 }
 
-/** The invite link of a space. The space dialog puts it into a message. */
+/** The invite link of a space, in the XEP-0503 form. The space dialog puts it into a message. */
 export function spaceInviteLink(service: string, node: string): string {
-  return `xmpp:${service}?pubsub;action=subscribe;node=${encodeURIComponent(node)}`;
+  return `xmpp:${service}?;node=${encodeURIComponent(node)}`;
+}
+
+/** Query types of XEP-0147 and its friends that Chord knows by name but does not do. */
+const UNSUPPORTED = new Set([
+  'command',
+  'disco',
+  'invite',
+  'probe',
+  'recvfile',
+  'remove',
+  'sendfile',
+  'unsubscribe',
+  'vcard'
+]);
+
+/**
+ * True for a well-formed link whose query type is a known one that Chord does not act on
+ * (`invite`, `vcard`, `unsubscribe`, `pubsub` with another action, and so on). The caller
+ * says "This kind of link is not supported" instead of "not valid".
+ */
+export function isUnsupportedLink(input: string): boolean {
+  const parts = split(input);
+  if (!parts || parts.query === null) return false;
+  if (parts.action === 'pubsub' || (parts.action === '' && parts.params.has('node'))) {
+    const given = parts.params.get('action')?.toLowerCase();
+    return !!given && given !== 'subscribe' && !!parseService(parts.path);
+  }
+  return UNSUPPORTED.has(parts.action) && !!parseService(parts.path);
 }

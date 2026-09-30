@@ -12,7 +12,7 @@ import { contactsStore } from './contacts.svelte';
 import { session } from './session.svelte';
 import { spaceKey } from './types';
 import { ui } from './ui.svelte';
-import { parseRegisterLink, parseXmppUri, xmppKey, type KnownXmppLink } from './xmppuri';
+import { isUnsupportedLink, parseRegisterLink, parseXmppUri, xmppKey, type KnownXmppLink } from './xmppuri';
 
 /** What the server told us about the target of a link. */
 export type LinkInfo =
@@ -41,6 +41,9 @@ const REFUSED = /forbidden|not.?allowed/i;
 /** A second copy of the same link within this time is ignored. macOS can send a link twice. */
 const REPEAT_MS = 1500;
 
+/** The most links that wait for the sign-in. A page could send hundreds. */
+export const MAX_QUEUED = 5;
+
 class XmppLinks {
   /** The link that waits for the answer of the user. */
   asking = $state<KnownXmppLink | null>(null);
@@ -61,11 +64,14 @@ class XmppLinks {
     if (fromOs) this.last = { uri, at: now };
     if (parseXmppUri(uri).kind === 'unknown') {
       // A sign-up link (XEP-0401) waits for the registration flow. It carries the token.
-      ui.say(parseRegisterLink(uri) ? 'Sign-up links are not supported yet.' : 'This link is not valid.');
+      if (parseRegisterLink(uri)) ui.say('Sign-up links are not supported yet.');
+      else if (isUnsupportedLink(uri)) ui.say('This kind of link is not supported.');
+      else ui.say('This link is not valid.');
       return;
     }
     if (session.state !== 'connected') {
-      this.queued.push(uri);
+      // A page can send many links. The queue keeps the first few (BRIDGESECURITY-14).
+      if (this.queued.length < MAX_QUEUED) this.queued.push(uri);
       return;
     }
     this.ask(uri);

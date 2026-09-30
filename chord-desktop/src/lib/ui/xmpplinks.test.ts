@@ -47,9 +47,28 @@ describe('opening a link', () => {
 
   it('tells the user about a link that is not valid', () => {
     session.force('connected');
-    xmppLinks.open('xmpp:sam@chord.example?remove');
+    xmppLinks.open('xmpp:sam@chord.example?frobnicate');
     expect(xmppLinks.asking).toBeNull();
     expect(ui.toast).toBe('This link is not valid.');
+  });
+
+  it('says that a known kind of link is not supported', () => {
+    session.force('connected');
+    xmppLinks.open('xmpp:sam@chord.example?remove');
+    expect(xmppLinks.asking).toBeNull();
+    expect(ui.toast).toBe('This kind of link is not supported.');
+  });
+
+  it('keeps at most five links for the sign-in', () => {
+    for (let i = 0; i < 9; i++) xmppLinks.open(`xmpp:sam${i}@chord.example`);
+    session.force('connected');
+    const seen: string[] = [];
+    xmppLinks.flush();
+    while (xmppLinks.asking) {
+      seen.push((xmppLinks.asking as { jid: string }).jid);
+      xmppLinks.dismiss();
+    }
+    expect(seen).toEqual([0, 1, 2, 3, 4].map((i) => `sam${i}@chord.example`));
   });
 
   it('says that a sign-up link is not supported yet', () => {

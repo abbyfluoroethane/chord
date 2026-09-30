@@ -3,6 +3,7 @@
   // opens this dialog. Nothing happens until the user clicks the main button.
   import Modal from './Modal.svelte';
   import { contactsStore } from './contacts.svelte';
+  import { hostWarning } from './linkguard';
   import { xmppLinks } from './xmpplinks.svelte';
   import type { KnownXmppLink } from './xmppuri';
 
@@ -11,7 +12,14 @@
   const info = $derived(link.kind === 'space' || link.kind === 'room' ? xmppLinks.get(link) : undefined);
   const invalid = $derived(info === null);
   const joined = $derived(xmppLinks.joined(link));
+  // The lookup of a space or a room runs while the dialog shows. The button waits for the
+  // answer, so the user does not join what the server did not describe (BRIDGESECURITY-14).
+  const looking = $derived((link.kind === 'space' || link.kind === 'room') && info === undefined);
   let busy = $state(false);
+
+  // A look-alike name (for example a Cyrillic "a") shows its real form (BRIDGESECURITY-13).
+  // `xmppuri.ts` already gives the domain in Punycode, so the address above is the real one.
+  const warning = $derived(hostWarning(link.kind === 'space' ? link.service.split('@').pop()! : link.jid.split('@').pop()!));
 
   const address = $derived(
     link.kind === 'space' ? `${link.service} / ${link.node}` : link.kind === 'room' ? link.jid : link.jid
@@ -50,7 +58,7 @@
   });
 
   async function confirmed() {
-    if (busy) return;
+    if (busy || looking) return;
     busy = true;
     const ok = await xmppLinks.act(link, info);
     busy = false;
@@ -64,11 +72,12 @@
     {@const text = info.kind === 'space' ? info.description : info.subject}
     {#if text}<p class="about">{text}</p>{/if}
   {/if}
+  {#if warning}<p class="note bad">{warning}</p>{/if}
   <p class="note" class:bad={invalid}>{note}</p>
 
   {#snippet footer()}
     <button class="btn btn-ghost" onclick={onclose}>Cancel</button>
-    <button class="btn btn-primary" disabled={invalid || busy} onclick={confirmed}>{confirm}</button>
+    <button class="btn btn-primary" disabled={invalid || busy || looking} onclick={confirmed}>{confirm}</button>
   {/snippet}
 </Modal>
 

@@ -5,6 +5,7 @@ import {
   parseAddress,
   parseRegisterLink,
   parseXmppUri,
+  isUnsupportedLink,
   spaceInviteLink,
   xmppKey
 } from './xmppuri';
@@ -33,6 +34,12 @@ describe('space links', () => {
       node: 'a b;c/d'
     });
     expect(parseXmppUri('xmpp:pubsub.example.org?;node=caf%C3%A9')).toMatchObject({ node: 'café' });
+  });
+
+  it('writes the XEP-0503 form', () => {
+    expect(spaceInviteLink('pubsub.chord.example', 'launch ops')).toBe(
+      'xmpp:pubsub.chord.example?;node=launch%20ops'
+    );
   });
 
   it('round-trips the link that the space dialog makes', () => {
@@ -220,7 +227,7 @@ describe('bad input', () => {
       'xmpp:sa m@chord.example',
       'xmpp:sam@chord..example',
       'xmpp:sam@-chord.example',
-      'xmpp:sam@chord_example.org',
+      'xmpp:sam@chord!example.org',
       'xmpp:sam@chord.example/',
       'xmpp:s"m@chord.example',
       'xmpp:s<m@chord.example',
@@ -282,5 +289,77 @@ describe('helpers', () => {
     const room = parseXmppUri('xmpp:dev@c.example.org?join');
     if (room.kind === 'unknown') throw new Error('bad test');
     expect(xmppKey(room)).toBe('room:dev@c.example.org');
+  });
+});
+
+describe('domains (IDNA)', () => {
+  it('gives the ASCII form of a Unicode domain', () => {
+    expect(parseXmppUri('xmpp:sam@Bücher.example?message')).toMatchObject({ jid: 'sam@xn--bcher-kva.example' });
+    expect(parseXmppUri('xmpp:sam@xn--bcher-kva.example')).toMatchObject({ jid: 'sam@xn--bcher-kva.example' });
+    expect(parseXmppUri('xmpp:chat.%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80.example?;node=x')).toMatchObject({
+      service: 'chat.xn--e1afmkfd.example'
+    });
+  });
+
+  it('puts a full-width dot and upper case into the normal form', () => {
+    expect(parseAddress('sam@Chord\u3002Example')).toBe('sam@chord.example');
+  });
+
+  it('accepts an underscore in a label', () => {
+    expect(parseAddress('sam@_xmpp.test_host.example')).toBe('sam@_xmpp.test_host.example');
+  });
+
+  it('keeps the local part in NFC and lower case', () => {
+    expect(parseAddress('Cafe\u0301@chord.example')).toBe('caf\u00e9@chord.example');
+  });
+
+  it('refuses names that URL would read as something else', () => {
+    for (const d of ['a%41.example', 'a.example:8080', 'a b.example', 'a\\b.example', 'a#b.example', '-a.example', 'a-.example', 'a..example', '[::1]']) {
+      expect(parseAddress(`sam@${d}`), d).toBeNull();
+    }
+    expect(parseAddress(`sam@${'a'.repeat(64)}.example`)).toBeNull();
+  });
+});
+
+describe('keys are case sensitive', () => {
+  it('reads the query type in any case but not a key', () => {
+    expect(parseXmppUri('xmpp:p.example?PUBSUB;action=subscribe;node=x')).toMatchObject({ kind: 'space', node: 'x' });
+    expect(parseXmppUri('xmpp:p.example?;Node=x')).toEqual(unknown);
+    expect(parseXmppUri('xmpp:dev@c.example?join;Password=s')).toEqual({
+      kind: 'room',
+      jid: 'dev@c.example',
+      password: null
+    });
+  });
+});
+
+describe('unsupported kinds of link', () => {
+  it('names the known types that Chord does not act on', () => {
+    for (const uri of [
+      'xmpp:sam@chord.example?remove',
+      'xmpp:sam@chord.example?vcard',
+      'xmpp:sam@chord.example?invite;jid=a@b.example',
+      'xmpp:sam@chord.example?command;node=x',
+      'xmpp:p.example?pubsub;action=unsubscribe;node=x',
+      'xmpp:p.example?;node=x;action=unsubscribe'
+    ]) {
+      expect(isUnsupportedLink(uri), uri).toBe(true);
+      expect(parseXmppUri(uri), uri).toEqual(unknown);
+    }
+  });
+
+  it('does not name a link that works, or one that is bad', () => {
+    for (const uri of [
+      'xmpp:sam@chord.example?message',
+      'xmpp:p.example?;node=x',
+      'xmpp:sam@chord.example',
+      'xmpp:sam@chord.example?frobnicate',
+      'xmpp:sam@chord.example?',
+      'xmpp:?vcard',
+      'xmpp://auth@chord.example/sam@chord.example?vcard',
+      'http://example.org'
+    ]) {
+      expect(isUnsupportedLink(uri), uri).toBe(false);
+    }
   });
 });
