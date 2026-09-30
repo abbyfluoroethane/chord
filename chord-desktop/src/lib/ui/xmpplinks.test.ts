@@ -52,6 +52,13 @@ describe('opening a link', () => {
     expect(ui.toast).toBe('This link is not valid.');
   });
 
+  it('says that a sign-up link is not supported yet', () => {
+    session.force('connected');
+    xmppLinks.open('xmpp:chord.example?register;preauth=TOKEN');
+    expect(xmppLinks.asking).toBeNull();
+    expect(ui.toast).toBe('Sign-up links are not supported yet.');
+  });
+
   it('counts a repeat from the OS once', () => {
     session.force('connected');
     xmppLinks.open('xmpp:kim@chord.example', true);

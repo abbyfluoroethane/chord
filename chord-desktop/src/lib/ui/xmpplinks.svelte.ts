@@ -16,7 +16,14 @@ import { parseRegisterLink, parseXmppUri, xmppKey, type KnownXmppLink } from './
 
 /** What the server told us about the target of a link. */
 export type LinkInfo =
-  | { kind: 'space'; name: string; description: string | null; channels: number | null }
+  | {
+      kind: 'space';
+      name: string;
+      description: string | null;
+      channels: number | null;
+      /** The service refused to tell us about the node (forbidden). The node may exist. */
+      refused?: boolean;
+    }
   | {
       kind: 'room';
       name: string;
@@ -27,6 +34,9 @@ export type LinkInfo =
 
 /** `undefined` while the answer is on its way, `null` when the link is not valid. */
 type Entry = LinkInfo | null | undefined;
+
+/** The error text of a refusal (XEP-0060 forbidden or not-allowed). */
+const REFUSED = /forbidden|not.?allowed/i;
 
 /** A second copy of the same link within this time is ignored. macOS can send a link twice. */
 const REPEAT_MS = 1500;
@@ -125,8 +135,13 @@ class XmppLinks {
           passwordProtected: c.passwordProtected
         };
       }
-    } catch {
-      /* The target does not exist, or the server refuses. */
+    } catch (e) {
+      // A refusal is not "does not exist": a whitelist or authorize node may answer a
+      // stranger with forbidden. Show the node and let the user try to join.
+      if (link.kind === 'space' && REFUSED.test(String(e))) {
+        return { kind: 'space', name: link.node, description: null, channels: null, refused: true };
+      }
+      /* The target does not exist, or the answer is lost. */
     }
     // A room that we know already: its own row is enough.
     if (link.kind === 'room') {

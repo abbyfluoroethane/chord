@@ -41,6 +41,7 @@
     if (info?.kind === 'space') {
       const parts = [];
       if (info.channels !== null) parts.push(plural(info.channels, 'channel'));
+      if (info.refused) parts.push('The service asks before it tells more');
       return { text: info.description, meta: parts.join(' · ') };
     }
     if (info?.kind === 'room') {

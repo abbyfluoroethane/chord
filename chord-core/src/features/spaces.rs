@@ -8,7 +8,12 @@
 //!   answered. `on_connected` also starts at once if disco is complete already.
 //! - Start does three things. It logs each XEP-0503 feature that the service lacks. It asks
 //!   for our subscriptions on the service. For each subscribed space node it asks for
-//!   the disco#info (name, description, access model) and for the items.
+//!   the disco#info (name, description, access model) and for the items. A space that we
+//!   joined with an xmpp: link can live on another server, so start asks the same of each
+//!   distinct service in the `spaces` table.
+//! - A refresh error: `item-not-found` for a node means that the node is gone. We drop the
+//!   space and tell the user. Any other error (for example `forbidden`) keeps the space
+//!   and tells the user the error.
 //! - Items: a room is an XEP-0402 `<conference/>` item. The item id is the room JID. Other
 //!   items keep their XML in `space_items.payload`. The avatar item goes to `avatars`.
 //! - Events: `on_event` keeps the tables in sync. It drops each event that does not come
@@ -43,6 +48,9 @@
 //!   must also be a member of each room, or the room refuses the join. `approve_space_join`
 //!   and `add_space_member` set the room affiliation `member` in each room of the space.
 //!   It works where we own the rooms. Other rooms refuse, and we ignore that.
+//!   `add_room_to_space` also tells the room about its space (XEP-0503): it reads the room
+//!   config form, and if the form has `muc#roomconfig_pubsub` it sets the field to the
+//!   space node URI. A room that refuses, or that has no such field, stays as it is.
 //!   `add_room_to_space` does the same for a new room: it reads the affiliations and the
 //!   subscriptions of the node, and it grants each member except the owner.
 
@@ -57,6 +65,7 @@ use xmpp_parsers::disco::{DiscoInfoQuery, DiscoInfoResult, DiscoItemsQuery};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::message::Message;
 use xmpp_parsers::minidom::Element;
+use xmpp_parsers::minidom::rxml::NcName;
 use xmpp_parsers::ns;
 use xmpp_parsers::pubsub::Subscription;
 use xmpp_parsers::pubsub::event::Payload;
@@ -350,6 +359,11 @@ pub(crate) enum Pending {
         service: String,
         node: String,
         reply: Reply<Vec<JoinRequest>>,
+    },
+    /// The config form of a room that we put into a space: look for the pubsub field.
+    RoomConfig {
+        room: BareJid,
+        uri: String,
     },
     /// The image of a space avatar, from the data node of the service.
     AvatarData {
@@ -684,29 +698,49 @@ pub(crate) fn on_disco_complete(ctx: &mut Ctx<'_>) {
     if ctx.state.spaces.started {
         return;
     }
-    let Some((jid, info)) = spaces_service(&ctx.state.disco) else {
-        log::info!("the server has no pubsub service. Spaces are off.");
-        return;
-    };
-    let service = jid.to_bare();
-    for feature in REQUIRED_FEATURES {
-        if !info
-            .features
-            .contains(&format!("{FEATURE_PREFIX}{feature}"))
-        {
-            log::warn!("pubsub service {service} does not advertise {feature} (XEP-0503)");
+    let mut services = Vec::new();
+    match spaces_service(&ctx.state.disco) {
+        Some((jid, info)) => {
+            let service = jid.to_bare();
+            for feature in REQUIRED_FEATURES {
+                if !info
+                    .features
+                    .contains(&format!("{FEATURE_PREFIX}{feature}"))
+                {
+                    log::warn!("pubsub service {service} does not advertise {feature} (XEP-0503)");
+                }
+            }
+            ctx.state.spaces.service = Some(service.clone());
+            services.push(service);
         }
+        None => log::info!("the server has no pubsub service."),
+    }
+    // The services of the spaces that we follow, for example on other servers.
+    match db::services(ctx.store.conn(), ctx.account_id) {
+        Ok(known) => {
+            for service in known.iter().filter_map(|s| BareJid::new(s).ok()) {
+                if !services.contains(&service) {
+                    services.push(service);
+                }
+            }
+        }
+        Err(e) => ctx.store_error("read the spaces", e),
+    }
+    if services.is_empty() {
+        log::info!("no pubsub service. Spaces are off.");
+        return;
     }
     ctx.state.spaces.started = true;
-    ctx.state.spaces.service = Some(service.clone());
-    match pubsub_iq(false, &service, "<subscriptions/>") {
-        Ok(iq) => {
-            ctx.request(
-                iq,
-                FeaturePending::Spaces(Pending::Subscriptions { service }),
-            );
+    for service in services {
+        match pubsub_iq(false, &service, "<subscriptions/>") {
+            Ok(iq) => {
+                ctx.request(
+                    iq,
+                    FeaturePending::Spaces(Pending::Subscriptions { service }),
+                );
+            }
+            Err(e) => log::warn!("subscriptions request: {e}"),
         }
-        Err(e) => log::warn!("subscriptions request: {e}"),
     }
 }
 
@@ -1186,6 +1220,31 @@ fn server_error(error: StanzaError) -> ClientError {
     ClientError::Server(message.trim().to_owned())
 }
 
+/// True if the server says that the thing does not exist (`item-not-found`). `server_error`
+/// keeps the name of the condition at the start of the message.
+fn is_not_found(error: &ClientError) -> bool {
+    matches!(error, ClientError::Server(m) if m.starts_with("ItemNotFound"))
+}
+
+/// A refresh of a followed space failed. The node is gone: drop the space and tell the
+/// user. Any other error keeps the space. A lost connection is no news.
+fn on_refresh_error(ctx: &mut Ctx<'_>, service: &BareJid, node: &str, error: &ClientError) {
+    if matches!(error, ClientError::NotConnected) {
+        return;
+    }
+    if is_not_found(error) {
+        let s = service.to_string();
+        remove_space(ctx, &s, node);
+        ctx.emit(ClientEvent::Notice(format!(
+            "The space {node} no longer exists. It was removed from your list"
+        )));
+    } else {
+        ctx.emit(ClientEvent::Notice(format!(
+            "Could not refresh the space {node}: {error}"
+        )));
+    }
+}
+
 fn outcome(response: IqResponse) -> Result<Option<Element>, ClientError> {
     match response {
         IqResponse::Result(payload) => Ok(payload),
@@ -1218,7 +1277,14 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                     let items = parse_items(payload);
                     sync_items(ctx, &service, &node, items);
                 }
-                other => log::warn!("items of {service} {node}: {other:?}"),
+                other => {
+                    log::warn!("items of {service} {node}: {other:?}");
+                    if join.is_none()
+                        && let Err(e) = &result
+                    {
+                        on_refresh_error(ctx, &service, &node, e);
+                    }
+                }
             }
             if let Some(reply) = join {
                 let _ = reply.send(if lost {
@@ -1228,6 +1294,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 });
             }
         }
+        Pending::RoomConfig { room, uri } => on_room_config(ctx, &room, &uri, result),
         Pending::BrowseItems { browse } => on_browse_page(ctx, browse, result),
         Pending::CardInfo {
             service,
@@ -1532,7 +1599,9 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             let s = service.to_string();
             store_item(ctx, &s, &node, room.as_str(), Some(&payload), None);
             changed(ctx, &s, &node);
-            request_node_members(ctx, service, node, room, false, HashSet::new());
+            let uri = node_uri(&service, &node);
+            request_node_members(ctx, service, node, room.clone(), false, HashSet::new());
+            request_room_config(ctx, room, uri);
         }
         Action::RemoveRoom {
             service,
@@ -1549,6 +1618,95 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             member,
         } => grant_rooms(ctx, &service, &node, &Jid::from(member)),
     }
+}
+
+const NS_MUC_OWNER: &str = "http://jabber.org/protocol/muc#owner";
+const NS_DATA: &str = "jabber:x:data";
+/// The room config field of XEP-0503 that names the space of a room.
+const FIELD_ROOM_PUBSUB: &str = "muc#roomconfig_pubsub";
+
+/// An attribute name. Each caller passes a literal that is a valid XML name.
+fn nc(name: &'static str) -> NcName {
+    NcName::try_from(name).expect("a valid attribute name")
+}
+
+/// The XMPP URI of a space node: `xmpp:SERVICE?;node=NODE` (XEP-0503).
+fn node_uri(service: &BareJid, node: &str) -> String {
+    let mut encoded = String::new();
+    for b in node.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    format!("xmpp:{service}?;node={encoded}")
+}
+
+/// Ask for the config form of a room that joined a space. Only the owner of the room
+/// gets it. `on_room_config` does the rest, and every failure ends quietly.
+fn request_room_config(ctx: &mut Ctx<'_>, room: BareJid, uri: String) {
+    let iq = Iq::Get {
+        from: None,
+        to: Some(Jid::from(room.clone())),
+        id: String::new(),
+        payload: Element::builder("query", NS_MUC_OWNER).build(),
+    };
+    ctx.request(iq, FeaturePending::Spaces(Pending::RoomConfig { room, uri }));
+}
+
+/// The submit of the pubsub field, or `None` if the form has no such field, or it has
+/// the value already.
+fn room_pubsub_submit(form: &Element, uri: &str) -> Option<Element> {
+    let x = form.get_child("x", NS_DATA)?;
+    let field = x
+        .children()
+        .find(|f| f.is("field", NS_DATA) && f.attr("var") == Some(FIELD_ROOM_PUBSUB))?;
+    let current = field.get_child("value", NS_DATA).map(|v| v.text());
+    if current.as_deref() == Some(uri) {
+        return None;
+    }
+    let field = |var: &str, value: &str| {
+        Element::builder("field", NS_DATA)
+            .attr(nc("var"), var)
+            .append(Element::builder("value", NS_DATA).append(value))
+    };
+    let x = Element::builder("x", NS_DATA)
+        .attr(nc("type"), "submit")
+        .append(field(
+            "FORM_TYPE",
+            "http://jabber.org/protocol/muc#roomconfig",
+        ))
+        .append(field(FIELD_ROOM_PUBSUB, uri))
+        .build();
+    Some(Element::builder("query", NS_MUC_OWNER).append(x).build())
+}
+
+fn on_room_config(
+    ctx: &mut Ctx<'_>,
+    room: &BareJid,
+    uri: &str,
+    result: Result<Option<Element>, ClientError>,
+) {
+    let form = match result {
+        Ok(Some(form)) => form,
+        other => {
+            log::debug!("room config of {room}: {other:?}");
+            return;
+        }
+    };
+    let Some(payload) = room_pubsub_submit(&form, uri) else {
+        log::debug!("room {room} has no pubsub config field, or has the space already");
+        return;
+    };
+    let iq = Iq::Set {
+        from: None,
+        to: Some(Jid::from(room.clone())),
+        id: String::new(),
+        payload,
+    };
+    // A refusal changes nothing for the space. The answer has no use.
+    ctx.request(iq, FeaturePending::Spaces(Pending::Ignore));
 }
 
 /// The user subscriptions of the service: keep the spaces that we follow.
@@ -1820,8 +1978,12 @@ fn on_node_info(
         }
         (None, _) => {
             log::warn!("no disco#info for {node} of {service}: {result:?}");
-            if let After::Join(reply) = after {
-                let _ = reply.send(Err(ClientError::NotConnected));
+            match (after, &result) {
+                (After::Join(reply), _) => {
+                    let _ = reply.send(Err(ClientError::NotConnected));
+                }
+                (After::Items, Err(e)) => on_refresh_error(ctx, service, node, e),
+                _ => {}
             }
             return;
         }
@@ -2794,6 +2956,15 @@ pub(super) mod db {
             params![account_id, service, node],
             |row| row.get(0),
         )
+    }
+
+    /// The distinct pubsub services of the stored spaces.
+    pub fn services(conn: &Connection, account_id: i64) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT DISTINCT service FROM spaces WHERE account_id = ?1 ORDER BY service",
+        )?;
+        stmt.query_map(params![account_id], |row| row.get(0))?
+            .collect()
     }
 
     pub fn followed_nodes(

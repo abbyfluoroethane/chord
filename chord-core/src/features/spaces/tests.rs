@@ -264,6 +264,125 @@ fn start_errors_change_nothing() {
     assert_eq!(column(&h, "SELECT node FROM spaces"), ["dev"]);
 }
 
+fn not_found() -> IqResponse {
+    IqResponse::Error(StanzaError::new(
+        ErrorType::Cancel,
+        DefinedCondition::ItemNotFound,
+        "en",
+        "",
+    ))
+}
+
+#[test]
+fn start_refreshes_each_service_in_the_spaces_table() {
+    let mut h = followed();
+    // A space that we joined on another server with an xmpp: link.
+    db::upsert_space(
+        h.store.conn(),
+        h.account_id,
+        "spaces.other.example",
+        "club",
+        Some("Club"),
+        None,
+        Some("open"),
+    )
+    .unwrap();
+    h.state.spaces.started = false;
+    h.with_ctx(on_disco_complete);
+    let sent = h.sent_iqs();
+    let mut to: Vec<String> = sent.iter().map(|i| i.to().unwrap().to_string()).collect();
+    to.sort();
+    assert_eq!(to, ["pubsub.chord.localhost", "spaces.other.example"]);
+    assert!(sent.iter().all(|i| payload_of(i).contains("<subscriptions")));
+    // The other service lists the space: it gets its info request.
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::Subscriptions { service }) if service.as_str() == "spaces.other.example"),
+        Some(xml(&format!(
+            "<pubsub xmlns='{0}'><subscriptions>
+               <subscription node='club' jid='alice@chord.localhost' subscription='subscribed'/>
+               </subscriptions></pubsub>",
+            ns::PUBSUB
+        ))),
+    );
+    let sent = h.sent_iqs();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to().unwrap().as_str(), "spaces.other.example");
+    // The home service lists nothing: it drops its own space only, and keeps the other one.
+    h.answer(
+        |p| matches!(p, FeaturePending::Spaces(Pending::Subscriptions { service }) if service.as_str() == SERVICE),
+        Some(xml(&format!(
+            "<pubsub xmlns='{}'><subscriptions/></pubsub>",
+            ns::PUBSUB
+        ))),
+    );
+    assert_eq!(column(&h, "SELECT node FROM spaces"), ["club"]);
+}
+
+#[test]
+fn start_with_no_home_service_still_refreshes_the_other_services() {
+    let mut h = Harness::new();
+    h.state.disco.complete = true;
+    db::upsert_space(
+        h.store.conn(),
+        h.account_id,
+        "spaces.other.example",
+        "club",
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    h.with_ctx(on_connected);
+    let sent = h.sent_iqs();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to().unwrap().as_str(), "spaces.other.example");
+}
+
+#[test]
+fn a_gone_node_drops_the_space_and_tells_the_user() {
+    let mut h = harness();
+    h.with_ctx(on_connected);
+    h.answer(
+        is_subscriptions,
+        Some(xml(&format!(
+            "<pubsub xmlns='{0}'><subscriptions>
+               <subscription node='dev' jid='alice@chord.localhost' subscription='subscribed'/>
+               </subscriptions></pubsub>",
+            ns::PUBSUB
+        ))),
+    );
+    h.respond(is_info, not_found());
+    let notes = notices(&mut h);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("dev") && notes[0].contains("no longer exists"), "{notes:?}");
+    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+}
+
+#[test]
+fn a_gone_node_in_the_items_drops_a_followed_space() {
+    let mut h = followed();
+    h.with_ctx(|ctx| request_items(ctx, &service_bare(), "dev", None));
+    h.respond(is_items, not_found());
+    assert!(notices(&mut h)[0].contains("no longer exists"));
+    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+}
+
+#[test]
+fn a_refusal_keeps_the_space_and_shows_the_error() {
+    let mut h = followed();
+    h.with_ctx(|ctx| request_info(ctx, &service_bare(), "dev", After::Items));
+    h.respond(is_info, forbidden());
+    let notes = notices(&mut h);
+    assert_eq!(notes.len(), 1);
+    assert!(notes[0].contains("Forbidden"), "{notes:?}");
+    assert_eq!(column(&h, "SELECT node FROM spaces"), ["dev"]);
+    // A lost connection says nothing and keeps the space.
+    h.with_ctx(|ctx| request_info(ctx, &service_bare(), "dev", After::Items));
+    h.respond(is_info, IqResponse::Lost);
+    assert!(notices(&mut h).is_empty());
+    assert_eq!(column(&h, "SELECT node FROM spaces"), ["dev"]);
+}
+
 #[test]
 fn no_pubsub_service_means_no_request() {
     let mut h = Harness::new();
@@ -2149,12 +2268,89 @@ fn adding_a_room_asks_the_node_for_its_members() {
     let mut rx = add_new_room(&mut h);
     assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
     let sent = h.sent_iqs();
-    let [iq] = &sent[..] else {
-        panic!("expected one request: {sent:?}")
+    let [iq, config] = &sent[..] else {
+        panic!("expected two requests: {sent:?}")
     };
     let text = payload_of(iq);
     assert!(text.contains("<affiliations node='dev'/>"), "{text}");
     assert!(text.contains(ns::PUBSUB_OWNER), "{text}");
+    // The second request asks the room for its config form.
+    assert_eq!(config.to().unwrap().as_str(), "new@rooms.chord.localhost");
+    assert!(payload_of(config).contains("muc#owner"));
+}
+
+fn is_room_config(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::RoomConfig { .. }))
+}
+
+fn room_form(fields: &str) -> Element {
+    xml(&format!(
+        "<query xmlns='http://jabber.org/protocol/muc#owner'>
+           <x xmlns='jabber:x:data' type='form'>
+             <field var='FORM_TYPE' type='hidden'>
+               <value>http://jabber.org/protocol/muc#roomconfig</value></field>
+             <field var='muc#roomconfig_roomname' type='text-single'/>{fields}</x></query>"
+    ))
+}
+
+#[test]
+fn adding_a_room_sets_the_pubsub_field_of_the_room() {
+    let mut h = followed();
+    let _rx = add_new_room(&mut h);
+    h.take_sent();
+    h.answer(
+        is_room_config,
+        Some(room_form("<field var='muc#roomconfig_pubsub' type='text-single'/>")),
+    );
+    let sent = h.sent_iqs();
+    let [iq] = &sent[..] else {
+        panic!("expected one request: {sent:?}")
+    };
+    assert!(matches!(iq, Iq::Set { .. }));
+    assert_eq!(iq.to().unwrap().as_str(), "new@rooms.chord.localhost");
+    let text = payload_of(iq);
+    assert!(text.contains("type=\"submit\""), "{text}");
+    assert!(text.contains("muc#roomconfig_pubsub"), "{text}");
+    assert!(
+        text.contains("<value>xmpp:pubsub.chord.localhost?;node=dev</value>"),
+        "{text}"
+    );
+    // The submit leaves the other fields alone.
+    assert!(!text.contains("roomname"), "{text}");
+}
+
+#[test]
+fn a_room_without_the_pubsub_field_or_with_an_error_gets_no_submit() {
+    let mut h = followed();
+    let _rx = add_new_room(&mut h);
+    h.take_sent();
+    h.answer(is_room_config, Some(room_form("")));
+    assert!(h.sent_iqs().is_empty());
+    // The field has the value already.
+    let _rx = add_new_room(&mut h);
+    h.take_sent();
+    h.answer(
+        is_room_config,
+        Some(room_form(
+            "<field var='muc#roomconfig_pubsub'>
+               <value>xmpp:pubsub.chord.localhost?;node=dev</value></field>",
+        )),
+    );
+    assert!(h.sent_iqs().is_empty());
+    // A refusal is ignored.
+    let _rx = add_new_room(&mut h);
+    h.take_sent();
+    h.respond(is_room_config, forbidden());
+    assert!(h.sent_iqs().is_empty());
+    assert!(notices(&mut h).is_empty());
+}
+
+#[test]
+fn the_node_uri_escapes_the_node() {
+    assert_eq!(
+        node_uri(&service_bare(), "a b;c/d"),
+        "xmpp:pubsub.chord.localhost?;node=a%20b%3Bc%2Fd"
+    );
 }
 
 #[test]
