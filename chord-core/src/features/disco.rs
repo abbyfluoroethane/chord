@@ -20,17 +20,36 @@ use super::{Ctx, IqResponse, Pending as FeaturePending, result_reply};
 pub const CAPS_NODE: &str = "https://github.com/abbyfluoroethane/chord";
 
 /// The protocol features that Chord supports. `+notify` asks PEP for events.
+///
+/// Add a namespace only when Chord sends it and handles it on receipt. Other clients use
+/// this list to decide which buttons to show. Two entries are left out on purpose:
+/// - `urn:xmpp:mam:2` is for the entity that hosts an archive (XEP-0313, "Determining
+///   support"). Chord queries the archive of the server and hosts none.
+/// - `urn:xmpp:receipts` is not implemented: Chord sends no delivery receipts.
+///
+/// CSI (XEP-0352) is a stream feature that the server offers, so it is not here.
 pub const FEATURES: &[&str] = &[
     ns::DISCO_INFO,
     ns::CAPS,
     ns::PING,
     "urn:xmpp:carbons:2",
     "urn:xmpp:sid:0",
-    "urn:xmpp:mam:2",
     "http://jabber.org/protocol/muc",
     "urn:xmpp:bookmarks:1+notify",
     "urn:xmpp:avatar:metadata+notify",
     "http://jabber.org/protocol/chatstates",
+    // Markers (XEP-0333): every message is markable, and `mark_read` sends displayed.
+    "urn:xmpp:chat-markers:0",
+    // Corrections (XEP-0308), retractions (XEP-0424), reactions (XEP-0444), replies
+    // (XEP-0461) and their fallback (XEP-0428): sent and applied.
+    "urn:xmpp:message-correct:0",
+    "urn:xmpp:message-retract:1",
+    "urn:xmpp:reactions:0",
+    "urn:xmpp:reply:0",
+    "urn:xmpp:fallback:0",
+    // Out-of-band data (XEP-0066) for uploads, and processing hints (XEP-0334).
+    "jabber:x:oob",
+    "urn:xmpp:hints",
 ];
 
 /// Our disco#info answer.
@@ -222,6 +241,42 @@ mod tests {
         let b = caps();
         assert_eq!(a.ver, b.ver);
         assert_eq!(a.node, CAPS_NODE);
+    }
+
+    #[test]
+    fn features_hold_what_chord_handles_and_no_more() {
+        for f in [
+            "urn:xmpp:chat-markers:0",
+            "urn:xmpp:message-correct:0",
+            "urn:xmpp:message-retract:1",
+            "urn:xmpp:reactions:0",
+            "urn:xmpp:reply:0",
+            "urn:xmpp:fallback:0",
+            "jabber:x:oob",
+            "urn:xmpp:hints",
+        ] {
+            assert!(FEATURES.contains(&f), "{f}");
+        }
+        // Chord hosts no archive, and sends no receipts.
+        assert!(!FEATURES.contains(&"urn:xmpp:mam:2"));
+        assert!(!FEATURES.contains(&"urn:xmpp:receipts"));
+        // CSI is a stream feature.
+        assert!(!FEATURES.iter().any(|f| f.contains("csi")));
+        let mut sorted = FEATURES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), FEATURES.len(), "a namespace twice");
+        let info = info(None);
+        assert_eq!(info.features.len(), FEATURES.len());
+    }
+
+    #[test]
+    fn caps_hash_is_the_xep_0115_hash_of_the_list() {
+        // The verification string of XEP-0115, 5.1: the identity, then the sorted features.
+        // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
+        // not from the code under test. Update it when `FEATURES` changes.
+        let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(hex, "7e633af7fd61ee5e3f2414c81a43485738d3bb43");
     }
 
     #[test]
