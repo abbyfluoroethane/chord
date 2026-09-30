@@ -27,6 +27,9 @@
     alt={emoji}
     draggable="false"
     onerror={() => (step += 1)}
+    onload={(e) => {
+      if (!(e.currentTarget as HTMLImageElement).naturalWidth) step += 1;
+    }}
   />{:else}{emoji}{/if}
 
 <style>

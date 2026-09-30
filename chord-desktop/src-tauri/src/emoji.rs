@@ -362,6 +362,9 @@ fn status(code: StatusCode) -> Response<Vec<u8>> {
 /// The response for a path like `/twemoji/1f44b-1f3fb.svg`. Twemoji installs itself on
 /// the first request.
 pub fn respond(dir: &Path, path: &str) -> Response<Vec<u8>> {
+    // Tauri's convertFileSrc encodes the whole path, so "twemoji/1f600.svg" arrives as
+    // "twemoji%2F1f600.svg". Decode it before the split.
+    let path = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
     let mut parts = path.trim_start_matches('/').splitn(2, '/');
     let (Some(id), Some(file)) = (parts.next(), parts.next()) else {
         return status(StatusCode::NOT_FOUND);
@@ -461,12 +464,17 @@ mod tests {
             );
         }
         assert_eq!(
-            respond(&dir, "/twemoji/../x.svg").status(),
+            respond(&dir, "/twemoji%2F..%2Fx.svg").status(),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
             respond(&dir, "/other/1f44b.svg").status(),
             StatusCode::NOT_FOUND
+        );
+        // The path as the webview sends it: convertFileSrc encodes the slash.
+        assert_eq!(
+            respond(&dir, "/twemoji%2F1f44b.svg").status(),
+            StatusCode::OK
         );
         // A pack that needs a download is not there.
         assert_eq!(
