@@ -1871,6 +1871,10 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
             ],
         ),
     );
+    if !is_self {
+        let real = item.and_then(|i| i.jid.as_ref()).map(|jid| jid.to_bare());
+        super::avatars::on_occupant(ctx, presence, real);
+    }
     if is_self {
         remember_nick(ctx, room, nick);
         if let Some(id) = occupant_id(&presence.payloads) {
@@ -2385,6 +2389,22 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, super::super::Effect::Emit(ClientEvent::Notice(n)) if n.contains("unlock")))
         );
+    }
+
+    #[test]
+    fn an_occupant_with_a_real_jid_starts_an_avatar_fetch_and_we_do_not_for_ourselves() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let item = Item::new(Affiliation::Member, Role::Participant)
+            .with_jid(jid::FullJid::new("bob@chord.localhost/phone").unwrap());
+        let bob = occupant_presence("bobby", vec![], item);
+        h.with_ctx(|ctx| on_presence(ctx, &bob));
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to().unwrap().as_str(), "bob@chord.localhost");
+        // Our own presence starts nothing.
+        h.with_ctx(|ctx| on_presence(ctx, &self_presence("alice")));
+        assert!(h.sent_iqs().is_empty());
     }
 
     #[test]

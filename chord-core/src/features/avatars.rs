@@ -26,10 +26,17 @@
 //!   A failure of the vCard step is logged and does not fail `set_avatar`.
 //!   `set_vcard_photo` and `remove_vcard_photo` change only the vCard.
 //!
+//! - Room occupants: `on_occupant` runs for each room presence. If the room gives the real
+//!   JID of the occupant, the avatar of that bare JID is fetched as for a contact, once
+//!   in a session, and the views find it by the real JID. Otherwise the XEP-0153 hash of
+//!   the room presence decides. Then the vCard comes from the full JID `room/nick`, and
+//!   the owner of the avatar is that full JID. A hash that we have is not fetched again.
+//!   The requests wait in a queue, and only `MAX_IN_FLIGHT` run at one time.
+//!
 //! The functions that store and check images also serve the space avatars (`spaces.rs`).
 //! The owner of a space avatar is `service/node`.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use futures_channel::oneshot;
 use jid::{BareJid, Jid};
@@ -81,6 +88,30 @@ pub(crate) struct State {
     vcard: HashSet<BareJid>,
     /// Vcard photos that failed, as (owner, hash). We do not ask for them again.
     vcard_failed: HashSet<(BareJid, String)>,
+    /// Real JIDs of occupants that we asked for in this session.
+    occupant_asked: HashSet<BareJid>,
+    /// Occupant vCard photos that run now, as (full JID, hash).
+    occupant_fetching: HashSet<(String, String)>,
+    /// Occupant vCard photos that failed. We do not ask for them again.
+    occupant_failed: HashSet<(String, String)>,
+    /// Requests for occupants that wait for a free place.
+    queue: VecDeque<Job>,
+    /// The queued requests that have gone out and have no answer yet.
+    in_flight: usize,
+}
+
+/// The most occupant requests that run at one time.
+const MAX_IN_FLIGHT: usize = 3;
+/// The most occupant requests that wait. A larger room gets no more avatars in a session.
+const MAX_QUEUED: usize = 256;
+
+/// One request for an occupant.
+#[derive(Debug)]
+enum Job {
+    /// The XEP-0084 metadata of a real JID. No metadata leads to the vCard.
+    Metadata(BareJid),
+    /// The vCard of an occupant with no real JID.
+    OccupantVCard { owner: Jid, hash: String },
 }
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
@@ -125,6 +156,10 @@ pub(crate) enum Pending {
     PublishMetadata { image: Image, reply: Reply },
     /// We published an empty metadata element.
     Unpublish { reply: Reply },
+    /// The vCard of an occupant, from its full JID. We check the photo against `hash`.
+    OccupantVCard { owner: Jid, hash: String },
+    /// A request from the queue. Its answer frees a place, and the next request goes out.
+    Queued(Box<Pending>),
 }
 
 /// An image that `set_avatar` publishes.
@@ -371,6 +406,24 @@ fn mark_changed(ctx: &mut Ctx<'_>, owner: &BareJid) {
     ctx.changed(ViewKey::Timeline(owner.clone()));
     ctx.changed(ViewKey::MemberList(owner.clone()));
     ctx.changed(ViewKey::ChannelList(ChannelScope::Home));
+    // The rooms where the owner is an occupant with this real JID.
+    let rooms: Vec<String> = ctx
+        .store
+        .conn()
+        .prepare_cached("SELECT room FROM occupants WHERE account_id = ?1 AND real_jid = ?2")
+        .and_then(|mut stmt| {
+            stmt.query_map(params![ctx.account_id, owner.as_str()], |row| row.get(0))?
+                .collect()
+        })
+        .unwrap_or_default();
+    for room in rooms.iter().filter_map(|r| BareJid::new(r).ok()) {
+        mark_room(ctx, &room);
+    }
+}
+
+fn mark_room(ctx: &mut Ctx<'_>, room: &BareJid) {
+    ctx.changed(ViewKey::Timeline(room.clone()));
+    ctx.changed(ViewKey::MemberList(room.clone()));
 }
 
 /// A short text for an error answer.
@@ -563,6 +616,27 @@ fn result_items(payload: Option<Element>) -> Option<Vec<Item>> {
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     match pending {
+        Pending::Queued(inner) => {
+            let state = &mut ctx.state.avatars;
+            state.in_flight = state.in_flight.saturating_sub(1);
+            on_response(ctx, *inner, response);
+            pump(ctx);
+        }
+        Pending::OccupantVCard { owner, hash } => {
+            let key = (owner.to_string(), hash.clone());
+            ctx.state.avatars.occupant_fetching.remove(&key);
+            let result = match response {
+                IqResponse::Result(payload) => accept_occupant_vcard(ctx, &owner, &hash, payload),
+                IqResponse::Error(e) => Err(ClientError::Server(describe(&e))),
+                IqResponse::Lost => Err(ClientError::NotConnected),
+            };
+            if let Err(e) = result {
+                log::debug!("vCard photo of {owner}: {e}");
+                if !matches!(e, ClientError::NotConnected) {
+                    ctx.state.avatars.occupant_failed.insert(key);
+                }
+            }
+        }
         Pending::Metadata { owner, reply } => match response {
             IqResponse::Result(payload) => {
                 let items = result_items(payload).unwrap_or_default();
@@ -1011,6 +1085,135 @@ fn on_vcard_hint(ctx: &mut Ctx<'_>, presence: &Presence) {
             reply: None,
         }),
     );
+}
+
+/// A room presence of an occupant. `real` is the real bare JID, if the room gave it.
+pub(crate) fn on_occupant(ctx: &mut Ctx<'_>, presence: &Presence, real: Option<BareJid>) {
+    let Some(from) = &presence.from else {
+        return;
+    };
+    if let Some(real) = real {
+        if real == *ctx.account
+            || ctx.state.avatars.pep.contains(&real)
+            || !ctx.state.avatars.occupant_asked.insert(real.clone())
+        {
+            return;
+        }
+        enqueue(ctx, Job::Metadata(real));
+        return;
+    }
+    let Some(x) = presence
+        .payloads
+        .iter()
+        .find(|p| p.is("x", xmpp_parsers::ns::VCARD_UPDATE))
+    else {
+        return;
+    };
+    let Ok(update) = VCardUpdate::try_from(x.clone()) else {
+        return;
+    };
+    // An empty update element means only that the client supports XEP-0153.
+    let Some(photo) = update.photo else {
+        return;
+    };
+    let owner = from.to_string();
+    let Some(hash) = photo.data.as_ref().map(|d| hex(d)) else {
+        // The occupant has no photo. Drop the one that we stored.
+        match remove(ctx.store, ctx.account_id, &owner) {
+            Ok(true) => mark_room(ctx, &from.to_bare()),
+            Ok(false) => {}
+            Err(e) => ctx.store_error("remove an avatar", e),
+        }
+        return;
+    };
+    let key = (owner.clone(), hash.clone());
+    let state = &ctx.state.avatars;
+    if state.occupant_fetching.contains(&key) || state.occupant_failed.contains(&key) {
+        return;
+    }
+    match load_key(ctx.store, ctx.account_id, &owner) {
+        Ok(Some(old)) if old.hash == hash && old.data.is_some() => return,
+        Ok(_) => {}
+        Err(e) => return ctx.store_error("read an avatar", e),
+    }
+    ctx.state.avatars.occupant_fetching.insert(key);
+    enqueue(
+        ctx,
+        Job::OccupantVCard {
+            owner: from.clone(),
+            hash,
+        },
+    );
+}
+
+fn enqueue(ctx: &mut Ctx<'_>, job: Job) {
+    if ctx.state.avatars.queue.len() >= MAX_QUEUED {
+        log::debug!("too many avatar requests for occupants: {job:?} dropped");
+        if let Job::OccupantVCard { owner, hash } = job {
+            ctx.state
+                .avatars
+                .occupant_fetching
+                .remove(&(owner.to_string(), hash));
+        }
+        return;
+    }
+    ctx.state.avatars.queue.push_back(job);
+    pump(ctx);
+}
+
+/// Send queued requests while there are free places.
+fn pump(ctx: &mut Ctx<'_>) {
+    while ctx.state.avatars.in_flight < MAX_IN_FLIGHT {
+        let Some(job) = ctx.state.avatars.queue.pop_front() else {
+            return;
+        };
+        ctx.state.avatars.in_flight += 1;
+        let (iq, then) = match job {
+            Job::Metadata(owner) => {
+                let mut items = Items::new(NODE_METADATA);
+                items.max_items = Some(1);
+                let iq = Iq::from_get("", PubSub::Items(items)).with_to(Jid::from(owner.clone()));
+                // Nobody waits for the answer. A missing node leads to the vCard.
+                let (reply, _) = oneshot::channel();
+                let reply = Some(reply);
+                (iq, Pending::Metadata { owner, reply })
+            }
+            Job::OccupantVCard { owner, hash } => {
+                // XEP-0054: the request goes to the full JID. The room forwards it.
+                let iq = Iq::from_get("", VCardQuery).with_to(owner.clone());
+                (iq, Pending::OccupantVCard { owner, hash })
+            }
+        };
+        ctx.request(iq, FeaturePending::Avatars(Pending::Queued(Box::new(then))));
+    }
+}
+
+/// Check the photo of the vCard of an occupant against `hash`, and store it under the
+/// full JID.
+fn accept_occupant_vcard(
+    ctx: &mut Ctx<'_>,
+    owner: &Jid,
+    hash: &str,
+    payload: Option<Element>,
+) -> Result<(), ClientError> {
+    let photo = payload
+        .and_then(|p| VCard::try_from(p).ok())
+        .and_then(|v| v.photo)
+        .ok_or_else(|| ClientError::Invalid("the vCard has no photo".into()))?;
+    let data = photo.binval.data;
+    verify_image(hash, &data)?;
+    let mime = sniff_mime(&data)
+        .map(str::to_owned)
+        .ok_or_else(|| ClientError::Invalid("the photo is not an image".into()))?;
+    let key = owner.to_string();
+    store_metadata(ctx.store, ctx.account_id, &key, hash, Some(&mime))
+        .and_then(|_| store_data(ctx.store, ctx.account_id, &key, hash, &data))
+        .map_err(|e| {
+            ctx.store_error("store an occupant photo", e);
+            ClientError::Invalid("store error".into())
+        })?;
+    mark_room(ctx, &owner.to_bare());
+    Ok(())
 }
 
 /// True if we see the presence of `owner`: a roster item with subscription `to` or `both`.
@@ -2213,5 +2416,205 @@ mod tests {
     #[test]
     fn sha1_hex_matches_a_known_value() {
         assert_eq!(sha1_hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    }
+
+    // Room occupants.
+
+    const ROOM: &str = "dev@rooms.chord.localhost";
+
+    fn room() -> BareJid {
+        BareJid::new(ROOM).unwrap()
+    }
+
+    fn occupant_row(h: &Harness, nick: &str, real_jid: Option<&str>) {
+        h.store
+            .conn()
+            .execute(
+                "INSERT INTO occupants (account_id, room, nick, real_jid, affiliation, role)
+                 VALUES (?1, ?2, ?3, ?4, 'none', 'participant')",
+                params![h.account_id, ROOM, nick, real_jid],
+            )
+            .unwrap();
+    }
+
+    fn room_presence(nick: &str, x: Option<&str>) -> Presence {
+        let mut p = Presence::new(PresenceType::None)
+            .with_from(Jid::new(&format!("{ROOM}/{nick}")).unwrap());
+        if let Some(x) = x {
+            p.payloads.push(x.parse().unwrap());
+        }
+        p
+    }
+
+    fn occupant(h: &mut Harness, presence: &Presence, real: Option<&str>) {
+        let real = real.map(|r| BareJid::new(r).unwrap());
+        h.with_ctx(|ctx| on_occupant(ctx, presence, real));
+    }
+
+    fn is_queued_metadata(p: &FeaturePending) -> bool {
+        matches!(
+            p,
+            FeaturePending::Avatars(Pending::Queued(inner))
+                if matches!(**inner, Pending::Metadata { .. })
+        )
+    }
+
+    fn is_queued_vcard(p: &FeaturePending) -> bool {
+        matches!(
+            p,
+            FeaturePending::Avatars(Pending::Queued(inner))
+                if matches!(**inner, Pending::OccupantVCard { .. })
+        )
+    }
+
+    #[test]
+    fn an_occupant_with_a_real_jid_gets_the_avatar_of_that_jid() {
+        let mut h = Harness::new();
+        occupant_row(&h, "bobby", Some(BOB));
+        let image = b"image bytes";
+        occupant(&mut h, &room_presence("bobby", None), Some(BOB));
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        // The request goes to the real bare JID, as for a contact.
+        assert_eq!(sent[0].to().unwrap().as_str(), BOB);
+        h.answer(
+            is_queued_metadata,
+            Some(metadata_result(Some(metadata_element(image, "image/png")))),
+        );
+        h.answer(is_data, Some(data_result(image)));
+        assert_eq!(stored(&h).unwrap().data.as_deref(), Some(&image[..]));
+        // The views of the room refresh, not only the views of the owner.
+        let dirty = h.take_dirty();
+        assert!(dirty.contains(&ViewKey::Timeline(room())));
+        assert!(dirty.contains(&ViewKey::MemberList(room())));
+    }
+
+    #[test]
+    fn an_occupant_with_a_real_jid_and_no_metadata_falls_back_to_the_vcard() {
+        let mut h = Harness::new();
+        occupant_row(&h, "bobby", Some(BOB));
+        occupant(&mut h, &room_presence("bobby", None), Some(BOB));
+        h.sent_iqs();
+        h.respond(
+            is_queued_metadata,
+            IqResponse::Error(error(DefinedCondition::ItemNotFound)),
+        );
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to().unwrap().as_str(), BOB);
+        h.answer(is_vcard, Some(vcard_result(PNG)));
+        assert_eq!(stored(&h).unwrap().data.as_deref(), Some(PNG));
+    }
+
+    #[test]
+    fn a_real_jid_is_asked_once_in_a_session_and_never_for_us() {
+        let mut h = Harness::new();
+        occupant(&mut h, &room_presence("bobby", None), Some(BOB));
+        assert_eq!(h.sent_iqs().len(), 1);
+        occupant(&mut h, &room_presence("bobby", None), Some(BOB));
+        occupant(&mut h, &room_presence("bob2", None), Some(BOB));
+        assert!(h.sent_iqs().is_empty());
+        occupant(
+            &mut h,
+            &room_presence("me", None),
+            Some(crate::features::testing::ACCOUNT),
+        );
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn an_anonymous_occupant_gets_the_vcard_from_its_full_jid() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        occupant(&mut h, &room_presence("anon", Some(&update(&hash))), None);
+        let sent = h.sent_iqs();
+        assert_eq!(sent.len(), 1);
+        // XEP-0054: the request goes to the occupant. The room forwards it.
+        assert_eq!(sent[0].to().unwrap().as_str(), format!("{ROOM}/anon"));
+        let Iq::Get { payload, .. } = &sent[0] else {
+            panic!("{sent:?}")
+        };
+        assert!(payload.is("vCard", "vcard-temp"));
+        h.answer(is_queued_vcard, Some(vcard_result(PNG)));
+        let key = format!("{ROOM}/anon");
+        let avatar = load_key(&h.store, h.account_id, &key).unwrap().unwrap();
+        assert_eq!(avatar.hash, hash);
+        assert_eq!(avatar.mime.as_deref(), Some("image/png"));
+        assert_eq!(avatar.data.as_deref(), Some(PNG));
+        let dirty = h.take_dirty();
+        assert!(dirty.contains(&ViewKey::Timeline(room())));
+        assert!(dirty.contains(&ViewKey::MemberList(room())));
+    }
+
+    #[test]
+    fn a_known_or_running_or_failed_hash_is_not_fetched_again() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        let presence = room_presence("anon", Some(&update(&hash)));
+        occupant(&mut h, &presence, None);
+        // The fetch runs.
+        occupant(&mut h, &presence, None);
+        assert_eq!(h.sent_iqs().len(), 1);
+        h.answer(is_queued_vcard, Some(vcard_result(PNG)));
+        h.sent_iqs();
+        // The image is stored.
+        occupant(&mut h, &presence, None);
+        assert!(h.sent_iqs().is_empty());
+        // A new hash asks again, and a failure stops the next try for that hash.
+        let other = room_presence("anon", Some(&update(&sha1_hex(b"other"))));
+        occupant(&mut h, &other, None);
+        assert_eq!(h.sent_iqs().len(), 1);
+        h.respond(
+            is_queued_vcard,
+            IqResponse::Error(error(DefinedCondition::ServiceUnavailable)),
+        );
+        occupant(&mut h, &other, None);
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn an_empty_photo_removes_the_stored_photo_of_an_occupant() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        occupant(&mut h, &room_presence("anon", Some(&update(&hash))), None);
+        h.answer(is_queued_vcard, Some(vcard_result(PNG)));
+        h.take_dirty();
+        occupant(
+            &mut h,
+            &room_presence("anon", Some("<x xmlns='vcard-temp:x:update'><photo/></x>")),
+            None,
+        );
+        let key = format!("{ROOM}/anon");
+        assert!(load_key(&h.store, h.account_id, &key).unwrap().is_none());
+        assert!(h.take_dirty().contains(&ViewKey::MemberList(room())));
+    }
+
+    #[test]
+    fn a_bad_photo_of_an_occupant_is_not_stored() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        occupant(&mut h, &room_presence("anon", Some(&update(&hash))), None);
+        h.answer(
+            is_queued_vcard,
+            Some(vcard_result(b"\x89PNG\r\n\x1a\nforged")),
+        );
+        let key = format!("{ROOM}/anon");
+        assert!(load_key(&h.store, h.account_id, &key).unwrap().is_none());
+    }
+
+    #[test]
+    fn only_a_few_occupant_requests_run_at_one_time() {
+        let mut h = Harness::new();
+        let hash = sha1_hex(PNG);
+        for i in 0..10 {
+            let nick = format!("anon{i}");
+            occupant(&mut h, &room_presence(&nick, Some(&update(&hash))), None);
+        }
+        assert_eq!(h.sent_iqs().len(), MAX_IN_FLIGHT);
+        // Each answer frees a place for the next request.
+        h.answer(is_queued_vcard, Some(vcard_result(PNG)));
+        assert_eq!(h.sent_iqs().len(), 1);
+        h.respond(is_queued_vcard, IqResponse::Lost);
+        assert_eq!(h.sent_iqs().len(), 1);
     }
 }

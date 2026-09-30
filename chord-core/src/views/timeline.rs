@@ -175,7 +175,10 @@ pub(crate) fn query(
     let mut items: Vec<TimelineItem> = Vec::with_capacity(rows.len());
     for row in rows {
         let (sender_name, avatar_owner) = display_name(q, &row.sender, row.groupchat)?;
-        let avatar = avatar_hash(q, &avatar_owner)?;
+        let avatar = match row.sender.split_once('/') {
+            Some((room, nick)) if row.groupchat => occupant_avatar_hash(q, room, nick)?,
+            _ => avatar_hash(q, &avatar_owner)?,
+        };
         let same_sender_as_previous = items
             .last()
             .is_some_and(|p| p.sender == row.sender && row.timestamp - p.timestamp < GROUP_GAP_MS);
@@ -333,6 +336,30 @@ pub(crate) fn avatar_hash(q: &QueryCtx<'_>, owner: &str) -> rusqlite::Result<Opt
         .optional()
 }
 
+/// The avatar hash of an occupant of a room. The avatar of the real JID comes first, if
+/// the room gave it. Then comes the avatar that we took from the occupant itself.
+pub(crate) fn occupant_avatar_hash(
+    q: &QueryCtx<'_>,
+    room: &str,
+    nick: &str,
+) -> rusqlite::Result<Option<String>> {
+    let real: Option<String> = q
+        .store
+        .conn()
+        .prepare_cached(
+            "SELECT real_jid FROM occupants WHERE account_id = ?1 AND room = ?2 AND nick = ?3",
+        )?
+        .query_row(params![q.account_id, room, nick], |row| row.get(0))
+        .optional()?
+        .flatten();
+    if let Some(real) = real
+        && let Some(hash) = avatar_hash(q, &real)?
+    {
+        return Ok(Some(hash));
+    }
+    avatar_hash(q, &format!("{room}/{nick}"))
+}
+
 /// The local part of a JID, or the whole JID if it has none.
 pub(crate) fn local_part(jid: &str) -> String {
     jid.split_once('@')
@@ -375,6 +402,55 @@ mod tests {
             .execute("UPDATE avatars SET data = x'01' WHERE owner = ?1", [owner])
             .unwrap();
         assert_eq!(avatar_hash(&q, owner).unwrap().as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn an_occupant_avatar_comes_from_the_real_jid_first_and_then_the_full_jid() {
+        let store = Store::open_in_memory().unwrap();
+        let account = BareJid::new("alice@chord.localhost").unwrap();
+        let account_id = ensure_account(store.conn(), account.as_str()).unwrap();
+        let q = QueryCtx {
+            store: &store,
+            account_id,
+            account: &account,
+        };
+        let room = "dev@rooms.chord.localhost";
+        let insert = |owner: &str, hash: &str| {
+            store
+                .conn()
+                .execute(
+                    "INSERT INTO avatars (account_id, owner, hash, mime, data)
+                     VALUES (?1, ?2, ?3, 'image/png', x'01')",
+                    params![account_id, owner, hash],
+                )
+                .unwrap();
+        };
+        store
+            .conn()
+            .execute(
+                "INSERT INTO occupants (account_id, room, nick, real_jid, affiliation, role)
+                 VALUES (?1, ?2, 'bobby', 'bob@chord.localhost', 'none', 'participant'),
+                        (?1, ?2, 'anon', NULL, 'none', 'participant')",
+                params![account_id, room],
+            )
+            .unwrap();
+        assert_eq!(occupant_avatar_hash(&q, room, "bobby").unwrap(), None);
+        insert(&format!("{room}/bobby"), "full");
+        assert_eq!(
+            occupant_avatar_hash(&q, room, "bobby").unwrap().as_deref(),
+            Some("full")
+        );
+        insert("bob@chord.localhost", "real");
+        assert_eq!(
+            occupant_avatar_hash(&q, room, "bobby").unwrap().as_deref(),
+            Some("real")
+        );
+        insert(&format!("{room}/anon"), "anon-hash");
+        assert_eq!(
+            occupant_avatar_hash(&q, room, "anon").unwrap().as_deref(),
+            Some("anon-hash")
+        );
+        assert_eq!(occupant_avatar_hash(&q, room, "nobody").unwrap(), None);
     }
 
     #[test]

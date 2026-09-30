@@ -3,7 +3,7 @@
 use jid::BareJid;
 use rusqlite::{OptionalExtension, params};
 
-use super::timeline::{avatar_hash, contact_name, local_part};
+use super::timeline::{avatar_hash, contact_name, local_part, occupant_avatar_hash};
 use super::{QueryCtx, ViewItem};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,7 +74,7 @@ fn occupants(q: &QueryCtx<'_>, room: &BareJid) -> rusqlite::Result<Vec<MemberIte
         .collect::<rusqlite::Result<_>>()?;
     let mut out = Vec::with_capacity(rows.len());
     for (nick, jid, role, affiliation, show) in rows {
-        let avatar = avatar_hash(q, &format!("{}/{nick}", room.as_str()))?;
+        let avatar = occupant_avatar_hash(q, room.as_str(), &nick)?;
         out.push(MemberItem {
             id: nick.clone(),
             name: nick,
