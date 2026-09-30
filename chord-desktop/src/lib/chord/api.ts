@@ -22,6 +22,7 @@ import type {
   OpenInfo,
   OwnPresence,
   PendingJoin,
+  Pin,
   PushRegistration,
   RoomAffiliation,
   RoomCard,
@@ -324,6 +325,18 @@ export const setNotificationLevel = (peer: string, level: NotificationLevel, mut
 export const notificationLevel = (peer: string) =>
   invoke<NotificationSetting>('notification_level', { peer });
 export const pushRegistrations = () => invoke<PushRegistration[]>('push_registrations');
+
+// ---------------------------------------------------------------- pins
+
+/** Pin a message (`itemId` is its timeline id). The pin goes to the account, for all devices. */
+export const pinMessage = (itemId: string) => invoke<void>('pin_message', { itemId });
+/** Remove a pin. `chat` and `key` are the fields of the `Pin`. */
+export const unpinMessage = (chat: string, key: string) =>
+  invoke<void>('unpin_message', { chat, key });
+/** The pins of one chat, newest first, from the local copy. */
+export const listPins = (chat: string) => invoke<Pin[]>('pins', { chat });
+/** Ask the server for the pins again. The core also does it at each connect. */
+export const refreshPins = () => invoke<void>('refresh_pins');
 
 // ---------------------------------------------------------------- local settings
 

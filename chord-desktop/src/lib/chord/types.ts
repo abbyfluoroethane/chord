@@ -311,6 +311,23 @@ export interface PushRegistration {
   node: string;
 }
 
+/** A pinned message (Rust `Pin`). The account keeps the pins, so every device shows them. */
+export interface Pin {
+  /** The bare JID of the room or the contact. */
+  chat: string;
+  /** The stanza-id, origin-id, or id of the message. Use it with `unpinMessage`. */
+  key: string;
+  /** The id of the message in the timeline, if this device has the message. */
+  itemId: string | null;
+  /** The nick in a room, else the JID of the sender. */
+  sender: string;
+  body: string;
+  /** The time of the message, ms. */
+  timestamp: number;
+  /** The time of the pin, ms. */
+  pinnedAt: number;
+}
+
 // ---------------------------------------------------------------- bridge
 
 /** What `open` returns (Rust `OpenInfo`). */

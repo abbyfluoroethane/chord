@@ -15,6 +15,7 @@ mod keychain;
 mod link_preview;
 mod links;
 mod notify;
+mod pins;
 mod settings;
 mod state;
 mod theme_fetch;
@@ -122,6 +123,10 @@ pub fn run() {
             commands::set_notification_level,
             commands::notification_level,
             commands::push_registrations,
+            pins::pin_message,
+            pins::unpin_message,
+            pins::pins,
+            pins::refresh_pins,
             link_preview::link_preview,
             files::save_image,
             theme_fetch::theme_fetch,

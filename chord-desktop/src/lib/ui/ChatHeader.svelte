@@ -4,6 +4,7 @@
   import Hash from 'lucide-svelte/icons/hash';
   import Users from 'lucide-svelte/icons/users';
   import Icon from './Icon.svelte';
+  import PinsPanel from './PinsPanel.svelte';
   import Presence from './Presence.svelte';
   import SearchPanel from './SearchPanel.svelte';
   import { app, HOME } from './app.svelte';
@@ -40,6 +41,7 @@
       <Icon icon={Users} size={20} />
     </button>
   {/if}
+  {#if c && !c.pm}<PinsPanel />{/if}
   <SearchPanel />
 </header>
 

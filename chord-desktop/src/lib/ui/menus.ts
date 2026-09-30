@@ -13,6 +13,8 @@ import Link from 'lucide-svelte/icons/link';
 import LogOut from 'lucide-svelte/icons/log-out';
 import Mail from 'lucide-svelte/icons/mail';
 import Pencil from 'lucide-svelte/icons/pencil';
+import Pin from 'lucide-svelte/icons/pin';
+import PinOff from 'lucide-svelte/icons/pin-off';
 import Reply from 'lucide-svelte/icons/reply';
 import Settings from 'lucide-svelte/icons/settings';
 import ShieldX from 'lucide-svelte/icons/shield-x';
@@ -27,6 +29,7 @@ import { copyText } from './clipboard';
 import type { QuickReactions } from './contextmenu.svelte';
 import type { MenuItem } from './Menu.svelte';
 import { channelLink } from './messagelink';
+import { pins } from './pins.svelte';
 import type { Attachment, ChannelItem, NotificationLevel, TimelineItem } from './types';
 import { ui } from './ui.svelte';
 
@@ -119,6 +122,15 @@ export function messageMenu(
     act.push({ label: 'Reply', icon: Reply, onselect: () => app.startReply(item) });
     if (item.body.trim() || item.attachment) {
       act.push({ label: 'Forward', icon: Forward, onselect: () => (ui.forwarding = item) });
+    }
+    // Pins are per chat. A private chat with a room member has none.
+    if (channel && !channel.pm && (item.body.trim() || item.attachment)) {
+      const pinned = pins.isPinned(channel.jid, item);
+      act.push({
+        label: pinned ? 'Unpin message' : 'Pin message',
+        icon: pinned ? PinOff : Pin,
+        onselect: () => void pins.toggle(channel.jid, item)
+      });
     }
   }
 
