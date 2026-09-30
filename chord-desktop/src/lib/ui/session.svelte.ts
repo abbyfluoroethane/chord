@@ -7,7 +7,11 @@ import { api, live } from './bridge';
 import { settings } from './local';
 import { ui } from './ui.svelte';
 
-export type ConnState = 'signed-out' | 'connecting' | 'connected' | 'reconnecting';
+/**
+ * `restoring` means the app has a saved account and signs in with the saved password.
+ * The splash screen shows in this state, and not the login form.
+ */
+export type ConnState = 'signed-out' | 'restoring' | 'connecting' | 'connected' | 'reconnecting';
 
 export interface Credentials {
   address: string;
@@ -46,6 +50,13 @@ class Session {
   private lastAddress = '';
   private everConnected = false;
   private leaving = false;
+  /** True after the user gave up on the automatic sign-in. */
+  private cancelled = false;
+
+  /** True while the splash screen must show: the boot, or the automatic sign-in. */
+  get splash(): boolean {
+    return this.booting || this.state === 'restoring';
+  }
 
   /** Whether the banner can offer "Try now". */
   get canRetry(): boolean {
@@ -76,8 +87,27 @@ class Session {
     } catch (e) {
       this.error = plainError(e);
     }
+    // Set `restoring` before `booting` ends. The login form must never show in between.
+    if (auto) {
+      this.host = auto.split('@')[1] ?? this.host;
+      this.state = 'restoring';
+    }
     this.booting = false;
-    if (auto) await this.connect(auto, { password: undefined, server: '', remember: false });
+    if (auto) await this.connect(auto, { password: undefined, server: '', remember: false }, true);
+  }
+
+  /** The user gives up on the automatic sign-in and goes to the login form. */
+  async cancelRestore(): Promise<void> {
+    if (this.state !== 'restoring') return;
+    this.cancelled = true;
+    this.state = 'signed-out';
+    this.error = null;
+    try {
+      await (await api()).logout();
+      await (await controller()).stopViews();
+    } catch {
+      /* nothing was running */
+    }
   }
 
   async signIn(c: Credentials): Promise<void> {
@@ -119,13 +149,15 @@ class Session {
 
   private async connect(
     address: string,
-    o: { password: string | undefined; server: string; remember: boolean }
+    o: { password: string | undefined; server: string; remember: boolean },
+    restore = false
   ): Promise<void> {
-    this.state = 'connecting';
+    this.state = restore ? 'restoring' : 'connecting';
     this.error = null;
     this.leaving = false;
+    this.cancelled = false;
     this.everConnected = false;
-    this.host = o.server.trim().replace(/^starttls:\/\//, '').replace(/:\d+$/, '') || address.split('@')[1];
+    if (!restore) this.host = o.server.trim().replace(/^starttls:\/\//, '').replace(/:\d+$/, '') || address.split('@')[1];
     try {
       const b = await api();
       const c = await controller();
@@ -139,10 +171,11 @@ class Session {
       settings.set('session', { account: info.account, auto: this.hasSavedPassword });
       await c.startViews();
       // The connection event can be first. Do not undo a "reconnecting".
-      if (this.state === 'connecting') this.state = 'connected';
+      if (this.cancelled) return;
+      if (this.state === 'connecting' || this.state === 'restoring') this.state = 'connected';
       this.everConnected = true;
     } catch (e) {
-      await this.fail(plainError(e));
+      if (!this.cancelled) await this.fail(plainError(e));
     }
   }
 
@@ -162,6 +195,7 @@ class Session {
     if (this.leaving || this.state === 'signed-out') return;
     switch (s.type) {
       case 'connecting':
+        if (this.state === 'restoring') break;
         this.state = this.everConnected ? 'reconnecting' : 'connecting';
         break;
       case 'connected': {
