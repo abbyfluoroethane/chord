@@ -429,12 +429,6 @@ pub async fn set_client_active(state: State<'_, AppState>, active: bool) -> Res<
     Ok(state.handle()?.set_client_active(active).await?)
 }
 
-/// Fetch older messages of a chat or a room from the archive (MAM).
-#[tauri::command]
-pub async fn load_older(state: State<'_, AppState>, peer: String) -> Res<()> {
-    Ok(state.handle()?.load_older(bare(&peer)?).await?)
-}
-
 /// Search the stored messages, newest first. With `peer`, only that chat or room.
 /// Works offline: it reads the local store, not the server archive.
 #[tauri::command]

@@ -11,7 +11,7 @@
 <script lang="ts">
   // Dialogs opened from the space menu. Bridge calls: setNotificationLevel (each channel
   // of the space), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
-  // createChannel, and leaveSpace.
+  // createChannel, leaveSpace, deleteSpace, and removeRoomFromSpace.
   import { splitSpaceKey } from './adapt';
   import { failureNote } from './batch';
   import InviteList from './InviteList.svelte';
@@ -32,6 +32,9 @@
   /** Join requests of the space. Only an owner gets them. */
   let requests = $state<{ jid: string; subid: string | null }[]>([]);
   let requestsNote = $state('');
+  /** I own the space: I can remove its channels and delete it. The preview owns all. */
+  let owner = $state(!live);
+  const channelsHere = $derived(app.channels.filter((c) => c.space === space && c.kind === 'channel'));
 
   // Maps to api.spaceJoinRequests(service, node).
   $effect(() => {
@@ -41,6 +44,7 @@
       .call((b) => b.spaceJoinRequests(service, node))
       .then((r) => {
         if (r.ok) {
+          owner = true;
           requests = r.value;
           requestsNote = r.value.length ? '' : 'Nobody is waiting to join.';
         } else requestsNote = 'Only the owner of a space sees join requests.';
@@ -101,6 +105,18 @@
     else if (kind === 'settings' && circle && text.trim() && !live) circle.name = text.trim();
     else if (kind === 'leave') app.leaveCircle(space);
     onclose();
+  }
+
+  function askDelete() {
+    const name = circle?.name ?? 'this space';
+    const key = space;
+    onclose();
+    ui.confirm = {
+      title: 'Delete space',
+      text: `Delete ${name} for everyone? Its list of channels and members is removed. This cannot be undone.`,
+      confirm: 'Delete space',
+      onconfirm: () => void app.deleteCircle(key)
+    };
   }
 
   async function copy() {
@@ -174,6 +190,31 @@
             </div>
           {/each}
           {#if requestsNote}<span class="hint">{requestsNote}</span>{/if}
+        </div>
+      {/if}
+      {#if owner}
+        <div class="field">
+          <span class="field-label">Channels</span>
+          {#each channelsHere as c (c.jid)}
+            <div class="req">
+              <span class="mono">#{c.name}</span>
+              <button
+                type="button"
+                class="btn btn-ghost"
+                onclick={() => void app.removeChannelFromCircle(space, c.jid)}
+              >
+                Remove from space
+              </button>
+            </div>
+          {:else}
+            <span class="hint">This space has no channels.</span>
+          {/each}
+        </div>
+        <div class="field">
+          <span class="field-label">Danger zone</span>
+          <div>
+            <button type="button" class="btn btn-danger" onclick={askDelete}>Delete space</button>
+          </div>
         </div>
       {/if}
     {/if}

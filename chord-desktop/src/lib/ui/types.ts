@@ -33,6 +33,8 @@ export interface ChannelItem {
   unknownPresence?: boolean;
   /** A group chat: the people in it now. */
   members?: number | null;
+  /** The category of a channel in a space. Channels with the same one share a header. */
+  category?: string | null;
 }
 
 /** A room outside a space is a group chat. It sits with the DMs, as on Discord. */

@@ -106,7 +106,8 @@ export function toChannel(c: BChannel, ctx: ChannelContext): ChannelItem {
     online: ctx.presence?.online ?? false,
     pm,
     unknownPresence: !ctx.presence,
-    members: c.members ?? null
+    members: c.members ?? null,
+    category: c.kind.type === 'room' ? (c.category ?? null) : null
   };
 }
 

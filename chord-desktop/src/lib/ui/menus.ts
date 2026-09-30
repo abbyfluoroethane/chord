@@ -31,6 +31,7 @@ import type { MenuItem } from './Menu.svelte';
 import { channelLink } from './messagelink';
 import { pins } from './pins.svelte';
 import { isGroup, type Attachment, type ChannelItem, type NotificationLevel, type TimelineItem } from './types';
+import { unreadChannels } from './unread';
 import { ui } from './ui.svelte';
 
 /** Join groups of rows. A divider goes above the first row of every group but the first. */
@@ -300,6 +301,12 @@ export function homeMenu(key: string): MenuItem[] {
       disabled: quiet,
       hint: quiet ? 'Up to date' : undefined,
       onselect: () => app.markSpaceRead(key)
+    },
+    {
+      label: 'Mark every space as read',
+      icon: CheckCheck,
+      disabled: unreadChannels(app.channels).length === 0,
+      onselect: () => app.markAllRead()
     }
   ];
 }

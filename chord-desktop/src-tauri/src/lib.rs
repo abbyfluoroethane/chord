@@ -6,6 +6,7 @@
 //! feature produces. The TypeScript side is in src/lib/chord/.
 
 mod avatars;
+mod badge;
 mod commands;
 mod emoji;
 mod error;
@@ -80,7 +81,6 @@ pub fn run() {
             files::upload_dropped,
             files::upload_pasted,
             commands::set_client_active,
-            commands::load_older,
             commands::join_room,
             commands::room_info,
             commands::search_messages,
@@ -137,6 +137,7 @@ pub fn run() {
             pins::unpin_message,
             pins::pins,
             pins::refresh_pins,
+            badge::set_unread_count,
             forms::list_commands,
             forms::command_step,
             forms::room_config_form,

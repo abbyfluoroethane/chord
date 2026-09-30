@@ -227,8 +227,6 @@ export const uploadPasted = (to: string, type: string, bytes: Uint8Array) =>
   invoke<string>('upload_pasted', bytes, {
     headers: { to: encodeURIComponent(to), type: encodeURIComponent(type) }
   });
-/** Fetch older messages of a chat or a room from the server archive. */
-export const loadOlder = (peer: string) => invoke<void>('load_older', { peer });
 
 /** Search the stored messages, newest first. Without `peer` it searches every chat. */
 export const searchMessages = (query: string, peer?: string, limit = 50) =>

@@ -3,3 +3,4 @@ export * from './api';
 export * from './avatars';
 export * from './diff';
 export type * from './types';
+export * from './badge';

@@ -1,7 +1,9 @@
 <script lang="ts">
   // Room settings for an owner or an admin. Maps to api.configureRoom(room, settings) and,
   // for the topic, api.setRoomSubject(room, subject).
-  // The bridge cannot read the current settings, so "Keep" leaves a value as it is.
+  // The form of the room gives the current settings (api.roomConfigForm). The two choices
+  // start at those values. An admin cannot read that form: there they stay on "Keep as it is".
+  // The Banned and Members tabs list the people of the room, each with a button to undo it.
   // "All options" loads the whole owner form of the room (api.roomConfigForm) and shows it
   // with the generic form renderer. It saves with api.submitRoomConfigForm.
   import { onMount } from 'svelte';
@@ -9,10 +11,13 @@
   import { sampleRoomForm } from '$lib/fixtures/forms';
   import DataFormView from './DataFormView.svelte';
   import Modal from './Modal.svelte';
+  import RoomAffiliationList from './RoomAffiliationList.svelte';
+  import Segmented from './Segmented.svelte';
   import { app } from './app.svelte';
   import { api, live } from './bridge';
   import { plainError } from './adapt';
   import { problems, submission } from './forms';
+  import { flagChange, flagOf, type Flag } from './roomconfig';
   import type { ChannelItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -24,19 +29,52 @@
     name = channel.name;
     topic = channel.topic ?? '';
   });
-  let visible = $state<'keep' | 'yes' | 'no'>('keep');
-  let membersOnly = $state<'keep' | 'yes' | 'no'>('keep');
+  let visible = $state<Flag>('keep');
+  let membersOnly = $state<Flag>('keep');
+  /** The values that the form showed. A choice that still has one is not sent. */
+  let initialVisible: Flag = 'keep';
+  let initialMembersOnly: Flag = 'keep';
+  type Tab = 'settings' | 'banned' | 'members';
+  let tab = $state<Tab>('settings');
+  const tabs: { value: Tab; label: string }[] = [
+    { value: 'settings', label: 'Settings' },
+    { value: 'banned', label: 'Banned' },
+    { value: 'members', label: 'Members' }
+  ];
   let busy = $state(false);
   /** The whole owner form, once loaded. With it, the modal shows it instead of three fields. */
   let full = $state<DataForm | null>(null);
   let loadError = $state('');
   let showProblems = $state(false);
 
+  /** The form as the server gave it. It stays, so "All options" does not ask again. */
+  let loaded: DataForm | null = null;
+
+  async function fetchForm(): Promise<DataForm> {
+    return live ? await (await api()).roomConfigForm(channel.jid) : sampleRoomForm();
+  }
+
+  // Read the current settings. A failure is not shown: an admin gets no form, and the two
+  // choices then keep their "Keep as it is" value.
+  onMount(() => {
+    void fetchForm()
+      .then((form) => {
+        loaded = form;
+        initialVisible = flagOf(form, 'muc#roomconfig_publicroom');
+        initialMembersOnly = flagOf(form, 'muc#roomconfig_membersonly');
+        visible = initialVisible;
+        membersOnly = initialMembersOnly;
+      })
+      .catch(() => {
+        /* No form for this user. */
+      });
+  });
+
   async function loadAll() {
     busy = true;
     loadError = '';
     try {
-      full = live ? await (await api()).roomConfigForm(channel.jid) : sampleRoomForm();
+      full = loaded ?? (await fetchForm());
     } catch (e) {
       loadError = plainError(e);
     } finally {
@@ -65,8 +103,6 @@
     }
   }
 
-  const flag = (v: 'keep' | 'yes' | 'no') => (v === 'keep' ? null : v === 'yes');
-
   async function save() {
     busy = true;
     // The topic is a message to the room, not a setting of the form.
@@ -77,8 +113,8 @@
     const r = await app.call((b) =>
       b.configureRoom(channel.jid, {
         name: name.trim() && name.trim() !== channel.name ? name.trim() : null,
-        public: flag(visible),
-        membersOnly: flag(membersOnly)
+        public: flagChange(initialVisible, visible),
+        membersOnly: flagChange(initialMembersOnly, membersOnly)
       })
     );
     busy = false;
@@ -87,7 +123,16 @@
 </script>
 
 <Modal title="Channel settings" size={full ? 'medium' : 'small'} {onclose}>
-  {#if full}
+  {#if !full}
+    <div class="tabs">
+      <Segmented value={tab} options={tabs} label="Channel settings" onchange={(v) => (tab = v)} />
+    </div>
+  {/if}
+  {#if tab === 'banned' && !full}
+    <RoomAffiliationList room={channel.jid} affiliation="outcast" />
+  {:else if tab === 'members' && !full}
+    <RoomAffiliationList room={channel.jid} affiliation="member" />
+  {:else if full}
     <DataFormView bind:form={full} idPrefix="room" disabled={busy} {showProblems} />
     {#if loadError}<p class="err" role="alert">{loadError}</p>{/if}
   {:else}
@@ -131,9 +176,11 @@
   {/if}
 
   {#snippet footer()}
-    <button class="btn btn-ghost" onclick={onclose}>Cancel</button>
+    <button class="btn btn-ghost" onclick={onclose}>{tab === 'settings' || full ? 'Cancel' : 'Close'}</button>
     {#if full}
       <button class="btn btn-primary" disabled={busy} onclick={() => void saveAll()}>Save</button>
+    {:else if tab !== 'settings'}
+      <!-- The lists change the room at once, so there is nothing to save. -->
     {:else}
       <button class="btn btn-primary" disabled={busy} onclick={() => void save()}>Save</button>
     {/if}
@@ -141,6 +188,9 @@
 </Modal>
 
 <style>
+  .tabs {
+    margin-bottom: var(--space-4);
+  }
   form {
     display: flex;
     flex-direction: column;

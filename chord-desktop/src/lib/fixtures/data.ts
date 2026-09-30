@@ -117,9 +117,13 @@ export const channels: ChannelItem[] = [
     mentions: 1,
     topic: 'Static fire is Thursday. Keep it calm and keep it short.'
   }),
-  ch(K.ops, 'static-fire', 'static-fire', { unread: 2, topic: 'Test stand logs and photos' }),
-  ch(K.ops, 'parts', 'parts', { topic: 'Orders, stock, and where things are' }),
-  ch(K.ops, 'off-topic', 'off-topic', { muted: true, unread: 9 }),
+  ch(K.ops, 'static-fire', 'static-fire', {
+    unread: 2,
+    topic: 'Test stand logs and photos',
+    category: 'Test stand'
+  }),
+  ch(K.ops, 'parts', 'parts', { topic: 'Orders, stock, and where things are', category: 'Test stand' }),
+  ch(K.ops, 'off-topic', 'off-topic', { muted: true, unread: 9, category: 'Social' }),
   ch(K.ops, 'safety', 'safety', { topic: 'Read this before you touch the stand' }),
 
   ch(K.makers, 'general', 'general', { unread: 1, topic: 'Doors open at 18:00' }),
@@ -308,6 +312,13 @@ const opsGeneral = build([
     ts: at(0, 9, 20),
     body: 'Copy that. I will move the range booking.',
     replyTo: { id: 'g5', senderName: 'Abby', body: 'Morning. Static fire moved to 14:00 tomorrow btw.' }
+  },
+  {
+    id: 'g6b',
+    who: 'abby',
+    ts: at(0, 9, 24),
+    body: 'Thanks. Tell the range office about the noise too.',
+    replyTo: { id: 'g6', senderName: 'Rin', body: 'Copy that. I will move the range booking.' }
   },
   {
     id: 'g7',

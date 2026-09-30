@@ -29,6 +29,7 @@ import type {
 import { failureNote, runBatch } from './batch';
 import { canSetTopic, isModerator } from './rooms';
 import { isGroup, spaceKey } from './types';
+import { totalUnread as sumUnread, unreadChannels } from './unread';
 import { ui } from './ui.svelte';
 
 export const HOME = 'home';
@@ -472,6 +473,14 @@ class AppState {
       if (c.unread > 0 || c.mentions > 0) this.markRead(c.jid);
     }
   }
+
+  /** Mark every channel of every space, and every chat, as read. */
+  markAllRead() {
+    for (const c of unreadChannels(this.channels)) this.markRead(c.jid);
+  }
+
+  /** The messages that wait in all chats, for the window title and the dock badge. */
+  totalUnread = $derived(sumUnread(this.channels));
 
   // --- typing ------------------------------------------------------
 
@@ -1205,6 +1214,36 @@ class AppState {
     }
     this.selectedSpace = '';
     this.selectSpace(HOME);
+  }
+
+  /** Delete a space for everybody. Only its owner can. Maps to api.deleteSpace(service, node). */
+  async deleteCircle(key: string): Promise<boolean> {
+    if (live) {
+      const { service, node } = splitSpaceKey(key);
+      const r = await this.call((b) => b.deleteSpace(service, node));
+      if (!r.ok) return false;
+    } else {
+      this.spaces = this.spaces.filter((s) => spaceKey(s) !== key);
+      this.channels = this.channels.filter((c) => c.space !== key);
+    }
+    this.leaveChannel();
+    this.selectedSpace = '';
+    this.selectSpace(HOME);
+    return true;
+  }
+
+  /** Take a channel out of a space (owner only). The room itself stays. Maps to
+   * api.removeRoomFromSpace(service, node, room). */
+  async removeChannelFromCircle(key: string, jid: string): Promise<boolean> {
+    if (live) {
+      const { service, node } = splitSpaceKey(key);
+      const r = await this.call((b) => b.removeRoomFromSpace(service, node, jid));
+      if (!r.ok) return false;
+    } else {
+      this.channels = this.channels.filter((c) => c.jid !== jid);
+    }
+    if (jid === this.selectedJid) this.ensureSelection();
+    return true;
   }
 
   /** Leave one channel. Maps to api.leaveRoom(room). The row stays in its space. */

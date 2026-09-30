@@ -14,8 +14,10 @@
     <button
       class="btn btn-danger"
       onclick={() => {
+        // `s` is ui.confirm: onclose() clears it, so take the callback first.
+        const go = s.onconfirm;
         onclose();
-        s.onconfirm();
+        go();
       }}>{s.confirm}</button
     >
   {/snippet}

@@ -145,7 +145,7 @@
   {/if}
 
   {#if item.replyTo}
-    <div class="reply"><ReplyPreview reply={item.replyTo} {onjump} /></div>
+    <div class="reply"><ReplyPreview reply={item.replyTo} {item} {onjump} /></div>
   {/if}
 
   <div class="gutter">

@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import UserPanel from './UserPanel.svelte';
   import { app, HOME } from './app.svelte';
+  import { groupByCategory } from './categories';
   import { leaveGroup } from './menus';
   import { isGroup } from './types';
   import { tooltip } from './tooltip';
@@ -16,6 +17,10 @@
 
   let creating = $state(false);
   const isHome = $derived(app.selectedSpace === HOME);
+  // A space shows its channels under the category headers. Home keeps one flat list.
+  const groups = $derived(
+    isHome ? [{ name: null, items: app.spaceChannels }] : groupByCategory(app.spaceChannels)
+  );
 </script>
 
 <aside class="sidebar" aria-label={isHome ? 'Direct messages' : 'Channels'}>
@@ -44,22 +49,27 @@
         </button>
       {/if}
     </div>
-    <ul>
-      {#each app.spaceChannels as c (c.jid)}
-        <li>
-          <ChannelRow
-            channel={c}
-            selected={c.jid === app.selectedJid && !app.showContacts}
-            onclick={() => app.selectChannel(c.jid)}
-            onclose={c.kind === 'dm'
-              ? () => app.closeDm(c.jid)
-              : isGroup(c) && c.joined
-                ? () => leaveGroup(c.jid, c.name)
-                : undefined}
-          />
-        </li>
-      {/each}
-    </ul>
+    {#each groups as g (g.name ?? '')}
+      {#if g.name}
+        <div class="group category"><span class="label">{g.name}</span></div>
+      {/if}
+      <ul>
+        {#each g.items as c (c.jid)}
+          <li>
+            <ChannelRow
+              channel={c}
+              selected={c.jid === app.selectedJid && !app.showContacts}
+              onclick={() => app.selectChannel(c.jid)}
+              onclose={c.kind === 'dm'
+                ? () => app.closeDm(c.jid)
+                : isGroup(c) && c.joined
+                  ? () => leaveGroup(c.jid, c.name)
+                  : undefined}
+            />
+          </li>
+        {/each}
+      </ul>
+    {/each}
   </div>
 
   <UserPanel />
@@ -116,6 +126,9 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--space-4) var(--space-3) var(--space-1) var(--space-4);
+  }
+  .group.category {
+    padding-top: var(--space-3);
   }
   .label {
     font-size: 12px;

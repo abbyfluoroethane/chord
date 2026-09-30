@@ -33,6 +33,7 @@
   import { rail } from './rail.svelte';
   import { session } from './session.svelte';
   import { spaceKey } from './types';
+  import { escMarksRead, pageTitle } from './unread';
   import { ui } from './ui.svelte';
   import { xmppLinks } from './xmpplinks.svelte';
 
@@ -70,6 +71,19 @@
   // A new session starts with no idle time: send it again.
   $effect(() => {
     if (session.state === 'connected') idleWatch?.resend();
+  });
+
+  // The total of unread messages goes to the window title and the dock badge.
+  $effect(() => {
+    const n = app.totalUnread;
+    document.title = pageTitle(n);
+    if (live) {
+      void api()
+        .then((b) => b.setUnreadCount(n))
+        .catch(() => {
+          /* A badge that fails does no harm. */
+        });
+    }
   });
 
   // Load the rail layout once the spaces are known. Before that the list is empty and
@@ -110,7 +124,16 @@
       const dir = e.key === 'ArrowUp' ? -1 : 1;
       if (e.shiftKey) app.stepUnread(dir);
       else app.step(dir);
-    } else if (e.key === 'Escape' && !e.defaultPrevented && ui.overlays === 0 && !app.editingId) {
+    } else if (mod && e.shiftKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      app.markAllRead();
+    } else if (
+      e.key === 'Escape' &&
+      !e.defaultPrevented &&
+      ui.overlays === 0 &&
+      !app.editingId &&
+      escMarksRead(e.target)
+    ) {
       app.markRead();
     }
   }

@@ -23,6 +23,8 @@ export function sampleRoomForm(): DataForm {
       f({ var: 'FORM_TYPE', kind: 'hidden', values: ['http://jabber.org/protocol/muc#roomconfig'] }),
       f({ var: 'muc#roomconfig_roomname', label: 'Room title', values: ['Town hall'] }),
       f({ var: 'muc#roomconfig_roomdesc', label: 'Room description', kind: 'text-multi' }),
+      f({ var: 'muc#roomconfig_publicroom', kind: 'boolean', label: 'Show in the room list', values: ['1'] }),
+      f({ var: 'muc#roomconfig_membersonly', kind: 'boolean', label: 'Only members can join', values: ['0'] }),
       f({ var: 'muc#roomconfig_persistentroom', kind: 'boolean', label: 'Make room persistent', values: ['1'] }),
       f({ var: 'muc#roomconfig_roomsecret', kind: 'text-private', label: 'Password' }),
       f({
@@ -103,3 +105,18 @@ export const sampleRegistration: RegistrationForm = {
   oob: null,
   registered: false
 };
+
+/** The people of a room with one affiliation, for the preview. */
+export function sampleAffiliations(affiliation: string): [string, string | null][] {
+  if (affiliation === 'outcast') {
+    return [
+      ['spam@bad.example', 'Spambot'],
+      ['troll@other.example', null]
+    ];
+  }
+  return [
+    ['rin@foid.space', 'Rin'],
+    ['bay@foid.space', 'Bay'],
+    ['kit@foid.space', null]
+  ];
+}
