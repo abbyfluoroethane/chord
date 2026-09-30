@@ -814,14 +814,15 @@ pub async fn add_contact(
     preauth: Option<String>,
 ) -> Res<()> {
     let handle = state.handle()?;
-    Ok(match preauth.filter(|t| !t.is_empty()) {
+    match preauth.filter(|t| !t.is_empty()) {
         Some(token) => {
             handle
                 .add_contact_with_preauth(bare(&jid)?, name, token)
                 .await?
         }
         None => handle.add_contact(bare(&jid)?, name).await?,
-    })
+    }
+    Ok(())
 }
 
 #[tauri::command]
