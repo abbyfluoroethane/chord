@@ -7,8 +7,9 @@
 //! sees the same event.
 //!
 //! Two settings of the user narrow the system notice: the desktop switch, and "mute DMs".
-//! The UI sends them with `set_notice_prefs`. The core has no global default level, so the
-//! per-chat levels are the only level rules.
+//! Rust reads them from the `prefs` object of the saved settings: at start from the file,
+//! and on each `set_settings` from the new value. The UI sends no separate call. The core
+//! has no global default level, so the per-chat levels are the only level rules.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,12 +17,13 @@ use std::sync::{Arc, Mutex};
 use chord_core::actor::{ClientEvent, ClientEvents};
 use chord_core::features::notify::Notification;
 use chord_core::session::Stream;
-use tauri::{AppHandle, Manager, State};
+use serde_json::Value;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::state::{EventSink, lock};
 
-/// What the user allows for the system notice. The UI sets it at start and on each change.
+/// What the user allows for the system notice. Rust reads it from the saved settings.
 pub struct NoticePrefs {
     desktop: AtomicBool,
     mute_dms: AtomicBool,
@@ -37,19 +39,27 @@ impl Default for NoticePrefs {
 }
 
 impl NoticePrefs {
+    /// Take the two switches from the `prefs` object of the settings. A switch that is not
+    /// there (or not a boolean) goes back to its default.
+    pub fn apply(&self, settings: &Value) {
+        let flag = |key: &str, default: bool| {
+            settings
+                .get("prefs")
+                .and_then(|p| p.get(key))
+                .and_then(Value::as_bool)
+                .unwrap_or(default)
+        };
+        self.desktop
+            .store(flag("desktopNotifications", true), Ordering::Relaxed);
+        self.mute_dms
+            .store(flag("muteDms", false), Ordering::Relaxed);
+    }
+
     /// True if the settings allow a system notice for `n`.
-    fn allows(&self, n: &Notification) -> bool {
+    pub(crate) fn allows(&self, n: &Notification) -> bool {
         self.desktop.load(Ordering::Relaxed)
             && !(n.room.is_none() && self.mute_dms.load(Ordering::Relaxed))
     }
-}
-
-/// Set what the system notice may show: `desktop` is the master switch, `mute_dms` silences
-/// the notices of chats. A private message from a room member counts as a chat.
-#[tauri::command]
-pub fn set_notice_prefs(prefs: State<'_, NoticePrefs>, desktop: bool, mute_dms: bool) {
-    prefs.desktop.store(desktop, Ordering::Relaxed);
-    prefs.mute_dms.store(mute_dms, Ordering::Relaxed);
 }
 
 /// The title and the body of the system notification.
@@ -128,6 +138,22 @@ mod tests {
         assert!(prefs.allows(&room));
         prefs.desktop.store(false, Ordering::Relaxed);
         assert!(!prefs.allows(&room));
+    }
+
+    #[test]
+    fn the_saved_settings_set_the_switches() {
+        use serde_json::json;
+        let prefs = NoticePrefs::default();
+        prefs.apply(&json!({"prefs": {"desktopNotifications": false, "muteDms": true}}));
+        assert!(!prefs.allows(&notification(Some("dev@muc.example.org"))));
+        prefs.apply(&json!({"prefs": {"muteDms": true}}));
+        assert!(prefs.allows(&notification(Some("dev@muc.example.org"))));
+        assert!(!prefs.allows(&notification(None)));
+        // No prefs, a wrong type: the defaults.
+        prefs.apply(&json!({"prefs": {"desktopNotifications": "no", "muteDms": 1}}));
+        assert!(prefs.allows(&notification(None)));
+        prefs.apply(&json!({}));
+        assert!(prefs.allows(&notification(None)));
     }
 
     #[test]

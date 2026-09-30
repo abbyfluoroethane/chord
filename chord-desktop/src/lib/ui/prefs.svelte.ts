@@ -1,21 +1,14 @@
-// User settings that live on this device. One JSON blob in localStorage.
-// The bridge can move them to get_settings and set_settings later.
-import { api, live } from './bridge';
+// User settings. Inside the app they live in the settings file with the rest of the local
+// data (get_settings and set_settings), under the key "prefs". Rust reads the two notice
+// switches from there. In the browser preview they stay in localStorage.
+//
+// Migration: the first start after the update copies the old localStorage value into the
+// file. The old key stays, and is read as a fallback for the fields the file lacks.
 import type { DisplayMode } from './types';
-import { EMOJI_PACK_IDS, type EmojiPackId } from './emojipackids';
-
-const KEY = 'chord.prefs';
-
-interface Saved {
-  desktopNotifications: boolean;
-  sound: boolean;
-  muteDms: boolean;
-  autoApprove: boolean;
-  display: DisplayMode;
-  fontSize: number;
-  gifPicker: boolean;
-  emojiPack: EmojiPackId;
-}
+import type { EmojiPackId } from './emojipackids';
+import { live } from './bridge';
+import { settings } from './local';
+import { LEGACY_KEY, SETTINGS_KEY, resolvePrefs, type Saved } from './prefsdata';
 
 class Prefs {
   desktopNotifications = $state(true);
@@ -30,54 +23,50 @@ class Prefs {
   emojiPack = $state<EmojiPackId>('twemoji');
 
   load() {
+    let legacy: string | null = null;
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const v = JSON.parse(raw) as Partial<Saved>;
-        if (typeof v.desktopNotifications === 'boolean') this.desktopNotifications = v.desktopNotifications;
-        if (typeof v.sound === 'boolean') this.sound = v.sound;
-        if (typeof v.muteDms === 'boolean') this.muteDms = v.muteDms;
-        if (typeof v.autoApprove === 'boolean') this.autoApprove = v.autoApprove;
-        if (v.display === 'cozy' || v.display === 'compact') this.display = v.display;
-        if (typeof v.gifPicker === 'boolean') this.gifPicker = v.gifPicker;
-        if (v.emojiPack && EMOJI_PACK_IDS.includes(v.emojiPack)) this.emojiPack = v.emojiPack;
-        if (typeof v.fontSize === 'number') this.fontSize = Math.min(20, Math.max(12, v.fontSize));
-      }
+      legacy = localStorage.getItem(LEGACY_KEY);
     } catch {
-      /* storage blocked or bad JSON, keep the defaults */
+      /* storage blocked, keep the defaults */
     }
+    const { prefs: v, migrate } = resolvePrefs(live ? settings.get(SETTINGS_KEY) : undefined, legacy);
+    Object.assign(this, v);
+    // Live, the file is the home. A migrated value goes there now.
+    if (live && migrate) this.save();
     this.applyFont();
-    this.syncNotices();
   }
 
   /** Change one setting, save all, and apply the font size. */
   set<K extends keyof Saved>(key: K, value: Saved[K]) {
     (this as unknown as Saved)[key] = value;
+    this.save();
+    if (key === 'fontSize') this.applyFont();
+  }
+
+  private snapshot(): Saved {
+    return {
+      desktopNotifications: this.desktopNotifications,
+      sound: this.sound,
+      muteDms: this.muteDms,
+      autoApprove: this.autoApprove,
+      display: this.display,
+      fontSize: this.fontSize,
+      gifPicker: this.gifPicker,
+      emojiPack: this.emojiPack
+    };
+  }
+
+  private save() {
+    const out = this.snapshot();
+    if (live) {
+      settings.set(SETTINGS_KEY, out);
+      return;
+    }
     try {
-      const out: Saved = {
-        desktopNotifications: this.desktopNotifications,
-        sound: this.sound,
-        muteDms: this.muteDms,
-        autoApprove: this.autoApprove,
-        display: this.display,
-        fontSize: this.fontSize,
-        gifPicker: this.gifPicker,
-        emojiPack: this.emojiPack
-      };
-      localStorage.setItem(KEY, JSON.stringify(out));
+      localStorage.setItem(LEGACY_KEY, JSON.stringify(out));
     } catch {
       /* ignore */
     }
-    if (key === 'fontSize') this.applyFont();
-    if (key === 'desktopNotifications' || key === 'muteDms') this.syncNotices();
-  }
-
-  /** Rust shows the system notice, so it needs these two settings. */
-  private syncNotices() {
-    if (!live) return;
-    void api()
-      .then((b) => b.setNoticePrefs(this.desktopNotifications, this.muteDms))
-      .catch(() => undefined);
   }
 
   private applyFont() {

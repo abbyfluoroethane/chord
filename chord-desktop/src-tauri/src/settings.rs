@@ -7,9 +7,10 @@
 use std::path::Path;
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 use crate::error::{ChordError, Res};
+use crate::notify::NoticePrefs;
 
 /// The most bytes of a settings file: 256 KB.
 pub const MAX_SETTINGS_BYTES: usize = 256 * 1024;
@@ -78,12 +79,22 @@ pub async fn get_settings(app: AppHandle) -> Res<Value> {
     Ok(read_from(&dir))
 }
 
-/// Replace the settings. The value can be any JSON up to 256 KB.
+/// Replace the settings. The value can be any JSON up to 256 KB. The notice switches in
+/// `prefs` take effect at once.
 #[tauri::command]
-pub async fn set_settings(app: AppHandle, value: Value) -> Res<()> {
+pub async fn set_settings(app: AppHandle, notice: State<'_, NoticePrefs>, value: Value) -> Res<()> {
     validate(&value)?;
     let dir = config_dir(&app)?;
-    write_to(&dir, &value)
+    write_to(&dir, &value)?;
+    notice.apply(&value);
+    Ok(())
+}
+
+/// At start: the notice switches come from the file, before the UI is up.
+pub fn init_notice_prefs(app: &AppHandle) {
+    if let Ok(dir) = config_dir(app) {
+        app.state::<NoticePrefs>().apply(&read_from(&dir));
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +145,29 @@ mod tests {
             read_from(&dir),
             json!({}),
             "a damaged file gives an empty object"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_notice_switches_come_from_the_saved_file() {
+        use chord_core::features::notify::Notification;
+        let dir = temp_dir("notice");
+        write_to(&dir, &json!({"prefs": {"muteDms": true}, "drafts": {}})).unwrap();
+        let notice = NoticePrefs::default();
+        notice.apply(&read_from(&dir));
+        let chat = Notification {
+            peer: "bob@example.org".into(),
+            room: None,
+            sender: "bob".into(),
+            sender_name: "bob".into(),
+            body_preview: "hi".into(),
+            mention: false,
+            item_id: "m:1".into(),
+        };
+        assert!(
+            !notice.allows(&chat),
+            "mute DMs from the file silences a chat"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

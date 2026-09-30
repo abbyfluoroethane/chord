@@ -1,6 +1,6 @@
 <script lang="ts">
   // Notifications. The core applies the level of each chat (set in the chat menus). These
-  // settings narrow the notice: Rust reads the first and the last (api.setNoticePrefs), and
+  // settings narrow the notice: Rust reads the first and the last from the saved settings (notify.rs), and
   // the sound plays in the page (notices.ts). There is no default level here: the core has
   // no global default, so a setting for it would do nothing.
   import SettingRow from './SettingRow.svelte';

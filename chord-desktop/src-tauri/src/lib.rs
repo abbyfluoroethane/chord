@@ -41,7 +41,10 @@ pub fn run() {
                 webview.state::<files::Dropped>().remember(paths);
             }
         })
-        .setup(links::setup);
+        .setup(|app| {
+            settings::init_notice_prefs(app.handle());
+            links::setup(app)
+        });
     emoji::register(avatars::register(builder))
         .invoke_handler(tauri::generate_handler![
             commands::open,
@@ -69,7 +72,6 @@ pub fn run() {
             commands::mark_read_private,
             commands::mark_unread,
             commands::set_typing,
-            notify::set_notice_prefs,
             files::upload_files,
             files::upload_dropped,
             files::upload_pasted,
