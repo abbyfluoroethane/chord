@@ -31,6 +31,13 @@ uuid = { version = "1", features = ["v4"] }
 # SHA-1 of avatar images (XEP-0084). xmpp-parsers already depends on this version.
 sha1 = "0.11"
 
+# tokio-xmpp 6.0.0 with one patch: `StanzaStream::send_client_state` sends the XEP-0352
+# `<active/>` and `<inactive/>` nonzas. Upstream sends nothing but stanzas. See the
+# "CHORD PATCH" comments in vendor/tokio-xmpp/src/stanzastream. Drop this when upstream
+# gets an API for it.
+[patch.crates-io]
+tokio-xmpp = { path = "vendor/tokio-xmpp" }
+
 # panic = "unwind" is required. Do not set panic = "abort" in any profile.
 #
 # - UniFFI needs unwind to turn a panic into an error at the FFI boundary.
