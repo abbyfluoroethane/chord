@@ -12,6 +12,8 @@ use jid::{BareJid, Jid};
 use rusqlite::params;
 use xmpp_parsers::blocking::{Block, BlocklistRequest, BlocklistResult, Unblock};
 use xmpp_parsers::iq::Iq;
+use xmpp_parsers::minidom::Element;
+use xmpp_parsers::minidom::rxml::NcName;
 use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
 
 use super::{Ctx, FeatureCommand, IqResponse, Pending as FeaturePending};
@@ -24,6 +26,26 @@ use crate::views::channel_list::ChannelScope;
 /// The namespace of XEP-0191. xmpp-parsers 0.23 uses `ns::BLOCKING` (blocking.rs, line 16).
 pub const NS_BLOCKING: &str = "urn:xmpp:blocking";
 
+/// The namespace of spam reports (XEP-0377). A server that advertises it takes a `report`
+/// element inside the `item` of a block.
+pub const NS_REPORTING: &str = "urn:xmpp:reporting:1";
+
+/// Why we report an address along with a block (XEP-0377, 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportReason {
+    Spam,
+    Abuse,
+}
+
+impl ReportReason {
+    fn uri(self) -> &'static str {
+        match self {
+            Self::Spam => "urn:xmpp:reporting:spam",
+            Self::Abuse => "urn:xmpp:reporting:abuse",
+        }
+    }
+}
+
 type Reply<T> = oneshot::Sender<Result<T, ClientError>>;
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -33,7 +55,9 @@ pub(crate) enum Pending {
     Fetch,
     Block {
         jid: BareJid,
-        reply: Reply<()>,
+        /// The block carried a report.
+        reported: bool,
+        reply: Reply<bool>,
     },
     Unblock {
         /// `None` unblocks every address.
@@ -44,10 +68,21 @@ pub(crate) enum Pending {
 
 /// A command from the public API.
 pub(crate) enum Command {
-    Block { jid: BareJid, reply: Reply<()> },
-    Unblock { jid: BareJid, reply: Reply<()> },
-    UnblockAll { reply: Reply<()> },
-    List { reply: Reply<Vec<BareJid>> },
+    Block {
+        jid: BareJid,
+        report: Option<ReportReason>,
+        reply: Reply<bool>,
+    },
+    Unblock {
+        jid: BareJid,
+        reply: Reply<()>,
+    },
+    UnblockAll {
+        reply: Reply<()>,
+    },
+    List {
+        reply: Reply<Vec<BareJid>>,
+    },
 }
 
 impl ClientHandle {
@@ -56,8 +91,31 @@ impl ClientHandle {
     /// with `Unsupported` when the server lacks `urn:xmpp:blocking`. The core emits
     /// `ClientEvent::BlockListChanged` when the list changes.
     pub async fn block_contact(&self, jid: BareJid) -> Result<(), ClientError> {
+        self.block_with(jid, None).await.map(|_| ())
+    }
+
+    /// Block an address and report it to the server (XEP-0377), when the server advertises
+    /// `urn:xmpp:reporting:1`. Otherwise it is a plain block. Returns true when the block
+    /// carried the report. Waits for service discovery like `block_contact`.
+    pub async fn block_and_report(
+        &self,
+        jid: BareJid,
+        reason: ReportReason,
+    ) -> Result<bool, ClientError> {
+        self.block_with(jid, Some(reason)).await
+    }
+
+    async fn block_with(
+        &self,
+        jid: BareJid,
+        report: Option<ReportReason>,
+    ) -> Result<bool, ClientError> {
         let (reply, answer) = oneshot::channel();
-        self.feature(FeatureCommand::Blocking(Command::Block { jid, reply }))?;
+        self.feature(FeatureCommand::Blocking(Command::Block {
+            jid,
+            report,
+            reply,
+        }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
@@ -110,9 +168,14 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             Ok(None) => log::warn!("the blocklist answer has no payload"),
             Err(e) => log::debug!("blocklist fetch failed: {e}"),
         },
-        Pending::Block { jid, reply } => {
+        Pending::Block {
+            jid,
+            reported,
+            reply,
+        } => {
             let outcome = outcome.map(|_| {
                 add(ctx, &[Jid::from(jid)]);
+                reported
             });
             let _ = reply.send(outcome);
         }
@@ -133,15 +196,45 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
         Command::List { reply } => {
             let _ = reply.send(list(ctx.store, ctx.account_id));
         }
-        Command::Block { jid, reply } => {
+        Command::Block { jid, report, reply } => {
             if !supported(ctx) {
                 let _ = reply.send(Err(unsupported()));
                 return;
             }
-            // Lines 33-41: one `item` with a `jid` per address.
-            let items = vec![Jid::from(jid.clone())];
-            let iq = Iq::from_set("", Block { items });
-            ctx.request(iq, FeaturePending::Blocking(Pending::Block { jid, reply }));
+            // XEP-0377: report only when the server says that it takes reports.
+            let report = report.filter(|_| ctx.state.disco.server_has(NS_REPORTING));
+            let reported = report.is_some();
+            let pending = FeaturePending::Blocking(Pending::Block {
+                jid: jid.clone(),
+                reported,
+                reply,
+            });
+            let iq = match report {
+                Some(reason) => {
+                    // The report sits inside the `item`, so build the element by hand.
+                    let item = Element::builder("item", NS_BLOCKING)
+                        .attr(attr_name("jid"), jid.as_str())
+                        .append(
+                            Element::builder("report", NS_REPORTING)
+                                .attr(attr_name("reason"), reason.uri()),
+                        );
+                    let payload = Element::builder("block", NS_BLOCKING).append(item).build();
+                    Iq::Set {
+                        from: None,
+                        to: None,
+                        id: String::new(),
+                        payload,
+                    }
+                }
+                // Lines 33-41: one `item` with a `jid` per address.
+                None => Iq::from_set(
+                    "",
+                    Block {
+                        items: vec![Jid::from(jid)],
+                    },
+                ),
+            };
+            ctx.request(iq, pending);
         }
         Command::Unblock { jid, reply } => {
             if !supported(ctx) {
@@ -173,9 +266,10 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
 /// `list` before it calls this function.
 pub(crate) fn offline(command: Command) {
     match command {
-        Command::Block { reply, .. }
-        | Command::Unblock { reply, .. }
-        | Command::UnblockAll { reply } => {
+        Command::Block { reply, .. } => {
+            let _ = reply.send(Err(ClientError::NotConnected));
+        }
+        Command::Unblock { reply, .. } | Command::UnblockAll { reply } => {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
         Command::List { reply } => {
@@ -264,6 +358,10 @@ pub(crate) fn is_blocked(store: &Store, account_id: i64, jid: &str) -> bool {
             |_| Ok(()),
         )
         .is_ok()
+}
+
+fn attr_name(name: &str) -> NcName {
+    NcName::try_from(name).expect("a valid attribute name")
 }
 
 fn supported(ctx: &Ctx<'_>) -> bool {
@@ -379,7 +477,7 @@ mod tests {
     use crate::features::testing::{ACCOUNT, Harness};
     use crate::features::{Effect, on_command, on_command_offline};
 
-    type Answer = oneshot::Receiver<Result<(), ClientError>>;
+    type Answer = oneshot::Receiver<Result<bool, ClientError>>;
 
     fn bare(s: &str) -> BareJid {
         BareJid::new(s).unwrap()
@@ -437,15 +535,23 @@ mod tests {
         h.respond(|p| matches!(p, FeaturePending::Blocking(_)), response);
     }
 
-    fn command(h: &mut Harness, make: impl FnOnce(Reply<()>) -> Command) -> Answer {
+    fn command<T>(
+        h: &mut Harness,
+        make: impl FnOnce(Reply<T>) -> Command,
+    ) -> oneshot::Receiver<Result<T, ClientError>> {
         let (reply, answer) = oneshot::channel();
         h.with_ctx(|ctx| on_command(ctx, FeatureCommand::Blocking(make(reply))));
         answer
     }
 
     fn block(h: &mut Harness, address: &str) -> Answer {
+        block_with(h, address, None)
+    }
+
+    fn block_with(h: &mut Harness, address: &str, report: Option<ReportReason>) -> Answer {
         command(h, |reply| Command::Block {
             jid: bare(address),
+            report,
             reply,
         })
     }
@@ -508,6 +614,47 @@ mod tests {
         assert!(answer.try_recv().unwrap().unwrap().is_ok());
         assert_eq!(stored(&h), ["spam@example.org"]);
         assert_eq!(events(&mut h), [ClientEvent::BlockListChanged]);
+    }
+
+    fn report_harness(reporting: bool) -> Harness {
+        let mut h = harness(true);
+        if reporting && let Some(info) = h.state.disco.server.as_mut() {
+            info.features.insert(NS_REPORTING.into());
+        }
+        h
+    }
+
+    #[test]
+    fn block_and_report_puts_the_report_in_the_item() {
+        let mut h = report_harness(true);
+        let mut answer = block_with(&mut h, "spam@example.org", Some(ReportReason::Spam));
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!("not a set");
+        };
+        assert!(payload.is("block", NS_BLOCKING));
+        let item = payload.children().next().unwrap();
+        assert_eq!(item.attr("jid"), Some("spam@example.org"));
+        let report = item.get_child("report", NS_REPORTING).unwrap();
+        assert_eq!(report.attr("reason"), Some("urn:xmpp:reporting:spam"));
+        respond(&mut h, IqResponse::Result(None));
+        assert!(answer.try_recv().unwrap().unwrap().unwrap());
+        assert_eq!(stored(&h), ["spam@example.org"]);
+    }
+
+    #[test]
+    fn block_and_report_is_a_plain_block_without_server_support() {
+        let mut h = report_harness(false);
+        let mut answer = block_with(&mut h, "spam@example.org", Some(ReportReason::Abuse));
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!("not a set");
+        };
+        let item = payload.children().next().unwrap();
+        assert_eq!(item.children().count(), 0);
+        respond(&mut h, IqResponse::Result(None));
+        assert!(!answer.try_recv().unwrap().unwrap().unwrap());
+        assert_eq!(stored(&h), ["spam@example.org"]);
     }
 
     #[test]
@@ -673,6 +820,7 @@ mod tests {
         let (reply, mut answer) = oneshot::channel();
         let block = Command::Block {
             jid: bare("b@example.org"),
+            report: None,
             reply,
         };
         on_command_offline(&h.store, h.account_id, FeatureCommand::Blocking(block));

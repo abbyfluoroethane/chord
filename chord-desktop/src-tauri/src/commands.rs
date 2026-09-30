@@ -844,10 +844,31 @@ pub async fn rename_contact(
     Ok(state.handle()?.rename_contact(bare(&jid)?, name).await?)
 }
 
-/// Accept the request of `ClientEvent::SubscriptionRequest`.
+/// Replace the groups of a contact. An empty list clears them. The name stays.
 #[tauri::command]
-pub async fn approve_subscription(state: State<'_, AppState>, jid: String) -> Res<()> {
-    Ok(state.handle()?.approve_subscription(bare(&jid)?).await?)
+pub async fn set_contact_groups(
+    state: State<'_, AppState>,
+    jid: String,
+    groups: Vec<String>,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .set_contact_groups(bare(&jid)?, groups)
+        .await?)
+}
+
+/// Accept the request of `ClientEvent::SubscriptionRequest`. With `add_back` it also asks
+/// to see the presence of the contact, when we do not yet.
+#[tauri::command]
+pub async fn approve_subscription(
+    state: State<'_, AppState>,
+    jid: String,
+    add_back: Option<bool>,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .approve_subscription_with(bare(&jid)?, add_back.unwrap_or(false))
+        .await?)
 }
 
 #[tauri::command]
@@ -864,6 +885,29 @@ pub async fn preapprove_subscription(state: State<'_, AppState>, jid: String) ->
 #[tauri::command]
 pub async fn block_contact(state: State<'_, AppState>, jid: String) -> Res<()> {
     Ok(state.handle()?.block_contact(bare(&jid)?).await?)
+}
+
+/// Block an address and report it (XEP-0377). `reason` is "spam" or "abuse". A server that
+/// does not take reports gets a plain block. Returns true when the block carried the report.
+#[tauri::command]
+pub async fn block_and_report(
+    state: State<'_, AppState>,
+    jid: String,
+    reason: String,
+) -> Res<bool> {
+    let reason = match reason.as_str() {
+        "spam" => chord_core::features::blocking::ReportReason::Spam,
+        "abuse" => chord_core::features::blocking::ReportReason::Abuse,
+        other => {
+            return Err(ChordError::invalid(format!(
+                "unknown report reason {other}"
+            )));
+        }
+    };
+    Ok(state
+        .handle()?
+        .block_and_report(bare(&jid)?, reason)
+        .await?)
 }
 
 #[tauri::command]

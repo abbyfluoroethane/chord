@@ -68,6 +68,8 @@ pub(crate) enum Pending {
     Remove { reply: Reply },
     /// The answer to a rename. The roster push that follows updates the store.
     Rename { reply: Reply },
+    /// The answer to a change of the groups. The roster push that follows updates the store.
+    SetGroups { reply: Reply },
     /// The ping that follows a pre-approval. See the module comment.
     Preapprove { jid: BareJid },
 }
@@ -95,8 +97,15 @@ pub(crate) enum Command {
         name: Option<String>,
         reply: Reply,
     },
+    SetGroups {
+        jid: BareJid,
+        groups: Vec<String>,
+        reply: Reply,
+    },
     Approve {
         jid: BareJid,
+        /// Also ask to see the presence of the contact, when we do not already.
+        add_back: bool,
         reply: Reply,
     },
     Deny {
@@ -220,10 +229,39 @@ impl ClientHandle {
             .await
     }
 
+    /// Replace the groups of a contact, for us only. An empty list removes the contact from
+    /// every group. Names are trimmed, and empty and repeated names are dropped. The name
+    /// stays. Fails when the contact is not in the roster. Answers after the server accepts
+    /// the change, and the roster push that follows updates the store.
+    pub async fn set_contact_groups(
+        &self,
+        jid: BareJid,
+        groups: Vec<String>,
+    ) -> Result<(), ClientError> {
+        self.roster_call(|reply| Command::SetGroups { jid, groups, reply })
+            .await
+    }
+
     /// Let a contact see our presence. Answer to `ClientEvent::SubscriptionRequest`.
     pub async fn approve_subscription(&self, jid: BareJid) -> Result<(), ClientError> {
-        self.roster_call(|reply| Command::Approve { jid, reply })
-            .await
+        self.approve_subscription_with(jid, false).await
+    }
+
+    /// Like `approve_subscription`. With `add_back` set, it also sends `subscribe` when we do
+    /// not see the presence of the contact yet (subscription `none` or `from`, and no
+    /// request of ours pending). Without it the contact shows as offline for ever
+    /// (RFC 6121, 3.1.5).
+    pub async fn approve_subscription_with(
+        &self,
+        jid: BareJid,
+        add_back: bool,
+    ) -> Result<(), ClientError> {
+        self.roster_call(|reply| Command::Approve {
+            jid,
+            add_back,
+            reply,
+        })
+        .await
     }
 
     /// Refuse a subscription request, or stop a contact from seeing our presence.
@@ -307,7 +345,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(Err(failure(other)));
             }
         },
-        Pending::Rename { reply } => {
+        Pending::Rename { reply } | Pending::SetGroups { reply } => {
             let result = match response {
                 IqResponse::Result(_) => Ok(()),
                 other => Err(failure(other)),
@@ -469,8 +507,56 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             let iq = Iq::from_set("", roster_set(item));
             ctx.request(iq, FeaturePending::Roster(Pending::Rename { reply }));
         }
-        Command::Approve { jid, reply } => {
+        Command::SetGroups { jid, groups, reply } => {
+            let known = read_contact(ctx.store.conn(), ctx.account_id, &jid)
+                .ok()
+                .flatten();
+            let Some(known) = known else {
+                let _ = reply.send(Err(ClientError::Invalid(format!(
+                    "{jid} is not in the roster"
+                ))));
+                return;
+            };
+            let mut seen = HashSet::new();
+            let groups: Vec<Group> = groups
+                .into_iter()
+                .map(|g| g.trim().to_owned())
+                .filter(|g| !g.is_empty() && seen.insert(g.clone()))
+                .map(Group)
+                .collect();
+            // A roster set replaces the name and the groups. Send the name that we know.
+            let item = Item {
+                jid,
+                name: known.name,
+                subscription: WireSubscription::None,
+                ask: Ask::None,
+                groups,
+                approved: None,
+            };
+            let iq = Iq::from_set("", roster_set(item));
+            ctx.request(iq, FeaturePending::Roster(Pending::SetGroups { reply }));
+        }
+        Command::Approve {
+            jid,
+            add_back,
+            reply,
+        } => {
             ctx.state.roster.requests.remove(&jid);
+            if add_back {
+                let known = read_contact(ctx.store.conn(), ctx.account_id, &jid)
+                    .ok()
+                    .flatten();
+                let sees_them = known.as_ref().is_some_and(|c| {
+                    matches!(c.subscription, Subscription::To | Subscription::Both)
+                });
+                let asked = known.as_ref().is_some_and(|c| c.ask);
+                if !sees_them && !asked {
+                    ctx.send(Presence::subscribed().with_to(jid.clone()));
+                    ctx.send(Presence::subscribe().with_to(jid));
+                    let _ = reply.send(Ok(()));
+                    return;
+                }
+            }
             ctx.send(Presence::subscribed().with_to(jid));
             let _ = reply.send(Ok(()));
         }
@@ -545,6 +631,7 @@ pub(crate) fn offline(command: Command) {
         | Command::AddPreauth { reply, .. }
         | Command::Remove { reply, .. }
         | Command::Rename { reply, .. }
+        | Command::SetGroups { reply, .. }
         | Command::Approve { reply, .. }
         | Command::Deny { reply, .. }
         | Command::Preapprove { reply, .. } => {
@@ -1401,6 +1488,7 @@ mod tests {
                 ctx,
                 Command::Approve {
                     jid: bare(BOB),
+                    add_back: false,
                     reply,
                 },
             )
@@ -1430,6 +1518,121 @@ mod tests {
             types,
             vec![(Type::Subscribed, to.clone()), (Type::Unsubscribed, to)]
         );
+    }
+
+    #[test]
+    fn approve_with_add_back_subscribes_only_when_we_do_not_see_them() {
+        let mut h = Harness::new();
+        connect_with(
+            &mut h,
+            "<query xmlns='jabber:iq:roster' ver='v1'>\
+             <item jid='bob@chord.localhost' subscription='both'/>\
+             <item jid='carol@chord.localhost' subscription='none' ask='subscribe'/>\
+             <item jid='dave@chord.localhost' subscription='from'/></query>",
+        );
+        h.sent_iqs();
+        for (who, expect_subscribe) in [
+            ("bob@chord.localhost", false),
+            ("carol@chord.localhost", false),
+            ("dave@chord.localhost", true),
+            ("erin@chord.localhost", true),
+        ] {
+            let (reply, mut answer) = oneshot::channel();
+            h.with_ctx(|ctx| {
+                on_command(
+                    ctx,
+                    Command::Approve {
+                        jid: bare(who),
+                        add_back: true,
+                        reply,
+                    },
+                )
+            });
+            assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+            let types: Vec<_> = h
+                .take_sent()
+                .into_iter()
+                .map(|s| match s {
+                    Stanza::Presence(p) => p.type_,
+                    other => panic!("{other:?}"),
+                })
+                .collect();
+            let expected = if expect_subscribe {
+                vec![Type::Subscribed, Type::Subscribe]
+            } else {
+                vec![Type::Subscribed]
+            };
+            assert_eq!(types, expected, "{who}");
+        }
+    }
+
+    #[test]
+    fn set_contact_groups_sends_the_groups_with_the_name() {
+        let mut h = Harness::new();
+        connect_with(&mut h, FULL);
+        h.sent_iqs();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::SetGroups {
+                    jid: bare(BOB),
+                    groups: vec![" Work ".into(), "".into(), "Work".into(), "Club".into()],
+                    reply,
+                },
+            )
+        });
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!("{iqs:?}")
+        };
+        let item = &Roster::try_from(payload.clone()).unwrap().items[0];
+        assert_eq!(item.name.as_deref(), Some("Bob"));
+        let groups: Vec<_> = item.groups.iter().map(|g| g.0.as_str()).collect();
+        assert_eq!(groups, ["Work", "Club"]);
+        h.answer(
+            |p| matches!(p, FeaturePending::Roster(Pending::SetGroups { .. })),
+            None,
+        );
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        assert!(h.take_sent().is_empty());
+
+        // An empty list clears the groups. An unknown contact fails.
+        let (reply, _answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::SetGroups {
+                    jid: bare(BOB),
+                    groups: vec![],
+                    reply,
+                },
+            )
+        });
+        let iqs = h.sent_iqs();
+        let Iq::Set { payload, .. } = &iqs[0] else {
+            panic!()
+        };
+        assert!(
+            Roster::try_from(payload.clone()).unwrap().items[0]
+                .groups
+                .is_empty()
+        );
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::SetGroups {
+                    jid: bare("nobody@chord.localhost"),
+                    groups: vec![],
+                    reply,
+                },
+            )
+        });
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
     }
 
     #[test]

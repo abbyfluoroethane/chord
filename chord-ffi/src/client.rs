@@ -800,10 +800,29 @@ impl ChordClient {
             .await
     }
 
+    /// Replace the groups of a contact. An empty list clears them. The name stays.
+    pub async fn set_contact_groups(
+        &self,
+        jid: String,
+        groups: Vec<String>,
+    ) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.set_contact_groups(jid, groups).await })
+            .await
+    }
+
     /// Accept the subscription request of a contact.
     pub async fn approve_subscription(&self, jid: String) -> Result<(), ChordError> {
         let jid = parse_bare(&jid)?;
         self.call(move |h| async move { h.approve_subscription(jid).await })
+            .await
+    }
+
+    /// Accept the subscription request of a contact, and ask to see its presence too when
+    /// we do not yet.
+    pub async fn approve_subscription_and_add_back(&self, jid: String) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.approve_subscription_with(jid, true).await })
             .await
     }
 
@@ -1081,6 +1100,24 @@ impl ChordClient {
     pub async fn block_contact(&self, jid: String) -> Result<(), ChordError> {
         let jid = parse_bare(&jid)?;
         self.call(move |h| async move { h.block_contact(jid).await })
+            .await
+    }
+
+    /// Block an address and report it (XEP-0377). `reason` is "spam" or "abuse". A server
+    /// that does not take reports gets a plain block. Returns true when the block carried
+    /// the report.
+    pub async fn block_and_report(&self, jid: String, reason: String) -> Result<bool, ChordError> {
+        let jid = parse_bare(&jid)?;
+        let reason = match reason.as_str() {
+            "spam" => chord_core::features::blocking::ReportReason::Spam,
+            "abuse" => chord_core::features::blocking::ReportReason::Abuse,
+            other => {
+                return Err(ChordError::Invalid {
+                    detail: format!("unknown report reason {other}"),
+                });
+            }
+        };
+        self.call(move |h| async move { h.block_and_report(jid, reason).await })
             .await
     }
 

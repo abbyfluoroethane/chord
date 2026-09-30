@@ -11,6 +11,11 @@
 //!    that stops our presence to the contacts that see it.
 //! 3. Neither: Chord says so and keeps us available. No IQ goes out.
 //!
+//! The privacy list is active for this session only (XEP-0016, 2.3). It is never the default
+//! list, so a second resource of the account stays visible. The unavailable presence of
+//! this resource goes to each contact as a directed presence: the contact drops this
+//! resource and keeps the others.
+//!
 //! Rooms still get our presence: a room occupant must send presence. Chord knows the
 //! mechanism only after service discovery, so an invisible session sends its first
 //! presence after discovery.
@@ -818,6 +823,49 @@ mod tests {
         assert_eq!(out[0].type_, PresenceType::None);
         assert_eq!(out[0].to, None);
         assert_eq!(out[0].show, None);
+    }
+
+    #[test]
+    fn a_hidden_resource_leaves_the_other_resources_visible() {
+        // Two resources of one account. This one hides with the list. The contacts must lose
+        // only this resource: one directed unavailable each, to the bare address, and the
+        // list is active for this session, never the default list of the account.
+        let mut h = Harness::new();
+        for (jid, subscription, ask) in [
+            ("both@example.org", "both", 0),
+            ("from@example.org", "from", 0),
+            ("asked@example.org", "none", 1),
+            ("to@example.org", "to", 0),
+        ] {
+            h.store
+                .conn()
+                .execute(
+                    "INSERT INTO contacts (account_id, jid, subscription, ask)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![h.account_id, jid, subscription, ask],
+                )
+                .unwrap();
+        }
+        discover(&mut h, &[NS_PRIVACY]);
+        let _answer = set_command(&mut h, Availability::Invisible);
+        let sent = h.take_sent();
+        let gone: Vec<_> = presences(&sent)
+            .iter()
+            .map(|p| p.to.clone().unwrap())
+            .collect();
+        assert_eq!(gone.len(), 2);
+        assert!(gone.iter().all(|to| to.resource().is_none()), "{gone:?}");
+        assert!(gone.iter().all(|to| to.to_bare() != *h.account));
+        for query in privacy_queries(&sent) {
+            assert!(query.get_child("default", NS_PRIVACY).is_none());
+        }
+        // Going visible again clears the active list of this session only.
+        h.respond(is_hide, IqResponse::Result(None));
+        h.take_sent();
+        let _answer = set_command(&mut h, Availability::Available);
+        for query in privacy_queries(&h.take_sent()) {
+            assert!(query.get_child("default", NS_PRIVACY).is_none());
+        }
     }
 
     fn save_invisible(h: &Harness) {

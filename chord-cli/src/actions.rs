@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use chord_core::features::blocking::ReportReason;
 use chord_core::features::muc::{RoomAffiliation, RoomRole, RoomSettings};
 use chord_core::features::presence::{Availability, InvisibleMethod};
 use chord_core::features::roster::Subscription;
@@ -469,8 +470,13 @@ pub async fn contacts(opts: &Opts, client: &Client) -> Result<(), CliError> {
                 .as_deref()
                 .map_or(String::new(), |t| format!(", playing {t}"));
             let online = if c.online { ", online" } else { "" };
+            let groups = if c.groups.is_empty() {
+                String::new()
+            } else {
+                format!(", groups {}", c.groups.join("/"))
+            };
             println!(
-                "  {} {name} ({}{ask}{blocked}{online}{idle}{playing})",
+                "  {} {name} ({}{ask}{blocked}{online}{idle}{playing}{groups})",
                 c.jid,
                 sub(c.subscription)
             );
@@ -507,16 +513,44 @@ pub async fn contact_add(client: &Client, args: &[&str]) -> Result<(), CliError>
     Ok(())
 }
 
-/// `contact-approve <jid>`: accept the subscription request of `jid`. The contact then sees
-/// our presence.
-pub async fn contact_approve(client: &Client, jid: &str) -> Result<(), CliError> {
+/// `contact-approve <jid> [--add-back]`: accept the subscription request of `jid`. The
+/// contact then sees our presence. With `--add-back` we also ask to see theirs.
+pub async fn contact_approve(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (jid, add_back) = match args {
+        [jid] => (*jid, false),
+        [jid, "--add-back"] => (*jid, true),
+        _ => {
+            return Err("usage: contact-approve <jid> [--add-back]"
+                .to_owned()
+                .into());
+        }
+    };
     let jid = bare(jid)?;
     client
         .handle
-        .approve_subscription(jid.clone())
+        .approve_subscription_with(jid.clone(), add_back)
         .await
         .map_err(err)?;
-    println!("approved {jid}");
+    println!(
+        "approved {jid}{}",
+        if add_back { " and added back" } else { "" }
+    );
+    Ok(())
+}
+
+/// `contact-groups <jid> [group...]`: replace the groups of a contact. No group clears them.
+pub async fn contact_groups(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let Some((jid, groups)) = args.split_first() else {
+        return Err("usage: contact-groups <jid> [group...]".to_owned().into());
+    };
+    let jid = bare(jid)?;
+    let groups: Vec<String> = groups.iter().map(|g| (*g).to_owned()).collect();
+    client
+        .handle
+        .set_contact_groups(jid.clone(), groups.clone())
+        .await
+        .map_err(err)?;
+    println!("groups of {jid}: {}", groups.join(", "));
     Ok(())
 }
 
@@ -567,15 +601,40 @@ pub async fn idle(client: &Client, args: &[&str]) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `block <jid>`: block an address (XEP-0191).
-pub async fn block(client: &Client, jid: &str) -> Result<(), CliError> {
+/// `block <jid> [--report spam|abuse]`: block an address (XEP-0191). With `--report` the
+/// block carries a report (XEP-0377) when the server takes reports.
+pub async fn block(client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || CliError::from("usage: block <jid> [--report spam|abuse]".to_owned());
+    let (jid, reason) = match args {
+        [jid] => (*jid, None),
+        [jid, "--report", "spam"] => (*jid, Some(ReportReason::Spam)),
+        [jid, "--report", "abuse"] => (*jid, Some(ReportReason::Abuse)),
+        _ => return Err(usage()),
+    };
     let jid = bare(jid)?;
-    client
-        .handle
-        .block_contact(jid.clone())
-        .await
-        .map_err(err)?;
-    println!("blocked {jid}");
+    match reason {
+        Some(reason) => {
+            let reported = client
+                .handle
+                .block_and_report(jid.clone(), reason)
+                .await
+                .map_err(err)?;
+            let how = if reported {
+                "reported"
+            } else {
+                "no report, the server does not take them"
+            };
+            println!("blocked {jid} ({how})");
+        }
+        None => {
+            client
+                .handle
+                .block_contact(jid.clone())
+                .await
+                .map_err(err)?;
+            println!("blocked {jid}");
+        }
+    }
     Ok(())
 }
 

@@ -17,8 +17,8 @@
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
 //!   space-delete <service> <node> | space-leave <service> <node> | space-pending
 //!   space-requests <service> <node> | space-approve <service> <node> <jid> | space-deny ...
-//!   contacts | contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid>
-//!   block <jid> | unblock <jid|--all> | blocked (blocked works --offline)
+//!   contacts | contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> [--add-back]
+//!   block <jid> [--report spam|abuse] | unblock <jid|--all> | blocked (blocked works --offline)
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
 //!   pin <item-id> | unpin <chat> <key> | pins [chat]   pinned messages, in a private PEP node
 //!                                   (pins asks the server first, unless --offline)
@@ -42,7 +42,9 @@
 //!   notify <jid> [all|mentions|none [--until <unix-ms>]]   also with --offline
 //!   presence [available|away|dnd|xa|invisible [status]]     show or set our presence (also with --offline)
 //!   search <text> [--in <jid>]      search the stored messages (also with --offline)
-//!   contact-approve <jid>           let a contact see our presence (answer to a request)
+//!   contact-approve <jid> [--add-back]   let a contact see our presence (answer to a request);
+//!                                   --add-back also asks to see theirs
+//!   contact-groups <jid> [group...]   set the groups of a contact (no group: clear them)
 //!   contact-rename <jid> [name]   rename a contact in the roster (no name: clear it)
 //!   idle <seconds-ago>|off [hold-secs]   send idle time (XEP-0319), then stay online for hold-secs (default 5)
 //!   --wait <secs>                   anywhere in the arguments: stay online that long before the command runs
@@ -114,8 +116,8 @@ upload <jid> <file> | space-info <service> <node> | room-info <room> | space-bro
 space-create <name> [--private | --authorize] | space-add-room <service> <node> <room> [name] | \
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
-block <jid> | unblock <jid|--all> | blocked | \
-contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> | contact-rename <jid> [name] | idle <seconds-ago>|off [hold-secs] | \
+block <jid> [--report spam|abuse] | unblock <jid|--all> | blocked | \
+contact-add <jid> [name] [--preauth TOKEN] | contact-approve <jid> [--add-back] | contact-rename <jid> [name] | contact-groups <jid> [group...] | idle <seconds-ago>|off [hold-secs] | \
 edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
@@ -302,6 +304,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "contact-add",
         "contact-approve",
         "contact-rename",
+        "contact-groups",
         "idle",
         "edit",
         "retract",
@@ -431,12 +434,13 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("profile", args) => actions::profile(opts, &client, args).await,
         ("set-nickname", args) => actions::set_nickname(&client, args).await,
         ("contacts", []) => actions::contacts(opts, &client).await,
-        ("block", [jid]) => actions::block(&client, jid).await,
+        ("block", args) => actions::block(&client, args).await,
         ("unblock", args) => actions::unblock(&client, args).await,
         ("blocked", []) => actions::blocked(opts, &client).await,
         ("contact-add", args) => actions::contact_add(&client, args).await,
-        ("contact-approve", [jid]) => actions::contact_approve(&client, jid).await,
+        ("contact-approve", args) => actions::contact_approve(&client, args).await,
         ("contact-rename", args) => actions::contact_rename(&client, args).await,
+        ("contact-groups", args) => actions::contact_groups(&client, args).await,
         ("idle", args) => actions::idle(&client, args).await,
         ("edit", [item, text]) => actions::edit(&client, item, text).await,
         ("retract", [item]) => actions::retract(&client, item).await,
