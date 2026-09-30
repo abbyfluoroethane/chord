@@ -236,4 +236,10 @@ pub const MIGRATIONS: &[&str] = &[
         status     TEXT
     );
     "#,
+    // 9: an outgoing chat message that the server or the peer refused (RFC 6121, 8.5): the
+    // time of the error message. The status column has a CHECK list, so the failure gets
+    // its own column and the timeline shows it as the status `failed`.
+    r#"
+    ALTER TABLE messages ADD COLUMN failed_at INTEGER;
+    "#,
 ];

@@ -2,7 +2,7 @@
 //!
 //! Usage: chord-cli [--json] [--offline] <command>
 //!   login
-//!   send <jid> <text>
+//!   send <jid> <text> [--wait]      --wait: stay online 3 s, to get an error message
 //!   listen [--once]
 //!   spaces                          the space rail
 //!   channels [home | <service> <node>]
@@ -298,6 +298,12 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             Ok(())
         }
         ("send", [to, text]) => send(&client, to, text).await,
+        // Stay online for a moment, so that an error message for the send can arrive.
+        ("send", [to, text, "--wait"]) => {
+            let sent = send(&client, to, text).await;
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            sent
+        }
         ("listen", []) => listen(&mut client, false).await,
         ("listen", ["--once"]) => listen(&mut client, true).await,
         ("spaces", []) => views::spaces(opts, &client).await,

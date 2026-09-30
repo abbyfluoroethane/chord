@@ -118,6 +118,7 @@ impl Show for TimelineItem {
         if self.outgoing && self.status != DeliveryStatus::Sent {
             text.push_str(match self.status {
                 DeliveryStatus::Displayed => " (read)",
+                DeliveryStatus::Failed => " (FAILED)",
                 _ => " (delivered)",
             });
         }
@@ -177,6 +178,7 @@ impl Show for TimelineItem {
                     DeliveryStatus::Sent => "sent",
                     DeliveryStatus::Received => "received",
                     DeliveryStatus::Displayed => "displayed",
+                    DeliveryStatus::Failed => "failed",
                 },
             )
             .finish()

@@ -65,6 +65,8 @@ pub enum DeliveryStatus {
     Sent,
     Received,
     Displayed,
+    /// The server or the peer refused the message.
+    Failed,
 }
 
 /// The kind of a channel.
@@ -171,6 +173,7 @@ impl From<core_views::DeliveryStatus> for DeliveryStatus {
             core_views::DeliveryStatus::Sent => Self::Sent,
             core_views::DeliveryStatus::Received => Self::Received,
             core_views::DeliveryStatus::Displayed => Self::Displayed,
+            core_views::DeliveryStatus::Failed => Self::Failed,
         }
     }
 }

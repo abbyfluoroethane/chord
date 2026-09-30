@@ -97,6 +97,8 @@ pub enum DeliveryStatus {
     Sent,
     Received,
     Displayed,
+    /// The server or the peer answered with an error message (RFC 6121, 8.5).
+    Failed,
 }
 
 /// The length of the quoted text in a `ReplyPreview`.
@@ -146,9 +148,11 @@ pub(crate) fn query(
     let mut stmt = conn.prepare_cached(
         "SELECT id, stanza_id, origin_id, direction, sender, COALESCE(edited_body, body), timestamp,
                 kind, edited_body IS NOT NULL, retracted_at IS NOT NULL, reply_to,
-                reply_to_sender, oob_url, status
+                reply_to_sender, oob_url,
+                CASE WHEN failed_at IS NOT NULL THEN 'failed' ELSE status END
          FROM messages
          WHERE account_id = ?1 AND peer = ?2
+           AND NOT (failed_at IS NOT NULL AND retracted_at IS NOT NULL)
          ORDER BY timestamp DESC, id DESC LIMIT ?3",
     )?;
     let rows = stmt.query_map(params![q.account_id, room, window as i64], |row| {
@@ -217,6 +221,7 @@ pub(crate) fn query(
             reply_to,
             attachment: if row.retracted { None } else { row.attachment },
             status: match row.status.as_str() {
+                "failed" => DeliveryStatus::Failed,
                 "displayed" => DeliveryStatus::Displayed,
                 "received" => DeliveryStatus::Received,
                 _ => DeliveryStatus::Sent,

@@ -37,6 +37,10 @@ impl KeyKind {
     }
 }
 
+/// The start of a local key: the key of a message that has no stanza-id and no origin-id.
+/// It is stored as an origin-id key, but it is no origin-id.
+pub const LOCAL_KEY_PREFIX: &str = "local:";
+
 /// The direction of a message, seen from the account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
@@ -181,10 +185,12 @@ pub fn insert_message(
 ) -> rusqlite::Result<Option<StoredMessage>> {
     let x = &message.extras;
     // The key is one of the ids too.
-    let origin_id = x
-        .origin_id
-        .as_deref()
-        .or((message.key_kind == KeyKind::OriginId).then_some(message.key));
+    let origin_id =
+        x.origin_id
+            .as_deref()
+            .or((message.key_kind == KeyKind::OriginId
+                && !message.key.starts_with(LOCAL_KEY_PREFIX))
+            .then_some(message.key));
     let stanza_id = x
         .stanza_id
         .as_deref()
@@ -254,6 +260,26 @@ pub fn upgrade_to_stanza_id(
         params![stanza_id, account_id, origin_id, direction.as_str(), peer],
     )?;
     Ok(changed == 1)
+}
+
+/// Mark our outgoing message that has the `id` attribute `id` in the chat `peer` as failed
+/// (`failed_at` is the time). Returns false if no such message exists, or if it failed
+/// already.
+pub fn mark_failed(
+    conn: &Connection,
+    account_id: i64,
+    peer: &str,
+    id: &str,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        &format!(
+            "UPDATE messages SET failed_at = {NOW_MS}
+             WHERE account_id = ?1 AND peer = ?2 AND message_id = ?3
+               AND direction = 'out' AND kind = 'chat' AND failed_at IS NULL"
+        ),
+        params![account_id, peer, id],
+    )?;
+    Ok(changed > 0)
 }
 
 /// Clear the tables that describe the live session: presence, occupants, and joined

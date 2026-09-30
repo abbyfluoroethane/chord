@@ -53,7 +53,8 @@ pub(crate) enum Command {
 
 impl ClientHandle {
     /// Retract one of our own messages (XEP-0424). `item_id` is the `TimelineItem::id` of
-    /// the message. The row shows as retracted at once.
+    /// the message. The row shows as retracted at once. A message with the status `failed`
+    /// is hidden from the timeline instead, and nothing goes out.
     ///
     /// Fails with `Invalid` for a message from another sender, for a room that we have not
     /// joined, and for a room message that has no stanza-id yet.
@@ -118,6 +119,9 @@ fn nc(name: &'static str) -> NcName {
 /// Send a retraction of an own message and mark its row.
 fn retract(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
     let (row, peer) = own_message(ctx, item_id)?;
+    if discard_failed(ctx, &row) {
+        return Ok(());
+    }
     let reference = match row.kind {
         MessageKind::Groupchat => row.stanza_id.clone(),
         MessageKind::Chat => original_id(&row).map(str::to_owned),
@@ -140,6 +144,30 @@ fn retract(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
     message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
     apply(ctx, &row, None);
     Ok(())
+}
+
+/// A message that failed (RFC 6121, 8.5) never arrived, so there is nothing to retract.
+/// Mark the row as retracted here only, and the timeline hides it. The row stays, so a
+/// copy of the message in the archive finds it and does not add the message again. The
+/// retry action of a frontend sends the text again and then discards the failed row this
+/// way. Returns true if the row was failed.
+fn discard_failed(ctx: &mut Ctx<'_>, row: &MessageRow) -> bool {
+    let failed = ctx.store.conn().query_row(
+        "SELECT failed_at IS NOT NULL FROM messages WHERE account_id = ?1 AND id = ?2",
+        params![ctx.account_id, row.rowid],
+        |r| r.get::<_, bool>(0),
+    );
+    match failed {
+        Ok(true) => {
+            apply(ctx, row, None);
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            ctx.store_error("read a failed message", e);
+            false
+        }
+    }
 }
 
 /// Send the XEP-0425 request that asks a room to retract a message. `reply` gets the
