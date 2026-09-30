@@ -20,10 +20,12 @@
  * @accent lavender Lavender
  */
 :root {
+  /* As in the Catppuccin theme for Discord: the chat is base, the channel list mantle,
+     the rail and inputs crust, and the borders surface0. */
   --surface-100: #eff1f5;
   --surface-200: #e6e9ef;
   --surface-300: #dce0e8;
-  --line: #bcc0cc;
+  --line: #ccd0da;
   --ink: #4c4f69;
   --ink-muted: #6c6f85;
   --brand: #8839ef;
