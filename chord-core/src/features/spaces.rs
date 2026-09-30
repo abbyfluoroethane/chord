@@ -36,6 +36,10 @@
 //! - Private spaces use the `whitelist` access model. The owner makes a member with
 //!   `add_space_member`, then the member calls `join_space`. Join requests (`authorize`)
 //!   only work where a server offers them. Prosody 13 does not.
+//! - Room access: a room of a space can be members-only. A person that the owner accepts
+//!   must also be a member of each room, or the room refuses the join. `approve_space_join`
+//!   and `add_space_member` set the room affiliation `member` in each room of the space.
+//!   It works where we own the rooms. Other rooms refuse, and we ignore that.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -254,7 +258,11 @@ pub(crate) enum Action {
         service: BareJid,
         node: String,
     },
-    AddMember,
+    AddMember {
+        service: BareJid,
+        node: String,
+        member: BareJid,
+    },
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -882,6 +890,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 jid.as_str(),
                 state == "subscribed",
             ));
+            if state == "subscribed" {
+                grant_rooms(ctx, &service, &node, &jid);
+            }
             if let Err(e) = db::remove_request(
                 ctx.store.conn(),
                 ctx.account_id,
@@ -1005,7 +1016,11 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 ),
             );
             go(ctx, iq, reply, |reply| Pending::Done {
-                action: Action::AddMember,
+                action: Action::AddMember {
+                    service,
+                    node,
+                    member,
+                },
                 reply,
             });
         }
@@ -1257,6 +1272,21 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
     }
 }
 
+/// Make `member` a member of each room of a space. A members-only room lets in only its
+/// members, so a person that the owner accepted could not enter any room without this.
+/// It works where we own the rooms. Elsewhere the rooms refuse, and we ignore that.
+fn grant_rooms(ctx: &mut Ctx<'_>, service: &BareJid, node: &str, member: &Jid) {
+    let member = member.to_bare();
+    let rooms = db::room_jids(ctx.store.conn(), ctx.account_id, service.as_str(), node)
+        .unwrap_or_else(|e| {
+            ctx.store_error("read the rooms of a space", e);
+            Vec::new()
+        });
+    for room in rooms.iter().filter_map(|r| BareJid::new(r).ok()) {
+        super::muc::grant_membership(ctx, &room, &member);
+    }
+}
+
 fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
     match action {
         Action::Leave { service, node } | Action::DeleteSpace { service, node } => {
@@ -1281,7 +1311,11 @@ fn apply_action(ctx: &mut Ctx<'_>, action: Action) {
             remove_item(ctx, &s, &node, room.as_str());
             changed(ctx, &s, &node);
         }
-        Action::AddMember => {}
+        Action::AddMember {
+            service,
+            node,
+            member,
+        } => grant_rooms(ctx, &service, &node, &Jid::from(member)),
     }
 }
 
@@ -2523,6 +2557,21 @@ pub(super) mod db {
             ],
         )?;
         Ok(())
+    }
+
+    /// The JIDs of the rooms in a space.
+    pub fn room_jids(
+        conn: &Connection,
+        account_id: i64,
+        service: &str,
+        node: &str,
+    ) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare_cached(
+            "SELECT room_jid FROM space_items
+             WHERE account_id = ?1 AND service = ?2 AND node = ?3 AND room_jid IS NOT NULL",
+        )?;
+        stmt.query_map(params![account_id, service, node], |row| row.get(0))?
+            .collect()
     }
 
     pub fn item_ids(

@@ -141,6 +141,11 @@ pub(crate) enum Pending {
     },
     /// The configuration form of a room, for `configure_room`.
     SettingsForm(BareJid, RoomSettings, Reply),
+    /// The answer to `grant_membership`. Nobody waits for it.
+    Grant {
+        room: BareJid,
+        jid: BareJid,
+    },
 }
 
 /// A command from the public API.
@@ -471,6 +476,14 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 let _ = reply.send(result.clone());
             }
         }
+        Pending::Grant { room, jid } => match response {
+            IqResponse::Result(_) => log::debug!("made {jid} a member of {room}"),
+            IqResponse::Error(e) => {
+                // Normal when we do not own the room. The room may be open anyway.
+                log::info!("cannot make {jid} a member of {room}: {}", error_text(&e));
+            }
+            IqResponse::Lost => {}
+        },
         Pending::Moderate(reply) | Pending::Simple(reply) => {
             let _ = reply.send(match response {
                 IqResponse::Result(_) => Ok(()),
@@ -707,6 +720,17 @@ fn can_grant(ctx: &Ctx<'_>, room: &BareJid) -> bool {
         .ok()
         .flatten();
     matches!(affiliation.as_deref(), Some("owner" | "admin"))
+}
+
+/// Make `jid` a member of `room`, and ignore the answer. A space uses this for its
+/// members: a members-only room lets in only a member. It fails if we cannot grant it.
+pub(crate) fn grant_membership(ctx: &mut Ctx<'_>, room: &BareJid, jid: &BareJid) {
+    let iq = affiliation_iq(room, jid, RoomAffiliation::Member, None);
+    let pending = Pending::Grant {
+        room: room.clone(),
+        jid: jid.clone(),
+    };
+    ctx.request(iq, super::Pending::Muc(pending));
 }
 
 /// The IQ that sets one affiliation (XEP-0045, sections 9.3, 9.5 and 10.3).

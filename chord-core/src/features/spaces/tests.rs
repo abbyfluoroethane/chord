@@ -1855,9 +1855,13 @@ fn approve_and_deny_send_the_authorization_form() {
         });
         assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
         let sent = h.take_sent();
-        let [xmpp_parsers::stanza::Stanza::Message(m)] = &sent[..] else {
-            panic!("expected one message: {sent:?}")
-        };
+        let m = sent
+            .iter()
+            .find_map(|s| match s {
+                xmpp_parsers::stanza::Stanza::Message(m) => Some(m),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected a message: {sent:?}"));
         let form = String::from(&m.payloads[0]);
         assert!(form.contains(FORM_SUBSCRIBE_AUTHORIZATION), "{form}");
         assert!(form.contains("bob@chord.localhost"), "{form}");
@@ -1930,4 +1934,76 @@ fn the_owner_commands_fail_offline() {
         reply: a,
     });
     assert_eq!(ra.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+}
+
+/// The room JIDs of the member grants in the sent stanzas.
+fn granted_rooms(h: &mut Harness, jid: &str) -> Vec<String> {
+    h.sent_iqs()
+        .iter()
+        .filter(|iq| payload_of(iq).contains("muc#admin"))
+        .filter(|iq| {
+            let text = payload_of(iq);
+            text.contains("affiliation='member'") && text.contains(jid)
+        })
+        .filter_map(|iq| match iq {
+            Iq::Set { to: Some(to), .. } => Some(to.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn approving_a_join_makes_the_member_a_member_of_each_room() {
+    let mut h = followed();
+    let mut rx = owner_call(&mut h, |reply| Command::AnswerJoin {
+        service: service_bare(),
+        node: "dev".into(),
+        jid: Jid::new("bob@chord.localhost/phone").unwrap(),
+        state: "subscribed",
+        reply,
+    });
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert_eq!(
+        granted_rooms(&mut h, "bob@chord.localhost"),
+        ["room1@rooms.chord.localhost"]
+    );
+}
+
+#[test]
+fn denying_a_join_grants_no_membership() {
+    let mut h = followed();
+    let mut rx = owner_call(&mut h, |reply| Command::AnswerJoin {
+        service: service_bare(),
+        node: "dev".into(),
+        jid: Jid::new("bob@chord.localhost").unwrap(),
+        state: "none",
+        reply,
+    });
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert!(granted_rooms(&mut h, "bob@chord.localhost").is_empty());
+}
+
+#[test]
+fn adding_a_member_grants_membership_after_the_service_accepts() {
+    let mut h = followed();
+    let (reply, mut rx) = oneshot::channel();
+    let bob = BareJid::new("bob@chord.localhost").unwrap();
+    h.with_ctx(|ctx| {
+        on_command(
+            ctx,
+            Command::AddMember {
+                service: service_bare(),
+                node: "dev".into(),
+                member: bob,
+                reply,
+            },
+        )
+    });
+    h.take_sent();
+    h.answer(is_done, None);
+    assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
+    assert_eq!(
+        granted_rooms(&mut h, "bob@chord.localhost"),
+        ["room1@rooms.chord.localhost"]
+    );
 }
