@@ -62,7 +62,15 @@ pub fn text(n: &Notification) -> (String, String) {
         ),
         None => n.sender_name.clone(),
     };
-    (title, n.body_preview.clone())
+    (title, action_or_body(&n.sender_name, &n.body_preview))
+}
+
+/// XEP-0245: a body that starts with "/me " reads as an action: "* Alice waves".
+fn action_or_body(name: &str, body: &str) -> String {
+    match body.strip_prefix("/me ").map(str::trim) {
+        Some(rest) if !rest.is_empty() => format!("* {name} {rest}"),
+        _ => body.to_owned(),
+    }
 }
 
 fn window_has_focus(app: &AppHandle) -> bool {
@@ -125,6 +133,17 @@ mod tests {
     #[test]
     fn a_chat_notification_shows_the_sender() {
         assert_eq!(text(&notification(None)), ("bob".into(), "hello".into()));
+    }
+
+    #[test]
+    fn a_me_body_reads_as_an_action() {
+        let mut n = notification(None);
+        n.body_preview = "/me waves".into();
+        assert_eq!(text(&n).1, "* bob waves");
+        n.body_preview = "/me".into();
+        assert_eq!(text(&n).1, "/me");
+        n.body_preview = "say /me waves".into();
+        assert_eq!(text(&n).1, "say /me waves");
     }
 
     #[test]

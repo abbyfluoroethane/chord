@@ -97,7 +97,7 @@ export interface MemberItem {
   avatar: string | null;
 }
 
-export type DeliveryStatus = 'sent' | 'received' | 'displayed';
+export type DeliveryStatus = 'sent' | 'received' | 'displayed' | 'failed';
 
 export interface ReactionSummary {
   emoji: string;

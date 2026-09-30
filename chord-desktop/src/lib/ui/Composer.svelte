@@ -209,6 +209,8 @@
     app.channel ? `Message ${app.channel.kind === 'dm' ? '' : '#'}${app.channel.name}` : 'Message'
   );
   const typing = $derived(typingText(app.typingHere));
+  // XEP-0245: a body that starts with "/me " shows as an action. It goes out as typed.
+  const actionHint = $derived(!typing && /^\/me( |$)/.test(value));
 </script>
 
 <div class="composer">
@@ -311,6 +313,8 @@
     {#if typing}
       <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
       <span>{typing}</span>
+    {:else if actionHint}
+      <span>Sent as an action: * {app.me.name} …</span>
     {/if}
   </div>
 </div>

@@ -460,6 +460,26 @@ class AppState {
     return true;
   }
 
+  /**
+   * Try a failed message again: send its text as a new message, then discard the failed
+   * row. Maps to api.retractMessage(itemId), which deletes a failed message locally.
+   */
+  async retry(m: TimelineItem) {
+    if (m.status !== 'failed' || !m.body.trim()) return;
+    if (!live) {
+      m.status = 'sending';
+      setTimeout(() => (m.status = 'sent'), 500);
+      return;
+    }
+    // The text goes out as it is. A reply quote is not kept.
+    const jid = this.selectedJid;
+    const pm = splitPrivate(jid);
+    const r = await this.call((b) =>
+      pm ? b.sendPrivate(pm.room, pm.nick, m.body) : b.sendChat(jid, m.body)
+    );
+    if (r.ok) await this.call((b) => b.retractMessage(m.id));
+  }
+
   /** Sample data: add an outgoing message to a chat. The server confirms a moment later. */
   private pushLocal(jid: string, text: string, reply: TimelineItem | null = null) {
     const list = this.list(jid);

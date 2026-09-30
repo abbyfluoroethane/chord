@@ -217,8 +217,8 @@ export function toTimelineItem(t: BTimeline, ctx: TimelineContext): TimelineItem
       ? { id: t.replyTo.id ?? '', senderName: t.replyTo.senderName, body: t.replyTo.body }
       : null,
     attachment: t.attachment ? toAttachment(t.attachment) : null,
-    // The UI has no "received" or "displayed" mark.
-    status: 'sent',
+    // The UI has no "received" or "displayed" mark. It shows a failed message.
+    status: t.status === 'failed' ? 'failed' : 'sent',
     // The bridge tells about mentions in Notification events. The store adds the flag.
     mention: false
   };

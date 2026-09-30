@@ -11,6 +11,7 @@
   import MessageToolbar from './MessageToolbar.svelte';
   import ReactionPills from './ReactionPills.svelte';
   import ReplyPreview from './ReplyPreview.svelte';
+  import { actionText } from './action';
   import { app } from './app.svelte';
   import { allowsNativeMenu, contextMenu, isMenuKey } from './contextmenu.svelte';
   import { messageMenu, type MessageTarget } from './menus';
@@ -33,6 +34,7 @@
   const compact = $derived(prefs.display === 'compact');
   const editing = $derived(app.editingId === item.id);
   const foreign = $derived(domainOf(item.sender) !== domainOf(app.me.address));
+  const action = $derived(actionText(item.body));
   const full = $derived(new Date(item.timestamp).toLocaleString());
 
   // Up to three different links of the body. Code is not a link. The attachment has its own view.
@@ -174,8 +176,14 @@
       <MessageEdit {item} />
     {:else}
       {#if item.body}
-        <div class="text">
-          <MessageBody body={item.body} />
+        <div class="text" class:action={action !== null}>
+          {#if action !== null}
+            <span class="star" aria-hidden="true">*</span>
+            <span class="actor">{item.senderName}</span>
+            <MessageBody body={action} />
+          {:else}
+            <MessageBody body={item.body} />
+          {/if}
           {#if item.edited}<span class="edited meta">(edited)</span>{/if}
         </div>
       {/if}
@@ -195,7 +203,7 @@
       {/if}
       <ReactionPills reactions={item.reactions} ontoggle={(e) => app.toggleReaction(item.id, e)} />
       {#if item.status === 'failed'}
-        <p class="failed">Not sent. <button onclick={() => (item.status = 'sending')}>Try again</button></p>
+        <p class="failed">Not sent. <button onclick={() => app.retry(item)}>Try again</button></p>
       {/if}
     {/if}
   </div>
@@ -346,6 +354,18 @@
   .text {
     font-size: var(--message-size, 15px);
     line-height: var(--message-line, 22px);
+  }
+  /* XEP-0245: "* Alice waves". The name reads as part of the sentence. */
+  .text.action {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 0.3em;
+    font-style: italic;
+    color: var(--ink-muted);
+  }
+  .text.action .actor {
+    font-weight: 600;
   }
   .who {
     display: block;

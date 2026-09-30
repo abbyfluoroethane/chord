@@ -1,6 +1,7 @@
 <script lang="ts">
   // Small quote line above a reply. Click to jump to the original message.
   import CornerUpLeft from 'lucide-svelte/icons/corner-up-left';
+  import { actionLine } from './action';
   import Icon from './Icon.svelte';
   import type { ReplyPreview } from './types';
 
@@ -10,7 +11,7 @@
 <button class="preview" onclick={() => onjump(reply.id)} aria-label="Replying to {reply.senderName}. Jump to message.">
   <Icon icon={CornerUpLeft} size={14} />
   <span class="who">{reply.senderName}</span>
-  <span class="text">{reply.body}</span>
+  <span class="text">{actionLine(reply.senderName, reply.body)}</span>
 </button>
 
 <style>

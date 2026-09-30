@@ -371,6 +371,14 @@ const opsGeneral = build([
     ts: at(0, 12, 20),
     body: 'Range weather for Thursday: https://weather.example.net/range and the photo https://cdn.example.net/burn.jpg'
   },
+  { id: 'g10c', who: 'kit', ts: at(0, 12, 21), body: '/me checks the **gauge** twice' },
+  {
+    id: 'g10d',
+    who: 'abby',
+    ts: at(0, 12, 22),
+    body: 'Sending the range sheet now.',
+    status: 'failed'
+  },
   {
     id: 'g11',
     who: 'rin',
