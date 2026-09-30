@@ -13,7 +13,8 @@ use chord_core::features::profile::Profile;
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
 use chord_core::features::spaces::{
-    JoinOutcome, JoinRequest, PendingJoin, SpaceAccess, SpaceCard, SpaceInfo,
+    JoinOutcome, JoinRequest, PendingJoin, SpaceAccess, SpaceCard, SpaceConfigField, SpaceInfo,
+    SpaceMember,
 };
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::native::NativeSession;
@@ -719,14 +720,18 @@ pub async fn leave_space(state: State<'_, AppState>, service: String, node: Stri
     Ok(state.handle()?.leave_space(&service, &node).await?)
 }
 
-/// Create a space. Returns its service and node.
+/// Create a space. Returns its service and node. The description is optional.
 #[tauri::command]
 pub async fn create_space(
     state: State<'_, AppState>,
     name: String,
     access: SpaceAccess,
+    description: Option<String>,
 ) -> Res<(String, String)> {
-    Ok(state.handle()?.create_space_with(&name, access).await?)
+    Ok(state
+        .handle()?
+        .create_space_described(&name, description.as_deref(), access)
+        .await?)
 }
 
 #[tauri::command]
@@ -813,6 +818,109 @@ pub async fn add_space_member(
     Ok(state
         .handle()?
         .add_space_member(&service, &node, bare(&member)?)
+        .await?)
+}
+
+/// The people with an affiliation to a space that we own.
+#[tauri::command]
+pub async fn space_members(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+) -> Res<Vec<SpaceMember>> {
+    Ok(state.handle()?.space_members(&service, &node).await?)
+}
+
+/// Take the membership of a person away (owner only).
+#[tauri::command]
+pub async fn remove_space_member(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+    member: String,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .remove_space_member(&service, &node, bare(&member)?)
+        .await?)
+}
+
+/// Ban a person from a space (owner only).
+#[tauri::command]
+pub async fn ban_space_member(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+    member: String,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .ban_space_member(&service, &node, bare(&member)?)
+        .await?)
+}
+
+/// The node configuration form of a space that we own.
+#[tauri::command]
+pub async fn space_config(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+) -> Res<Vec<SpaceConfigField>> {
+    Ok(state.handle()?.space_config(&service, &node).await?)
+}
+
+/// Change the name or the description of a space that we own. `None` keeps a value.
+#[tauri::command]
+pub async fn configure_space(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+    name: Option<String>,
+    description: Option<String>,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .configure_space(&service, &node, name.as_deref(), description.as_deref())
+        .await?)
+}
+
+/// Set the avatar of a space that we own. The UI reads the image and its size in pixels.
+#[tauri::command]
+pub async fn set_space_avatar(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+    mime: String,
+    data: Vec<u8>,
+    width: u16,
+    height: u16,
+) -> Res<()> {
+    if data.is_empty() || data.len() > MAX_SPACE_AVATAR_BYTES || !mime.starts_with("image/") {
+        return Err(ChordError::invalid("use an image under 1 MB"));
+    }
+    Ok(state
+        .handle()?
+        .set_space_avatar(&service, &node, &mime, data, width, height)
+        .await?)
+}
+
+/// Set the banner of a space that we own. The UI reads the image and its size in pixels.
+#[tauri::command]
+pub async fn set_space_banner(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+    mime: String,
+    data: Vec<u8>,
+    width: u16,
+    height: u16,
+) -> Res<()> {
+    if data.is_empty() || data.len() > MAX_BANNER_BYTES || !mime.starts_with("image/") {
+        return Err(ChordError::invalid("use an image under 4 MB"));
+    }
+    Ok(state
+        .handle()?
+        .set_space_banner(&service, &node, &mime, data, width, height)
         .await?)
 }
 
@@ -953,6 +1061,9 @@ pub async fn blocked_contacts(state: State<'_, AppState>) -> Res<Vec<BareJid>> {
 
 /// The largest avatar image that the UI may send, in bytes.
 const MAX_AVATAR_BYTES: usize = chord_core::features::avatars::MAX_PUBLISH_BYTES;
+/// A space avatar goes through HTTP upload, not into PEP, so it may be larger.
+const MAX_SPACE_AVATAR_BYTES: usize = 1024 * 1024;
+const MAX_BANNER_BYTES: usize = 4 * 1024 * 1024;
 
 /// Publish our avatar (XEP-0084, and the vCard photo for XEP-0153). The UI reads the
 /// image and its size in pixels.

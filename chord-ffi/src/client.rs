@@ -1001,6 +1001,119 @@ impl ChordClient {
             .await
     }
 
+    /// The people with an affiliation to a space that we own.
+    pub async fn space_members(
+        &self,
+        service: String,
+        node: String,
+    ) -> Result<Vec<SpaceMember>, ChordError> {
+        let list = self
+            .call(move |h| async move { h.space_members(&service, &node).await })
+            .await?;
+        Ok(list.into_iter().map(Into::into).collect())
+    }
+
+    /// Take the membership of a person away (owner only).
+    pub async fn remove_space_member(
+        &self,
+        service: String,
+        node: String,
+        member: String,
+    ) -> Result<(), ChordError> {
+        let member = parse_bare(&member)?;
+        self.call(move |h| async move { h.remove_space_member(&service, &node, member).await })
+            .await
+    }
+
+    /// Ban a person from a space (owner only).
+    pub async fn ban_space_member(
+        &self,
+        service: String,
+        node: String,
+        member: String,
+    ) -> Result<(), ChordError> {
+        let member = parse_bare(&member)?;
+        self.call(move |h| async move { h.ban_space_member(&service, &node, member).await })
+            .await
+    }
+
+    /// The node configuration form of a space that we own.
+    pub async fn space_config(
+        &self,
+        service: String,
+        node: String,
+    ) -> Result<Vec<SpaceConfigField>, ChordError> {
+        let list = self
+            .call(move |h| async move { h.space_config(&service, &node).await })
+            .await?;
+        Ok(list.into_iter().map(Into::into).collect())
+    }
+
+    /// Change the name or the description of a space that we own. `None` keeps a value.
+    pub async fn configure_space(
+        &self,
+        service: String,
+        node: String,
+        name: Option<String>,
+        description: Option<String>,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move {
+            h.configure_space(&service, &node, name.as_deref(), description.as_deref())
+                .await
+        })
+        .await
+    }
+
+    /// Set the avatar of a space that we own. The image goes to the upload service.
+    pub async fn set_space_avatar(
+        &self,
+        service: String,
+        node: String,
+        mime: String,
+        data: Vec<u8>,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move {
+            h.set_space_avatar(&service, &node, &mime, data, width, height)
+                .await
+        })
+        .await
+    }
+
+    /// Set the banner of a space that we own. The image goes to the upload service.
+    pub async fn set_space_banner(
+        &self,
+        service: String,
+        node: String,
+        mime: String,
+        data: Vec<u8>,
+        width: u16,
+        height: u16,
+    ) -> Result<(), ChordError> {
+        self.call(move |h| async move {
+            h.set_space_banner(&service, &node, &mime, data, width, height)
+                .await
+        })
+        .await
+    }
+
+    /// Create a space with an access model and a description. An empty description is none.
+    pub async fn create_space_described(
+        &self,
+        name: String,
+        description: Option<String>,
+        access: SpaceAccess,
+    ) -> Result<SpaceRef, ChordError> {
+        let (service, node) = self
+            .call(move |h| async move {
+                h.create_space_described(&name, description.as_deref(), access.into())
+                    .await
+            })
+            .await?;
+        Ok(SpaceRef { service, node })
+    }
+
     /// Delete a space that we own.
     pub async fn delete_space(&self, service: String, node: String) -> Result<(), ChordError> {
         self.call(move |h| async move { h.delete_space(&service, &node).await })

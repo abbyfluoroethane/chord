@@ -11,7 +11,8 @@ use chord_core::features::push::PushRegistration as CorePushRegistration;
 use chord_core::features::roster::{Contact as CoreContact, Subscription as CoreSubscription};
 use chord_core::features::spaces::{
     JoinOutcome as CoreJoinOutcome, JoinRequest as CoreJoinRequest, SpaceAccess as CoreSpaceAccess,
-    SpaceInfo as CoreSpaceInfo,
+    SpaceConfigField as CoreSpaceConfigField, SpaceInfo as CoreSpaceInfo,
+    SpaceMember as CoreSpaceMember,
 };
 use chord_core::session::ConnectError;
 use chord_core::store::queries as core_queries;
@@ -893,6 +894,39 @@ impl From<CoreJoinRequest> for JoinRequest {
         Self {
             jid: r.jid,
             subid: r.subid,
+        }
+    }
+}
+
+/// A person with an affiliation to a space: `owner`, `publisher`, `publish-only`,
+/// `member` or `outcast`.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SpaceMember {
+    pub jid: String,
+    pub affiliation: String,
+}
+
+impl From<CoreSpaceMember> for SpaceMember {
+    fn from(m: CoreSpaceMember) -> Self {
+        Self {
+            jid: m.jid,
+            affiliation: m.affiliation,
+        }
+    }
+}
+
+/// One field of the node configuration of a space.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SpaceConfigField {
+    pub var: String,
+    pub value: String,
+}
+
+impl From<CoreSpaceConfigField> for SpaceConfigField {
+    fn from(f: CoreSpaceConfigField) -> Self {
+        Self {
+            var: f.var,
+            value: f.value,
         }
     }
 }

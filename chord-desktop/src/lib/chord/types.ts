@@ -303,6 +303,19 @@ export interface JoinRequest {
   subid: string | null;
 }
 
+/** A person with an affiliation to a space node. */
+export interface SpaceMember {
+  jid: string;
+  /** `owner`, `publisher`, `publish-only`, `member` or `outcast`. */
+  affiliation: string;
+}
+
+/** One field of the node configuration of a space. Several values are joined with a comma. */
+export interface SpaceConfigField {
+  var: string;
+  value: string;
+}
+
 /** service, node, name. */
 export type PendingJoin = [service: string, node: string, name: string];
 

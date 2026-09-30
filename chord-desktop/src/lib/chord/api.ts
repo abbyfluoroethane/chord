@@ -41,7 +41,9 @@ import type {
   Settings,
   SpaceAccess,
   SpaceCard,
+  SpaceConfigField,
   SpaceInfo,
+  SpaceMember,
   SpaceItem,
   TimelineItem
 } from './types';
@@ -318,9 +320,9 @@ export const joinSpace = (service: string, node: string) =>
   invoke<JoinOutcome>('join_space', { service, node });
 export const leaveSpace = (service: string, node: string) =>
   invoke<void>('leave_space', { service, node });
-/** Create a space. Returns `[service, node]`. */
-export const createSpace = (name: string, access: SpaceAccess) =>
-  invoke<[string, string]>('create_space', { name, access });
+/** Create a space. Returns `[service, node]`. An empty description is none. */
+export const createSpace = (name: string, access: SpaceAccess, description?: string) =>
+  invoke<[string, string]>('create_space', { name, access, description: description ?? null });
 export const deleteSpace = (service: string, node: string) =>
   invoke<void>('delete_space', { service, node });
 export const pendingSpaceJoins = () => invoke<PendingJoin[]>('pending_space_joins');
@@ -336,6 +338,45 @@ export const removeRoomFromSpace = (service: string, node: string, room: string)
   invoke<void>('remove_room_from_space', { service, node, room });
 export const addSpaceMember = (service: string, node: string, member: string) =>
   invoke<void>('add_space_member', { service, node, member });
+/** The owner sees every affiliation of the space node. Others get an error. */
+export const spaceMembers = (service: string, node: string) =>
+  invoke<SpaceMember[]>('space_members', { service, node });
+/** Sets the affiliation to `none`, and ends the subscription (owner only). */
+export const removeSpaceMember = (service: string, node: string, member: string) =>
+  invoke<void>('remove_space_member', { service, node, member });
+/** Sets the affiliation to `outcast` (owner only). */
+export const banSpaceMember = (service: string, node: string, member: string) =>
+  invoke<void>('ban_space_member', { service, node, member });
+/** The node configuration form of a space, as variables and values (owner only). */
+export const spaceConfig = (service: string, node: string) =>
+  invoke<SpaceConfigField[]>('space_config', { service, node });
+/** Change the name or the description (owner only). Null keeps a value. */
+export const configureSpace = (
+  service: string,
+  node: string,
+  name: string | null,
+  description: string | null,
+) => invoke<void>('configure_space', { service, node, name, description });
+/** Upload an image and set it as the avatar of a space (owner only). */
+export const setSpaceAvatar = (
+  service: string,
+  node: string,
+  mime: string,
+  data: Uint8Array,
+  width: number,
+  height: number,
+) =>
+  invoke<void>('set_space_avatar', { service, node, mime, data: Array.from(data), width, height });
+/** Upload an image and set it as the banner of a space (owner only). */
+export const setSpaceBanner = (
+  service: string,
+  node: string,
+  mime: string,
+  data: Uint8Array,
+  width: number,
+  height: number,
+) =>
+  invoke<void>('set_space_banner', { service, node, mime, data: Array.from(data), width, height });
 
 // ---------------------------------------------------------------- contacts
 

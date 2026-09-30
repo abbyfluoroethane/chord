@@ -11,16 +11,19 @@
 <script lang="ts">
   // Dialogs opened from the space menu. Bridge calls: setNotificationLevel (each channel
   // of the space), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
-  // createChannel, leaveSpace, deleteSpace, and removeRoomFromSpace.
-  import { splitSpaceKey } from './adapt';
+  // createChannel, leaveSpace, deleteSpace, and removeRoomFromSpace. The settings dialog of an
+  // owner also calls spaceMembers, spaceConfig, configureSpace, setSpaceAvatar, setSpaceBanner,
+  // removeSpaceMember and banSpaceMember.
+  import { plainError, splitSpaceKey } from './adapt';
   import { failureNote } from './batch';
   import InviteList from './InviteList.svelte';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
   import { ui } from './ui.svelte';
-  import { live } from './bridge';
+  import { api, live } from './bridge';
   import { spaceInviteLink } from './xmppuri';
   import type { NotificationLevel } from './types';
+  import type { SpaceMember } from '$lib/chord/types';
 
   let { kind, space, onclose }: { kind: DialogKind; space: string; onclose: () => void } = $props();
 
@@ -50,6 +53,110 @@
         } else requestsNote = 'Only the owner of a space sees join requests.';
       });
   });
+
+  /** True when the server lets us read the members: we own the space. */
+  let owner = $state(false);
+  let description = $state('');
+  let savedDescription = '';
+  let members = $state<SpaceMember[]>([]);
+  let settingsError = $state('');
+  let busy = $state(false);
+
+  // Maps to api.spaceMembers(service, node) and api.spaceConfig(service, node). A service
+  // refuses both to a person who is not the owner, and then the dialog stays read-only.
+  $effect(() => {
+    if (!live || kind !== 'settings') return;
+    const { service, node } = splitSpaceKey(space);
+    void (async () => {
+      try {
+        const b = await api();
+        members = await b.spaceMembers(service, node);
+        const config = await b.spaceConfig(service, node);
+        description = config.find((f) => f.var === 'pubsub#description')?.value ?? '';
+        savedDescription = description;
+        owner = true;
+      } catch {
+        owner = false;
+      }
+    })();
+  });
+
+  // Maps to api.configureSpace(service, node, name, description).
+  async function saveSettings() {
+    if (!owner) return onclose();
+    const { service, node } = splitSpaceKey(space);
+    const name = text.trim();
+    const newName = name && name !== circle?.name ? name : null;
+    const newDescription = description.trim() !== savedDescription.trim() ? description.trim() : null;
+    if (newName === null && newDescription === null) return onclose();
+    busy = true;
+    settingsError = '';
+    try {
+      await (await api()).configureSpace(service, node, newName, newDescription);
+      ui.say('Space saved.');
+      onclose();
+    } catch (e) {
+      settingsError = plainError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Maps to api.setSpaceAvatar and api.setSpaceBanner (image, width, height in pixels).
+  async function pickImage(e: Event, banner: boolean) {
+    const input = e.currentTarget as HTMLInputElement;
+    const f = input.files?.[0];
+    input.value = '';
+    if (!f) return;
+    settingsError = '';
+    const limit = banner ? 4 : 1;
+    if (!f.type.startsWith('image/')) {
+      settingsError = 'Pick an image file.';
+      return;
+    }
+    if (f.size > limit * 1024 * 1024) {
+      settingsError = `The image is too big. Use one under ${limit} MB.`;
+      return;
+    }
+    const { service, node } = splitSpaceKey(space);
+    busy = true;
+    try {
+      const bitmap = await createImageBitmap(f);
+      const size = { w: bitmap.width, h: bitmap.height };
+      bitmap.close();
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const b = await api();
+      await (banner
+        ? b.setSpaceBanner(service, node, f.type, bytes, size.w, size.h)
+        : b.setSpaceAvatar(service, node, f.type, bytes, size.w, size.h));
+      ui.say(banner ? 'Banner changed.' : 'Avatar changed.');
+    } catch (err) {
+      settingsError = plainError(err);
+    } finally {
+      busy = false;
+    }
+  }
+
+  // Maps to api.removeSpaceMember and api.banSpaceMember, then api.spaceMembers.
+  async function affiliate(jid: string, ban: boolean) {
+    const { service, node } = splitSpaceKey(space);
+    settingsError = '';
+    try {
+      const b = await api();
+      await (ban ? b.banSpaceMember(service, node, jid) : b.removeSpaceMember(service, node, jid));
+      members = await b.spaceMembers(service, node);
+    } catch (err) {
+      settingsError = plainError(err);
+    }
+  }
+
+  const affiliationLabel: Record<string, string> = {
+    owner: 'Owner',
+    publisher: 'Publisher',
+    'publish-only': 'Publisher',
+    member: 'Member',
+    outcast: 'Banned'
+  };
 
   // Maps to api.approveSpaceJoin and api.denySpaceJoin.
   async function answer(jid: string, approve: boolean) {
@@ -101,8 +208,8 @@
     if (kind === 'create-channel') app.createChannel(space, text);
     else if (kind === 'nickname' && text.trim()) void app.changeNick(space, text.trim());
     else if (kind === 'notifications') void app.setCircleLevel(space, mute ? 'nothing' : level);
-    // The bridge cannot rename a space yet, so the name is read-only inside the app.
-    else if (kind === 'settings' && circle && text.trim() && !live) circle.name = text.trim();
+    else if (kind === 'settings' && live) return void saveSettings();
+    else if (kind === 'settings' && circle && text.trim()) circle.name = text.trim();
     else if (kind === 'leave') app.leaveCircle(space);
     onclose();
   }
@@ -173,12 +280,59 @@
           class="input"
           bind:value={text}
           autocomplete="off"
-          readonly={live && kind === 'settings'}
+          readonly={live && kind === 'settings' && !owner}
         />
-        {#if live && kind === 'settings'}
-          <span class="hint">Renaming a space comes later.</span>
+        {#if live && kind === 'settings' && !owner}
+          <span class="hint">Only the owner of a space can change it.</span>
         {/if}
       </div>
+      {#if live && kind === 'settings' && owner}
+        <div class="field">
+          <label for="dlg-description">Description</label>
+          <textarea id="dlg-description" class="input" rows="3" bind:value={description}></textarea>
+        </div>
+        <div class="field">
+          <span class="field-label">Images</span>
+          <div class="req">
+            <label class="btn" for="dlg-avatar">Change avatar</label>
+            <input
+              id="dlg-avatar"
+              class="sr-only"
+              type="file"
+              accept="image/*"
+              disabled={busy}
+              onchange={(e) => void pickImage(e, false)}
+            />
+            <label class="btn" for="dlg-banner">Change banner</label>
+            <input
+              id="dlg-banner"
+              class="sr-only"
+              type="file"
+              accept="image/*"
+              disabled={busy}
+              onchange={(e) => void pickImage(e, true)}
+            />
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">Members</span>
+          {#each members as m (m.jid)}
+            <div class="req">
+              <span class="mono">{m.jid}</span>
+              <span class="hint">{affiliationLabel[m.affiliation] ?? m.affiliation}</span>
+              {#if m.affiliation !== 'owner'}
+                <button type="button" class="btn btn-ghost" onclick={() => void affiliate(m.jid, false)}>
+                  {m.affiliation === 'outcast' ? 'Unban' : 'Remove'}
+                </button>
+                {#if m.affiliation !== 'outcast'}
+                  <button type="button" class="btn btn-ghost" onclick={() => void affiliate(m.jid, true)}>Ban</button>
+                {/if}
+              {/if}
+            </div>
+          {/each}
+        </div>
+        {#if settingsError}<span class="hint err" role="alert">{settingsError}</span>{/if}
+      {/if}
       {#if live && kind === 'settings'}
         <div class="field">
           <span class="field-label">Join requests</span>
@@ -263,6 +417,9 @@
   }
   .or {
     margin-top: var(--space-4);
+  }
+  .err {
+    color: var(--danger);
   }
   .copy {
     display: flex;
