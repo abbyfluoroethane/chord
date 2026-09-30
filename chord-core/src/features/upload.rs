@@ -313,11 +313,50 @@ fn on_slot(ctx: &mut Ctx<'_>, id: u64, response: IqResponse) {
     ctx.state.upload.transfers.insert(id, transfer);
 }
 
+/// The text of a slot error. It reads the `file-too-large` and `retry` extensions of
+/// XEP-0363 (section 4.3), so the user sees the real limit and the time to try again.
 fn describe(error: &StanzaError) -> String {
     let text = error.texts.values().next().map(String::as_str);
-    match text {
+    let mut out = match text {
         Some(text) => format!("{:?}: {text}", error.defined_condition),
         None => format!("{:?}", error.defined_condition),
+    };
+    if let Some(other) = &error.other {
+        if other.is("file-too-large", NS_UPLOAD) {
+            let max = other
+                .get_child("max-file-size", NS_UPLOAD)
+                .and_then(|m| m.text().trim().parse::<u64>().ok());
+            match max {
+                Some(max) => out.push_str(&format!(
+                    " (the file is too large, the service accepts {} at most)",
+                    human_size(max)
+                )),
+                None => out.push_str(" (the file is too large)"),
+            }
+        } else if other.is("retry", NS_UPLOAD)
+            && let Some(stamp) = other.attr("stamp")
+        {
+            out.push_str(&format!(" (try again after {stamp})"));
+        }
+    }
+    out
+}
+
+/// A size for a person: "5 MB", "1.5 GB".
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["bytes", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} bytes")
+    } else if (value - value.round()).abs() < 0.05 {
+        format!("{} {}", value.round(), UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
     }
 }
 
@@ -712,6 +751,55 @@ mod tests {
         };
         assert!(text.contains("too big"), "{text}");
         assert!(take_put(&mut h).is_none());
+    }
+
+    #[test]
+    fn slot_error_shows_the_max_size_and_the_retry_stamp() {
+        let mut h = harness(None);
+        let answer = command(&mut h, "bob@chord.localhost", vec![1]);
+        let mut error = StanzaError::new(
+            ErrorType::Modify,
+            DefinedCondition::NotAcceptable,
+            "en",
+            "too big",
+        );
+        error.other = Some(
+            format!(
+                "<file-too-large xmlns='{NS_UPLOAD}'><max-file-size>5242880</max-file-size>\
+                 </file-too-large>"
+            )
+            .parse()
+            .unwrap(),
+        );
+        answer_slot(&mut h, IqResponse::Error(error));
+        let Err(ClientError::Server(text)) = result_of(answer) else {
+            panic!("expected a server error");
+        };
+        assert!(text.contains("5 MB"), "{text}");
+
+        let mut error = StanzaError::new(
+            ErrorType::Wait,
+            DefinedCondition::ResourceConstraint,
+            "en",
+            "quota",
+        );
+        error.other = Some(
+            format!("<retry xmlns='{NS_UPLOAD}' stamp='2026-10-01T10:00:00Z'/>")
+                .parse()
+                .unwrap(),
+        );
+        let text = describe(&error);
+        assert!(
+            text.contains("try again after 2026-10-01T10:00:00Z"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn sizes_read_well() {
+        assert_eq!(human_size(10), "10 bytes");
+        assert_eq!(human_size(5 * 1024 * 1024), "5 MB");
+        assert_eq!(human_size(1536 * 1024), "1.5 MB");
     }
 
     #[test]
