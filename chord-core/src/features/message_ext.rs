@@ -7,7 +7,8 @@
 //!   retraction, XEP-0444 reaction) or only carries a chat marker (XEP-0333). The feature
 //!   applies it, and no new timeline row appears.
 //! - `extras`: the ids and references of a new message (XEP-0461 reply, XEP-0066 URL).
-//! - `after_store`: a new message is in the store.
+//! - `after_store`: a new message is in the store. Changes that waited for it apply now
+//!   (`orphans`).
 //!
 //! Outgoing messages get `outgoing_payloads` (for example XEP-0333 `<markable/>`).
 
@@ -17,7 +18,9 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::oob::Oob;
 
 use super::chat::MessageIds;
-use super::{Ctx, chat_states, corrections, markers, muc, notify, reactions, replies, retraction};
+use super::{
+    Ctx, chat_states, corrections, markers, muc, notify, orphans, reactions, replies, retraction,
+};
 use crate::actor::ClientError;
 use crate::store::queries::{Direction, MessageExtras, MessageKind, StoredMessage};
 use crate::views::ViewKey;
@@ -94,8 +97,9 @@ pub(crate) fn after_store(
     stored: &StoredMessage,
     live: bool,
 ) {
-    markers::after_store(ctx, incoming, stored);
+    markers::after_store(ctx, incoming, stored, live);
     notify::after_store(ctx, incoming, stored, live);
+    orphans::after_store(ctx, incoming, stored);
 }
 
 /// Payloads for every outgoing chat or groupchat message.

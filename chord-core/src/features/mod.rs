@@ -27,6 +27,7 @@ pub mod markers;
 pub mod message_ext;
 pub mod muc;
 pub mod notify;
+pub mod orphans;
 pub mod presence;
 pub mod pubsub;
 pub mod push;

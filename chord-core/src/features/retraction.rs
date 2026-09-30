@@ -19,7 +19,7 @@ use xmpp_parsers::minidom::rxml::NcName;
 
 use super::corrections::{NOW_MS, new_message, original_id, own_message, same_sender};
 use super::message_ext::{self, Incoming};
-use super::{Ctx, Pending, muc};
+use super::{Ctx, Pending, muc, orphans};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::queries::{self, MessageKind, MessageRow};
 use crate::views::{ChannelScope, ViewKey};
@@ -317,7 +317,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let row = match queries::find_message(ctx.store.conn(), ctx.account_id, incoming.peer, &id) {
         Ok(Some(row)) => row,
         Ok(None) => {
-            log::debug!("retraction of {id} dropped: no such message");
+            orphans::stash(ctx, incoming, &id, orphans::Change::Retract);
             return true;
         }
         Err(e) => {

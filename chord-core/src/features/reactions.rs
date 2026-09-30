@@ -13,7 +13,7 @@ use xmpp_parsers::minidom::Element;
 use xmpp_parsers::reactions::{Reaction, Reactions};
 
 use super::message_ext::{self, Incoming};
-use super::{Ctx, FeatureCommand, new_id};
+use super::{Ctx, FeatureCommand, new_id, orphans};
 use crate::actor::{ClientError, ClientHandle};
 use crate::store::json::{from_array, to_array};
 use crate::store::queries::{self, Direction, MessageKind};
@@ -229,10 +229,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
     let row = match queries::find_message(ctx.store.conn(), ctx.account_id, peer, &reactions.id) {
         Ok(Some(row)) => row,
         Ok(None) => {
-            log::debug!(
-                "reactions to unknown message {} in {peer}: dropped",
-                reactions.id
-            );
+            orphans::stash(ctx, incoming, &reactions.id, orphans::Change::Reaction);
             return true;
         }
         Err(e) => {

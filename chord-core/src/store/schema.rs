@@ -242,4 +242,23 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE messages ADD COLUMN failed_at INTEGER;
     "#,
+    // 10: edits, retractions, and reactions that arrived before their target message
+    // (archive pages run newest first, and carbons can overtake the original). The row
+    // waits for the target and goes when it is applied or when it gets old (orphans.rs).
+    r#"
+    CREATE TABLE pending_changes (
+        id         INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        peer       TEXT NOT NULL,             -- as messages.peer stores it
+        target     TEXT NOT NULL,             -- the id that the change names
+        kind       TEXT NOT NULL CHECK (kind IN ('edit', 'retract', 'reaction')),
+        msg_kind   TEXT NOT NULL,             -- 'chat' or 'groupchat'
+        direction  TEXT NOT NULL,             -- 'in' or 'out'
+        sender     TEXT NOT NULL,
+        timestamp  INTEGER,                   -- Unix time in ms, if the stanza had one
+        stanza     TEXT NOT NULL,             -- the message XML
+        created_at INTEGER NOT NULL           -- Unix time in ms
+    );
+    CREATE INDEX pending_changes_by_target ON pending_changes (account_id, peer, target);
+    "#,
 ];

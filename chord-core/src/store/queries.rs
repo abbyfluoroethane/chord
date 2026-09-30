@@ -54,7 +54,7 @@ pub enum Direction {
 }
 
 impl Direction {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::In => "in",
             Self::Out => "out",
@@ -87,7 +87,7 @@ pub enum MessageKind {
 }
 
 impl MessageKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Chat => "chat",
             Self::Groupchat => "groupchat",
