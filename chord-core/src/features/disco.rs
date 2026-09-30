@@ -52,6 +52,8 @@ pub const FEATURES: &[&str] = &[
     // Out-of-band data (XEP-0066) for uploads, and processing hints (XEP-0334).
     "jabber:x:oob",
     "urn:xmpp:hints",
+    // Direct invites (XEP-0249): muc.rs reads the invite and shows it.
+    "jabber:x:conference",
 ];
 
 /// Our disco#info answer.
@@ -257,6 +259,7 @@ mod tests {
             "jabber:x:oob",
             "urn:xmpp:hints",
             "urn:xmpp:receipts",
+            "jabber:x:conference",
         ] {
             assert!(FEATURES.contains(&f), "{f}");
         }
@@ -278,7 +281,7 @@ mod tests {
         // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
         // not from the code under test. Update it when `FEATURES` changes.
         let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "54d15b4a5af541ea47fd5f47e15456cd64166747");
+        assert_eq!(hex, "1ea4fe87dd6eb18adf0769eb305c2c7a8756985e");
     }
 
     #[test]
