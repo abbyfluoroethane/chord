@@ -5,7 +5,10 @@
 //! to turn the GIF picker off. Chord sends no user ID, and asks for no ads.
 //!
 //! The API key comes from `CHORD_KLIPY_KEY`, at run time or at build time. Without a key,
-//! the search fails with the code `gifUnavailable`.
+//! the search fails with the code `gifUnavailable`. A key in the app can be read by anyone
+//! who has the app (BRIDGESECURITY-07). So a build can set `CHORD_GIF_PROXY` to the https
+//! address of a small server that holds the key and limits the rate. The app then sends
+//! `{proxy}/gifs/{action}` with no key, and ships no key at all.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -154,6 +157,31 @@ pub fn parse_page(bytes: &[u8]) -> Res<GifPage> {
 
 // ---------------------------------------------------------------- the request
 
+/// Where the requests go, and the key to put in the path (none for a proxy). A proxy wins.
+fn target() -> Res<(Url, Option<String>)> {
+    let proxy = std::env::var("CHORD_GIF_PROXY")
+        .ok()
+        .or_else(|| option_env!("CHORD_GIF_PROXY").map(str::to_owned))
+        .filter(|p| !p.trim().is_empty());
+    match proxy {
+        Some(p) => Ok((proxy_root(&p)?, None)),
+        None => Ok((
+            Url::parse(API_ROOT).expect("a valid static URL"),
+            Some(api_key()?),
+        )),
+    }
+}
+
+/// The root of a proxy: an https URL with no user info.
+fn proxy_root(text: &str) -> Res<Url> {
+    let url = Url::parse(text.trim())
+        .ok()
+        .filter(|u| u.scheme() == "https" && u.host().is_some())
+        .filter(|u| u.username().is_empty() && u.password().is_none())
+        .ok_or_else(|| ChordError::new("gifUnavailable", "CHORD_GIF_PROXY is not an https URL"))?;
+    Ok(url)
+}
+
 fn api_key() -> Res<String> {
     std::env::var("CHORD_KLIPY_KEY")
         .ok()
@@ -183,14 +211,19 @@ fn client() -> Res<&'static reqwest::Client> {
 }
 
 /// The API URL for `action`. The key is a path segment, so it is never in a log line.
-fn endpoint(key: &str, action: &str) -> Url {
-    let mut url = Url::parse(API_ROOT).expect("a valid static URL");
-    url.path_segments_mut()
-        .expect("an https URL has path segments")
-        .pop_if_empty()
-        .push(key)
-        .push("gifs")
-        .push(action);
+/// A proxy has no key.
+fn endpoint(root: &Url, key: Option<&str>, action: &str) -> Url {
+    let mut url = root.clone();
+    {
+        let mut path = url
+            .path_segments_mut()
+            .expect("an https URL has path segments");
+        path.pop_if_empty();
+        if let Some(key) = key {
+            path.push(key);
+        }
+        path.push("gifs").push(action);
+    }
     url
 }
 
@@ -205,14 +238,14 @@ fn request_error(error: reqwest::Error) -> ChordError {
 }
 
 async fn get_page(query: &str, page: u32) -> Res<GifPage> {
-    let key = api_key()?;
+    let (root, key) = target()?;
     let query: String = query.trim().chars().take(MAX_QUERY_CHARS).collect();
     let action = if query.is_empty() {
         "trending"
     } else {
         "search"
     };
-    let mut url = endpoint(&key, action);
+    let mut url = endpoint(&root, key.as_deref(), action);
     {
         let mut pairs = url.query_pairs_mut();
         pairs
@@ -315,10 +348,38 @@ mod tests {
 
     #[test]
     fn the_key_is_a_path_segment() {
-        let url = endpoint("a/b c", "search");
+        let root = Url::parse(API_ROOT).unwrap();
+        let url = endpoint(&root, Some("a/b c"), "search");
         assert_eq!(
             url.as_str(),
             "https://api.klipy.com/api/v1/a%2Fb%20c/gifs/search"
         );
+    }
+
+    #[test]
+    fn a_proxy_gets_no_key() {
+        let root = proxy_root("https://gif.example.org/v1/").unwrap();
+        assert_eq!(
+            endpoint(&root, None, "trending").as_str(),
+            "https://gif.example.org/v1/gifs/trending"
+        );
+        let root = proxy_root("https://gif.example.org").unwrap();
+        assert_eq!(
+            endpoint(&root, None, "search").as_str(),
+            "https://gif.example.org/gifs/search"
+        );
+    }
+
+    #[test]
+    fn a_proxy_needs_https_and_no_user_info() {
+        for bad in [
+            "http://gif.example.org",
+            "https://u:p@gif.example.org",
+            "ftp://gif.example.org",
+            "gif.example.org",
+            "",
+        ] {
+            assert!(proxy_root(bad).is_err(), "{bad}");
+        }
     }
 }
