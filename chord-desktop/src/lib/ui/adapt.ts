@@ -1,6 +1,7 @@
 // The one place that maps bridge types ($lib/chord/types) to the UI types (./types).
 // The functions are pure. The live controller (live.svelte.ts) calls them.
 import { avatarUrl } from '$lib/chord/avatars';
+import { webUrl } from './mediatrust';
 import type {
   ChannelItem as BChannel,
   ChannelScope,
@@ -230,7 +231,9 @@ export function toTimelineItem(t: BTimeline, ctx: TimelineContext): TimelineItem
     replyTo: t.replyTo
       ? { id: t.replyTo.id ?? '', senderName: t.replyTo.senderName, body: t.replyTo.body }
       : null,
-    attachment: t.attachment ? toAttachment(t.attachment, t.attachmentInfo) : null,
+    // The URL is the sender's. Only http and https make a card (the core filters too).
+    attachment:
+      t.attachment && webUrl(t.attachment) ? toAttachment(t.attachment, t.attachmentInfo) : null,
     // The UI has no "received" or "displayed" mark. It shows a failed message.
     status: t.status === 'failed' ? 'failed' : 'sent',
     // The bridge tells about mentions in Notification events. The store adds the flag.

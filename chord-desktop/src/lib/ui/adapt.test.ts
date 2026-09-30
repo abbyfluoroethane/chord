@@ -138,6 +138,15 @@ describe('timeline', () => {
     });
   });
 
+  it('makes no attachment of a URL that is not http or https', () => {
+    const ctx = { room: false, me: 'me@foid.space' };
+    for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,x'])
+      expect(toTimelineItem(item({ attachment: url }), ctx).attachment, url).toBeNull();
+    expect(
+      toTimelineItem(item({ attachment: 'https://up.example/a.png' }), ctx).attachment
+    ).not.toBeNull();
+  });
+
   it('maps the items of a diff', () => {
     expect(mapDiff({ type: 'insert', index: 1, item: 2 }, (n) => n * 2)).toEqual({
       type: 'insert',

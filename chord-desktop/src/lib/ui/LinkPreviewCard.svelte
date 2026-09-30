@@ -1,15 +1,21 @@
 <script lang="ts">
   // One link preview: site name, title link, description, and an image. A direct image
-  // link shows only the image, and a click opens the lightbox.
+  // link shows only the image, and a click opens the lightbox. The image is never loaded
+  // from its own address: the bridge downloads it with the filter for private networks and
+  // gives a `data:` URL (BRIDGESECURITY-04).
   import type { LinkPreview } from '$lib/chord/types';
   import { openLightbox, preloadLightbox } from './lightbox';
+  import { linkPreviews } from './linkpreviews.svelte';
 
   let { preview }: { preview: LinkPreview } = $props();
 
   /** True after the image failed to load. */
   let broken = $state(false);
 
-  const image = $derived(broken ? null : preview.image);
+  $effect(() => {
+    if (preview.image) linkPreviews.requestImage(preview.image);
+  });
+  const image = $derived(broken || !preview.image ? null : (linkPreviews.image(preview.image) ?? null));
   const imageOnly = $derived(!preview.title && !preview.description);
   const large = $derived(
     !!image && !preview.description && (!preview.imageWidth || preview.imageWidth >= 400)

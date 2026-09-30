@@ -7,6 +7,7 @@ import { api, live } from './bridge';
 import { settings } from './local';
 
 const KEY = 'linkPreviews';
+const STRANGERS_KEY = 'loadFromStrangers';
 
 /** `undefined` while the answer is on its way, `null` when there is no preview. */
 type Entry = LinkPreview | null | undefined;
@@ -14,17 +15,28 @@ type Entry = LinkPreview | null | undefined;
 class LinkPreviews {
   /** The "Show link previews" switch. On by default. */
   enabled = $state(true);
+  /**
+   * "Load files from people who are not contacts". Off by default: a photo, a video or a
+   * preview from a stranger waits for a click, because loading it tells the sender the IP
+   * address and the time of reading.
+   */
+  strangers = $state(false);
   private entries = $state<Record<string, Entry>>({});
   private started = new Set<string>();
+  /** The preview images by their address: a `data:` URL, `null` if it failed. */
+  private images = $state<Record<string, string | null | undefined>>({});
+  private imagesStarted = new Set<string>();
 
   load() {
     if (live) {
       this.enabled = settings.get<boolean>(KEY) ?? true;
+      this.strangers = settings.get<boolean>(STRANGERS_KEY) ?? false;
       return;
     }
     try {
       const raw = localStorage.getItem('chord.' + KEY);
       if (raw !== null) this.enabled = raw !== 'false';
+      this.strangers = localStorage.getItem('chord.' + STRANGERS_KEY) === 'true';
     } catch {
       /* storage blocked, keep the default */
     }
@@ -43,6 +55,19 @@ class LinkPreviews {
     }
   }
 
+  setStrangers(on: boolean) {
+    this.strangers = on;
+    if (live) {
+      settings.set(STRANGERS_KEY, on);
+      return;
+    }
+    try {
+      localStorage.setItem('chord.' + STRANGERS_KEY, String(on));
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** The answer for `url` so far. Call `request` to get it. */
   get(url: string): Entry {
     return this.entries[url];
@@ -53,6 +78,27 @@ class LinkPreviews {
     if (!this.enabled || this.started.has(url)) return;
     this.started.add(url);
     void this.fetch(url).then((p) => (this.entries[url] = p));
+  }
+
+  /**
+   * What to put in an `<img>` for the preview image at `url`: `undefined` while it loads,
+   * `null` if it failed. Live, the bridge fetches it and the answer is a `data:` URL. The
+   * webview never loads a remote address for a preview. Call `requestImage` first.
+   */
+  image(url: string): string | null | undefined {
+    return live ? this.images[url] : url;
+  }
+
+  requestImage(url: string) {
+    if (!live || this.imagesStarted.has(url)) return;
+    this.imagesStarted.add(url);
+    void (async () => {
+      try {
+        this.images[url] = await (await api()).linkImage(url);
+      } catch {
+        this.images[url] = null;
+      }
+    })();
   }
 
   private async fetch(url: string): Promise<LinkPreview | null> {

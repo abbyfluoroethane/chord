@@ -360,6 +360,11 @@ export const setSettings = (value: Settings) => invoke<void>('set_settings', { v
 export const saveImage = (url: string, name?: string) =>
   invoke<boolean>('save_image', { url, name: name ?? null });
 export const linkPreview = (url: string) => invoke<LinkPreview | null>('link_preview', { url });
+/**
+ * The image of a link preview as a `data:` URL. The bridge downloads it with the same
+ * filters as the page, so the webview never loads the address itself.
+ */
+export const linkImage = (url: string) => invoke<string>('link_image', { url });
 /** Download the CSS of a linked theme. Https only, 256 KB at most. */
 export const themeFetch = (url: string) => invoke<string>('theme_fetch', { url });
 /** Search KLIPY GIFs, or get the trending ones for an empty query. `page` starts at 1. */

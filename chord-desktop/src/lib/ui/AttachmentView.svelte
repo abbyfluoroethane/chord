@@ -2,22 +2,48 @@
   // An attachment: a photo opens the viewer (PhotoSwipe). Video and audio play in the chat
   // with the Chord player (Video.js v10), and a video also opens in the viewer. Anything
   // else, or media that the webview cannot play, is a file card.
+  //
+  // The URL comes from the sender. Photos, videos and audio load from it only for the user
+  // and for contacts: anyone else gets a card with the real host and a "Load" button,
+  // because a load tells the sender the IP address of the user (BRIDGESECURITY-03). A file
+  // card shows the real host too, and opens the URL in the system browser after a question
+  // that shows the whole URL (BRIDGESECURITY-06).
   import Download from 'lucide-svelte/icons/download';
   import File from 'lucide-svelte/icons/file';
   import Icon from './Icon.svelte';
   import { fileSize } from './format';
-  import { viewImage, viewMedia } from './attachments';
+  import { openLink, viewImage, viewMedia } from './attachments';
   import { preloadLightbox } from './lightbox';
   import MediaPlayer from './media/MediaPlayer.svelte';
+  import { hostOf, isLocalHost } from './mediatrust';
   import type { Attachment } from './types';
+  import { ui } from './ui.svelte';
 
-  let { file }: { file: Attachment } = $props();
+  let {
+    file,
+    trusted = true,
+    onload: reveal
+  }: { file: Attachment; trusted?: boolean; onload?: () => void } = $props();
+
+  const host = $derived(hostOf(file.url));
+  // A private or local address never loads by itself, for anyone.
+  const local = $derived(isLocalHost(file.url));
+
+  /** Ask before the URL opens. The question shows the whole URL, not the name. */
+  function open() {
+    ui.confirm = {
+      title: 'Open this link?',
+      text: `${file.url}\n\nThe file is on ${host || 'an unknown host'}. It opens in your browser.`,
+      confirm: 'Open link',
+      onconfirm: () => void openLink(file.url)
+    };
+  }
 
   /** True after the webview failed to load or play the media. */
   let broken = $state(false);
 
   const kind = $derived.by(() => {
-    if (broken) return 'file';
+    if (broken || local) return 'file';
     if (file.mime.startsWith('image/')) return 'image';
     if (file.mime.startsWith('video/')) return 'video';
     if (file.mime.startsWith('audio/')) return 'audio';
@@ -49,7 +75,18 @@
   });
 </script>
 
-{#if kind === 'image'}
+{#if kind !== 'file' && !trusted}
+  <div class="card">
+    <span class="ico"><Icon icon={File} size={24} /></span>
+    <span class="info">
+      <span class="name">{file.name}</span>
+      <span class="mono size" title={file.url}>{host}</span>
+    </span>
+    <button class="btn" onclick={reveal} title="The site sees your IP address">
+      Load {kind}
+    </button>
+  </div>
+{:else if kind === 'image'}
   <button
     class="image"
     class:natural={!box}
@@ -88,12 +125,14 @@
   <div class="card">
     <span class="ico"><Icon icon={File} size={24} /></span>
     <span class="info">
-      <a href={file.url} target="_blank" rel="noopener noreferrer">{file.name}</a>
-      {#if file.size > 0}<span class="mono size">{fileSize(file.size)}</span>{/if}
+      <button class="name link" onclick={open} title={file.url}>{file.name}</button>
+      <span class="mono size" title={file.url}>
+        {host}{#if file.size > 0}{' \u00b7 '}{fileSize(file.size)}{/if}
+      </span>
     </span>
-    <a class="dl" href={file.url} download={file.name} aria-label="Download {file.name}">
+    <button class="dl" onclick={open} title={file.url} aria-label="Open {file.name} from {host}">
       <Icon icon={Download} size={18} />
-    </a>
+    </button>
   </div>
 {/if}
 
@@ -162,10 +201,22 @@
     flex: 1;
     min-width: 0;
   }
-  .info a {
+  .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .link:hover {
+    text-decoration: underline;
   }
   .size {
     color: var(--ink-muted);
@@ -177,8 +228,12 @@
     place-items: center;
     width: 32px;
     height: 32px;
+    padding: 0;
+    border: 0;
+    background: none;
     border-radius: var(--radius-md);
     color: var(--ink-muted);
+    cursor: pointer;
   }
   .dl:hover {
     background: var(--hover);

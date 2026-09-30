@@ -26,6 +26,8 @@ const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 3;
 /// The largest image that `save_image` writes.
 const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+/// The largest preview image that `link_image` sends to the page: 8 MB.
+const MAX_PREVIEW_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const CACHE_ENTRIES: usize = 256;
@@ -448,6 +450,13 @@ fn within_cap(total: u64, chunk: usize, max: u64) -> bool {
 /// the previews: only public addresses, checked redirects. It fails for a file that is not
 /// an image, and for one over 50 MB. The caller decides where the bytes go (files.rs).
 pub async fn download_image(url: &str) -> Res<Vec<u8>> {
+    download_capped(url, MAX_IMAGE_BYTES)
+        .await
+        .map(|(bytes, _)| bytes)
+}
+
+/// Download an image of at most `max` bytes. Returns the bytes and the media type.
+async fn download_capped(url: &str, max: u64) -> Res<(Vec<u8>, String)> {
     let parsed = Url::parse(url.trim())
         .map_err(|e| ChordError::invalid(format!("not a URL ({url:?}): {e}")))?;
     validate_url(&parsed)?;
@@ -471,21 +480,63 @@ pub async fn download_image(url: &str) -> Res<Vec<u8>> {
     if kind_of(content_type.as_deref()) != Kind::Image {
         return Err(ChordError::invalid("the link is not an image"));
     }
-    let too_big = || ChordError::invalid("the image is larger than 50 MB");
-    if response
-        .content_length()
-        .is_some_and(|n| n > MAX_IMAGE_BYTES)
-    {
+    let too_big = || {
+        ChordError::invalid(format!(
+            "the image is larger than {} MB",
+            max / (1024 * 1024)
+        ))
+    };
+    if response.content_length().is_some_and(|n| n > max) {
         return Err(too_big());
     }
     let mut body: Vec<u8> = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(fetch_error)? {
-        if !within_cap(body.len() as u64, chunk.len(), MAX_IMAGE_BYTES) {
+        if !within_cap(body.len() as u64, chunk.len(), max) {
             return Err(too_big());
         }
         body.extend_from_slice(&chunk);
     }
-    Ok(body)
+    let mime = essence(content_type.as_deref());
+    Ok((body, mime))
+}
+
+/// The media type of a Content-Type header, in lower case and with no parameters.
+fn essence(content_type: Option<&str>) -> String {
+    content_type
+        .and_then(|c| c.split(';').next())
+        .map(|m| m.trim().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// The image types that the UI may show from a link: no SVG, which can hold a script
+/// when a page opens it on its own.
+fn is_preview_image_type(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    )
+}
+
+/// `bytes` as a `data:` URL, or `None` if the type is not one that the UI shows.
+fn data_url(mime: &str, bytes: &[u8]) -> Option<String> {
+    use base64::Engine;
+    is_preview_image_type(mime).then(|| {
+        format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    })
+}
+
+/// The preview image of a link, as a `data:` URL. The webview never loads the address
+/// from the page itself: that would skip the filter for private networks and would send
+/// the IP address of the user to a host that the sender of the link picked. The download
+/// has the same filters as the page fetch, takes 8 MB at most, and accepts PNG, JPEG,
+/// GIF and WebP.
+#[tauri::command]
+pub async fn link_image(url: String) -> Res<String> {
+    let (bytes, mime) = download_capped(&url, MAX_PREVIEW_IMAGE_BYTES).await?;
+    data_url(&mime, &bytes).ok_or_else(|| ChordError::invalid("the image type is not supported"))
 }
 
 fn poisoned() -> ChordError {
@@ -626,6 +677,30 @@ mod tests {
         assert!(within_cap(MAX_IMAGE_BYTES - 5, 5, MAX_IMAGE_BYTES));
         assert!(!within_cap(MAX_IMAGE_BYTES, 1, MAX_IMAGE_BYTES));
         assert!(!within_cap(u64::MAX, 1, MAX_IMAGE_BYTES));
+    }
+
+    #[test]
+    fn only_raster_images_become_data_urls() {
+        assert_eq!(
+            data_url("image/png", b"abc").as_deref(),
+            Some("data:image/png;base64,YWJj")
+        );
+        for mime in ["image/svg+xml", "text/html", "image/x-icon", ""] {
+            assert_eq!(data_url(mime, b"abc"), None, "{mime}");
+        }
+        assert_eq!(
+            essence(Some("Image/PNG; charset=binary")),
+            "image/png".to_string()
+        );
+    }
+
+    #[test]
+    fn link_image_refuses_bad_urls() {
+        let run = |u: &str| tauri::async_runtime::block_on(link_image(u.to_owned()));
+        assert!(run("http://127.0.0.1/a.png").is_err());
+        assert!(run("http://[::1]/a.png").is_err());
+        assert!(run("file:///etc/passwd").is_err());
+        assert!(run("https://user:pw@example.org/a.png").is_err());
     }
 
     #[test]

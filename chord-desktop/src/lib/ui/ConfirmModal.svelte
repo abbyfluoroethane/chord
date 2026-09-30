@@ -24,5 +24,7 @@
 <style>
   .ask {
     margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 </style>

@@ -87,8 +87,45 @@ pub(crate) fn extras(message: &Message, ids: &MessageIds) -> MessageExtras {
             .iter()
             .find_map(|p| Oob::try_from(p.clone()).ok())
             .map(|oob| oob.url)
-            .or(sfs_url),
+            .or(sfs_url)
+            .filter(|url| is_web_url(url)),
         file,
+    }
+}
+
+/// True if `url` is an http or https URL. The sender of a message sets the OOB URL, so any
+/// other scheme (file:, javascript:, data:, an app link) is dropped before it is stored.
+fn is_web_url(url: &str) -> bool {
+    let url = url.trim();
+    let scheme = |s: &str| {
+        url.get(..s.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(s))
+    };
+    (scheme("https://") || scheme("http://")) && !url.contains(char::is_whitespace)
+}
+
+#[cfg(test)]
+mod oob_tests {
+    use super::*;
+
+    #[test]
+    fn only_web_urls_are_kept() {
+        assert!(is_web_url("https://up.example/get/1/cat.png"));
+        assert!(is_web_url("HTTP://up.example/a"));
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,x",
+            "xmpp:room@muc.example?join",
+            "ftp://x.example/a",
+            "//x.example/a",
+            "https:/x",
+            "https://x.example/a b",
+            "",
+            "é",
+        ] {
+            assert!(!is_web_url(bad), "{bad}");
+        }
     }
 }
 

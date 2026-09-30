@@ -14,6 +14,7 @@ mod gif;
 mod keychain;
 mod link_preview;
 mod links;
+mod navigation;
 mod notify;
 mod pins;
 mod settings;
@@ -32,6 +33,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(navigation::plugin())
         .manage(state::AppState::default())
         .manage(files::Dropped::default())
         .manage(notify::NoticePrefs::default())
@@ -128,6 +130,7 @@ pub fn run() {
             pins::pins,
             pins::refresh_pins,
             link_preview::link_preview,
+            link_preview::link_image,
             files::save_image,
             theme_fetch::theme_fetch,
             gif::gif_search,
