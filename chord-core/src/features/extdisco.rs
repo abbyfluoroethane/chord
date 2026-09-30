@@ -137,7 +137,8 @@ fn parse_service(el: &Element) -> Option<(Action, IceServer)> {
         _ => IceKind::Other,
     };
     let action = match el.attr("action") {
-        Some("remove") => Action::Remove,
+        // The example of the XEP says `delete`, and the schema says `remove`.
+        Some("remove" | "delete") => Action::Remove,
         Some("modify") => Action::Modify,
         _ => Action::Add,
     };
@@ -386,25 +387,29 @@ fn answer_waiters(ctx: &mut Ctx<'_>, result: Result<Vec<IceServer>, ClientError>
     }
 }
 
-/// A `<services/>` push from the server (XEP-0215, section 4.4). It adds, changes, or
-/// removes services. Returns true if `message` is one. Only our server may send it.
-pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &xmpp_parsers::message::Message) -> bool {
-    let Some(services) = message
-        .payloads
-        .iter()
-        .find(|p| p.is("services", NS_EXTDISCO))
-    else {
+/// A `<services/>` push from the server (XEP-0215, section 4.4). It is an IQ set. It adds,
+/// changes, or removes services, and we answer with a result. Returns true if `iq` is one.
+/// Only our server may send it.
+pub(crate) fn on_iq(ctx: &mut Ctx<'_>, iq: &Iq) -> bool {
+    let Iq::Set { payload, from, .. } = iq else {
         return false;
     };
-    let from_server = message
-        .from
-        .as_ref()
-        .is_some_and(|from| *from == server_jid(ctx));
+    if !payload.is("services", NS_EXTDISCO) {
+        return false;
+    }
+    let from_server = from.as_ref().is_none_or(|from| *from == server_jid(ctx));
     if !from_server || !ctx.state.extdisco.supported {
-        log::warn!("dropped an extdisco push from {:?}", message.from);
+        log::warn!("dropped an extdisco push from {from:?}");
+        let error = StanzaError::new(
+            xmpp_parsers::stanza_error::ErrorType::Auth,
+            xmpp_parsers::stanza_error::DefinedCondition::Forbidden,
+            "en",
+            "only the server may push services",
+        );
+        ctx.send(super::error_reply(iq, error));
         return true;
     }
-    for (action, service) in parse_services(services) {
+    for (action, service) in parse_services(payload) {
         let list = &mut ctx.state.extdisco.services;
         list.retain(|s| !s.same_service(&service));
         if action != Action::Remove {
@@ -412,6 +417,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &xmpp_parsers::message::Mes
         }
     }
     ctx.state.extdisco.loaded = true;
+    ctx.send(super::result_reply(iq, None));
     true
 }
 
@@ -612,22 +618,26 @@ mod tests {
     }
 
     #[test]
-    fn a_push_from_the_server_changes_the_list_and_others_are_dropped() {
+    fn a_push_from_the_server_changes_the_list_and_others_are_refused() {
         let mut h = harness(true);
         respond(&mut h, IqResponse::Result(Some(el(SERVICES))));
-        let push = |from: &str, body: &str| {
-            let mut m = xmpp_parsers::message::Message::new(None);
-            m.from = Some(Jid::new(from).unwrap());
-            m.payloads.push(el(body));
-            m
+        h.take_sent();
+        let push = |from: &str, body: &str| Iq::Set {
+            from: Some(Jid::new(from).unwrap()),
+            to: None,
+            id: "p1".into(),
+            payload: el(body),
         };
         let remove = "<services xmlns='urn:xmpp:extdisco:2'>\
-            <service action='remove' host='stun.shakespeare.lit' port='9998' transport='udp' type='stun'/>\
+            <service action='delete' host='stun.shakespeare.lit' port='9998' transport='udp' type='stun'/>\
             </services>";
-        // A stranger cannot change the list.
-        assert!(h.with_ctx(|ctx| on_message(ctx, &push("evil.example", remove))));
+        // A stranger cannot change the list. It gets an error.
+        assert!(h.with_ctx(|ctx| on_iq(ctx, &push("evil.example", remove))));
         assert_eq!(h.state.extdisco.services.len(), 2);
-        assert!(h.with_ctx(|ctx| on_message(ctx, &push("chord.localhost", remove))));
+        assert!(matches!(h.sent_iqs()[0], Iq::Error { .. }));
+        // The server can. It gets a result.
+        assert!(h.with_ctx(|ctx| on_iq(ctx, &push("chord.localhost", remove))));
         assert_eq!(h.state.extdisco.services.len(), 1);
+        assert!(matches!(h.sent_iqs()[0], Iq::Result { .. }));
     }
 }

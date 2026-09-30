@@ -1,5 +1,6 @@
 //! Calls: the STUN and TURN servers (XEP-0215) and the call messages (XEP-0353). There is
-//! no media, so a call ends at `proceed` and `finish`.
+//! no media, so a call ends at `proceed` and `finish`. The file also holds `adhoc`, which
+//! a push app server needs for registration.
 
 use std::time::Duration;
 
@@ -76,6 +77,42 @@ pub async fn ice(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliE
             shown(&s.password),
             s.expires_ms.map_or("-".to_owned(), |e| e.to_string()),
         );
+    }
+    Ok(())
+}
+
+/// `adhoc <jid> <node> [name=value ...]`: run a one-step ad-hoc command (XEP-0050) and print
+/// the fields of the result. A push app server uses it for registration.
+pub async fn adhoc(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || CliError::from("usage: adhoc <jid> <node> [name=value ...]".to_owned());
+    let [to, node, rest @ ..] = args else {
+        return Err(usage());
+    };
+    let to =
+        chord_core::jid::Jid::new(to).map_err(|e| CliError::from(format!("bad JID {to}: {e}")))?;
+    let fields = rest
+        .iter()
+        .map(|a| {
+            a.split_once('=')
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .ok_or_else(usage)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = client
+        .handle
+        .execute_command(to, (*node).to_owned(), fields)
+        .await
+        .map_err(err)?;
+    if opts.json {
+        let items = result
+            .iter()
+            .map(|(k, v)| Obj::new().str("name", k).str("value", v).finish());
+        println!("{}", array(items));
+    } else {
+        println!("command {node} completed ({} fields)", result.len());
+        for (name, value) in &result {
+            println!("  {name}={value}");
+        }
     }
     Ok(())
 }

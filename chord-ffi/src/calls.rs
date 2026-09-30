@@ -10,7 +10,8 @@ use chord_core::features::jmi::{
 };
 
 use crate::client::ChordClient;
-use crate::error::{ChordError, parse_bare};
+use crate::error::{ChordError, parse_bare, parse_jid};
+use crate::types::FormField;
 
 /// The kind of an external service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
@@ -204,6 +205,28 @@ fn parse_reason(reason: Option<String>) -> Result<Option<CallReason>, ChordError
 
 #[uniffi::export(async_runtime = "tokio")]
 impl ChordClient {
+    // ---- Ad-hoc commands (XEP-0050) ----
+
+    /// Run an ad-hoc command that has one step. A push app server uses it to register a
+    /// device (see `docs/android-push.md`). `fields` go in the submitted form. Returns the
+    /// fields of the result form.
+    pub async fn execute_command(
+        &self,
+        service: String,
+        node: String,
+        fields: Vec<FormField>,
+    ) -> Result<Vec<FormField>, ChordError> {
+        let service = parse_jid(&service)?;
+        let fields = fields.into_iter().map(|f| (f.name, f.value)).collect();
+        let result = self
+            .call(move |h| async move { h.execute_command(service, node, fields).await })
+            .await?;
+        Ok(result
+            .into_iter()
+            .map(|(name, value)| FormField { name, value })
+            .collect())
+    }
+
     // ---- STUN and TURN (XEP-0215) ----
 
     /// The STUN and TURN servers of the server, with valid credentials. Fails with

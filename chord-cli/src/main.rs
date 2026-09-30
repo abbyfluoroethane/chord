@@ -37,6 +37,7 @@
 //!   search <text> [--in <jid>]      search the stored messages (also with --offline)
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
+//!   adhoc <jid> <node> [name=value ...]   run a one-step ad-hoc command (XEP-0050)
 //!   ice [--secrets]                 STUN and TURN servers of the server (XEP-0215)
 //!   call <jid> [audio|video] [--retract-after <secs>] [--finish]   propose a call (XEP-0353)
 //!   call-answer accept|reject [reason] [--ring] | call-watch [--secs N]
@@ -96,7 +97,7 @@ read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds]
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
 invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
-ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
+adhoc <jid> <node> [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
 call-answer accept|reject [reason] [--ring] | call-watch [--secs N] | \
 notify <jid> [all|mentions|none [--until <unix-ms>]] | \
 presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>]";
@@ -275,6 +276,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "presence",
         "search",
         "ice",
+        "adhoc",
         "call",
         "call-answer",
         "call-watch",
@@ -376,6 +378,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("search", args) => actions::search(opts, &client, args).await,
         ("push-list", []) => actions::push_list(opts, &client).await,
         ("ice", args) => calls::ice(opts, &client, args).await,
+        ("adhoc", args) => calls::adhoc(opts, &client, args).await,
         ("call", args) => calls::call(&mut client, args).await,
         ("call-answer", args) => calls::call_answer(&mut client, args).await,
         ("call-watch", args) => calls::call_watch(&mut client, args).await,

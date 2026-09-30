@@ -10,6 +10,7 @@
 //! The actor runs the queued effects after the function returns. So feature code is
 //! synchronous, has no `Send` bound, and a test can call it with no session.
 
+pub mod adhoc;
 pub mod avatars;
 pub mod blocking;
 pub mod bookmarks;
@@ -93,6 +94,7 @@ pub(crate) enum Pending {
     Blocking(blocking::Pending),
     Presence(presence::Pending),
     Extdisco(extdisco::Pending),
+    Adhoc(adhoc::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -162,6 +164,7 @@ pub(crate) enum FeatureCommand {
     Csi(csi::Command),
     Extdisco(extdisco::Command),
     Jmi(jmi::Command),
+    Adhoc(adhoc::Command),
 }
 
 /// Everything a feature function can use.
@@ -294,7 +297,7 @@ fn on_message(ctx: &mut Ctx<'_>, message: Message) {
     if mam::on_result(ctx, &message) {
         return;
     }
-    if extdisco::on_message(ctx, &message) || jmi::on_message(ctx, &message) {
+    if jmi::on_message(ctx, &message) {
         return;
     }
     chat_states::on_message(ctx, &message);
@@ -321,6 +324,7 @@ fn on_iq_request(ctx: &mut Ctx<'_>, iq: Iq) {
             disco::on_iq(ctx, &iq)
                 || roster::on_iq(ctx, &iq)
                 || blocking::on_iq(ctx, &iq)
+                || extdisco::on_iq(ctx, &iq)
                 || ping_reply(ctx, &iq)
         }
         // Results and errors without a pending entry: late answers. Ignore them.
@@ -385,6 +389,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Blocking(p) => blocking::on_response(ctx, p, response),
         Pending::Presence(p) => presence::on_response(ctx, p, response),
         Pending::Extdisco(p) => extdisco::on_response(ctx, p, response),
+        Pending::Adhoc(p) => adhoc::on_response(ctx, p, response),
     }
 }
 
@@ -442,6 +447,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Csi(c) => csi::on_command(ctx, c),
         FeatureCommand::Extdisco(c) => extdisco::on_command(ctx, c),
         FeatureCommand::Jmi(c) => jmi::on_command(ctx, c),
+        FeatureCommand::Adhoc(c) => adhoc::on_command(ctx, c),
     }
 }
 
@@ -487,6 +493,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Push(c) => push::offline(c),
         FeatureCommand::Extdisco(c) => extdisco::offline(c),
         FeatureCommand::Jmi(c) => jmi::offline(c),
+        FeatureCommand::Adhoc(c) => adhoc::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.
