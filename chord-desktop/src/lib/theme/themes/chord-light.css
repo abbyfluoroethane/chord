@@ -1,0 +1,24 @@
+/**
+ * @name Chord Light
+ * @author Chord
+ * @mode light
+ * @description The Chord style guide, light.
+ * @accent amber Amber
+ */
+:root {
+  --surface-100: #f6f4ef;
+  --surface-200: #ece9e2;
+  --surface-300: #e1ddd4;
+  --line: #cfcac0;
+  --ink: #1a1c20;
+  --ink-muted: #5b6068;
+  --brand: #c47b0c;
+  --brand-soft: #fbe7c4;
+  --on-brand: #1a1c20;
+  --brand-ink: #7a4a00;
+  --accent: #0a655c;
+  --online: #2e8b45;
+  --danger: #a82328;
+  --on-danger: #ffffff;
+  --scrim: rgb(26 28 32 / 0.45);
+}

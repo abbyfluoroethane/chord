@@ -1,5 +1,4 @@
-/* Chord design tokens. Dark first, then the light set twice:
-   once for the system preference and once for the data-theme override. */
+/* Chord design tokens. The themes (src/lib/theme/themes/*.css) set the colours. */
 
 :root {
   color-scheme: dark;
@@ -67,42 +66,9 @@
   --panel-height: 52px;
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    color-scheme: light;
-    --surface-100: #f6f4ef;
-    --surface-200: #ece9e2;
-    --surface-300: #e1ddd4;
-    --line: #cfcac0;
-    --ink: #1a1c20;
-    --ink-muted: #5b6068;
-    --brand: #c47b0c;
-    --brand-soft: #fbe7c4;
-    --on-brand: #1a1c20;
-    --brand-ink: #7a4a00;
-    --accent: #0a655c;
-    --online: #2e8b45;
-    --danger: #a82328;
-    --on-danger: #ffffff;
-    --scrim: rgb(26 28 32 / 0.45);
-  }
+/* The colours above are Chord Dark, the default before the theme loads. The active theme
+   (theme.svelte.ts) puts its own tokens in a style element after this file. */
+:root[data-mode='light'] {
+  color-scheme: light;
 }
 
-:root[data-theme='light'] {
-  color-scheme: light;
-  --surface-100: #f6f4ef;
-  --surface-200: #ece9e2;
-  --surface-300: #e1ddd4;
-  --line: #cfcac0;
-  --ink: #1a1c20;
-  --ink-muted: #5b6068;
-  --brand: #c47b0c;
-  --brand-soft: #fbe7c4;
-  --on-brand: #1a1c20;
-  --brand-ink: #7a4a00;
-  --accent: #0a655c;
-  --online: #2e8b45;
-  --danger: #a82328;
-  --on-danger: #ffffff;
-  --scrim: rgb(26 28 32 / 0.45);
-}

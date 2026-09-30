@@ -1,0 +1,24 @@
+/**
+ * @name Chord Dark
+ * @author Chord
+ * @mode dark
+ * @description The Chord style guide, dark.
+ * @accent amber Amber
+ */
+:root {
+  --surface-100: #111316;
+  --surface-200: #181b20;
+  --surface-300: #21252b;
+  --line: #2e333b;
+  --ink: #ece8e1;
+  --ink-muted: #9aa0a8;
+  --brand: #f2a93b;
+  --brand-soft: #3a2c16;
+  --on-brand: #1a1c20;
+  --brand-ink: #f2a93b;
+  --accent: #4cc3b5;
+  --online: #5bc46e;
+  --danger: #f0676b;
+  --on-danger: #1a1c20;
+  --scrim: rgb(0 0 0 / 0.6);
+}

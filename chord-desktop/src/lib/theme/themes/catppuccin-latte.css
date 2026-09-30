@@ -1,0 +1,107 @@
+/**
+ * @name Catppuccin Latte
+ * @author Catppuccin (catppuccin.com), MIT License
+ * @mode light
+ * @description Soothing pastel theme. Pick one of the 14 accents.
+ * @default mauve
+ * @accent rosewater Rosewater
+ * @accent flamingo Flamingo
+ * @accent pink Pink
+ * @accent mauve Mauve
+ * @accent red Red
+ * @accent maroon Maroon
+ * @accent peach Peach
+ * @accent yellow Yellow
+ * @accent green Green
+ * @accent teal Teal
+ * @accent sky Sky
+ * @accent sapphire Sapphire
+ * @accent blue Blue
+ * @accent lavender Lavender
+ */
+:root {
+  --surface-100: #eff1f5;
+  --surface-200: #e6e9ef;
+  --surface-300: #dce0e8;
+  --line: #bcc0cc;
+  --ink: #4c4f69;
+  --ink-muted: #6c6f85;
+  --brand: #8839ef;
+  --brand-soft: color-mix(in srgb, var(--brand) 16%, #eff1f5);
+  --brand-ink: var(--brand);
+  --on-brand: #eff1f5;
+  --accent: #1e66f5;
+  --online: #40a02b;
+  --danger: #d20f39;
+  --on-danger: #eff1f5;
+  --scrim: rgb(76 79 105 / 0.45);
+}
+:root[data-accent="rosewater"] {
+  --brand: #dc8a78;
+}
+:root[data-accent="flamingo"] {
+  --brand: #dd7878;
+}
+:root[data-accent="pink"] {
+  --brand: #ea76cb;
+}
+:root[data-accent="mauve"] {
+  --brand: #8839ef;
+}
+:root[data-accent="red"] {
+  --brand: #d20f39;
+}
+:root[data-accent="maroon"] {
+  --brand: #e64553;
+}
+:root[data-accent="peach"] {
+  --brand: #fe640b;
+}
+:root[data-accent="yellow"] {
+  --brand: #df8e1d;
+}
+:root[data-accent="green"] {
+  --brand: #40a02b;
+}
+:root[data-accent="teal"] {
+  --brand: #179299;
+}
+:root[data-accent="sky"] {
+  --brand: #04a5e5;
+}
+:root[data-accent="sapphire"] {
+  --brand: #209fb5;
+}
+:root[data-accent="blue"] {
+  --brand: #1e66f5;
+}
+:root[data-accent="lavender"] {
+  --brand: #7287fd;
+}
+:root[data-accent="rosewater"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="flamingo"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="peach"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="yellow"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="green"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="teal"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="sky"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="sapphire"] {
+  --on-brand: #4c4f69;
+}
+:root[data-accent="lavender"] {
+  --on-brand: #4c4f69;
+}

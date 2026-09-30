@@ -3,6 +3,8 @@
   import Emoji from './Emoji.svelte';
   import Icon from './Icon.svelte';
   import Segmented from './Segmented.svelte';
+  import ImportThemeModal from './ImportThemeModal.svelte';
+  import ThemeList from './ThemeList.svelte';
   import { EMOJI_PACKS, emojiPacks } from './emojipacks.svelte';
   import SettingRow from './SettingRow.svelte';
   import { prefs } from './prefs.svelte';
@@ -15,6 +17,7 @@
     { value: 'system', label: 'System' }
   ];
   const SAMPLE = ['😀', '👋🏽', '❤️', '🎉', '🚀'];
+  let importing = $state(false);
 
   const modes: { value: DisplayMode; label: string }[] = [
     { value: 'cozy', label: 'Cozy' },
@@ -22,9 +25,20 @@
   ];
 </script>
 
-<SettingRow title="Theme" hint="System follows your device.">
-  <Segmented label="Theme" value={theme.choice} options={themes} onchange={(v) => theme.set(v)} />
+<SettingRow title="Mode" hint="System follows your device, and switches between your dark and light themes.">
+  <Segmented label="Mode" value={theme.choice} options={themes} onchange={(v) => theme.set(v)} />
 </SettingRow>
+
+<div class="themes-head">
+  <h2 class="section">Dark theme</h2>
+  <button class="btn" onclick={() => (importing = true)}>Import theme</button>
+</div>
+<ThemeList mode="dark" />
+<h2 class="section">Light theme</h2>
+<ThemeList mode="light" />
+<div class="after-themes"></div>
+{#if importing}<ImportThemeModal onclose={() => (importing = false)} />{/if}
+
 <SettingRow title="Message display" hint="Compact hides avatars and puts times on the left.">
   <Segmented
     label="Message display"
@@ -48,7 +62,7 @@
   </div>
 </SettingRow>
 
-<h2 class="section">Emoji</h2>
+<h2 class="section spaced">Emoji</h2>
 <div class="packs" role="radiogroup" aria-label="Emoji style">
   {#each EMOJI_PACKS as p (p.id)}
     {@const on = prefs.emojiPack === p.id}
@@ -110,6 +124,21 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-muted);
+  }
+  .after-themes {
+    height: var(--space-6);
+  }
+  .themes-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-top: var(--space-6);
+  }
+  .themes-head .section {
+    margin: 0 0 var(--space-2);
+  }
+  .themes-head .btn {
+    margin-bottom: var(--space-2);
   }
   .packs {
     display: grid;
