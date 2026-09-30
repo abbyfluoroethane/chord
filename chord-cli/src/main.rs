@@ -31,6 +31,8 @@
 //!   room-members <room> [affiliation] | invite <room> <jid> [reason]
 //!   room-config <room> [--name N] [--public|--private] [--members-only|--open]
 //!   notify <jid> [all|mentions|none [--until <unix-ms>]]   also with --offline
+//!   presence [available|away|dnd|xa|invisible [status]]     show or set our presence (also with --offline)
+//!   search <text> [--in <jid>]      search the stored messages (also with --offline)
 //!   push-enable <service> <node>    secret: CHORD_PUSH_SECRET
 //!   push-disable <service> [node] | push-list
 //!
@@ -260,6 +262,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "push-disable",
         "push-list",
         "notify",
+        "presence",
+        "search",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
@@ -277,6 +281,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "push-list"
             | "blocked"
             | "notify"
+            | "presence"
+            | "search"
             | "space-pending"
     );
     if needs_session && opts.offline {
@@ -345,6 +351,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("push-enable", [service, node]) => actions::push_enable(&client, service, node).await,
         ("push-disable", args) => actions::push_disable(&client, args).await,
         ("notify", args) => actions::notify(&client, args).await,
+        ("presence", args) => actions::presence(opts, &client, args).await,
+        ("search", args) => actions::search(opts, &client, args).await,
         ("push-list", []) => actions::push_list(opts, &client).await,
         _ => Err(USAGE.to_owned().into()),
     };

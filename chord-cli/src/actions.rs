@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use chord_core::features::muc::{RoomAffiliation, RoomSettings};
+use chord_core::features::presence::Availability;
 use chord_core::features::roster::Subscription;
 use chord_core::features::spaces::{JoinOutcome, SpaceAccess};
 use chord_core::jid::{BareJid, Jid};
@@ -397,6 +398,77 @@ pub async fn blocked(opts: &Opts, client: &Client) -> Result<(), CliError> {
         for jid in &list {
             println!("  {jid}");
         }
+    }
+    Ok(())
+}
+
+/// `presence [available|away|dnd|xa|invisible [status]]`: set our presence, then show it.
+pub async fn presence(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliError> {
+    if let Some((first, status)) = args.split_first() {
+        let availability = match *first {
+            "available" => Availability::Available,
+            "away" => Availability::Away,
+            "dnd" => Availability::Dnd,
+            "xa" => Availability::ExtendedAway,
+            "invisible" => Availability::Invisible,
+            other => return Err(format!("presence: unknown availability {other}").into()),
+        };
+        let status = (!status.is_empty()).then(|| status.join(" "));
+        client
+            .handle
+            .set_presence(availability, status)
+            .await
+            .map_err(err)?;
+    }
+    let own = client.handle.own_presence().await.map_err(err)?;
+    let name = match own.availability {
+        Availability::Available => "available",
+        Availability::Away => "away",
+        Availability::Dnd => "dnd",
+        Availability::ExtendedAway => "xa",
+        Availability::Invisible => "invisible",
+    };
+    if opts.json {
+        println!(
+            "{}",
+            Obj::new()
+                .str("availability", name)
+                .opt_str("status", own.status.as_deref())
+                .finish()
+        );
+    } else {
+        println!("{name} {}", own.status.as_deref().unwrap_or(""));
+    }
+    Ok(())
+}
+
+/// `search <text> [--in <jid>]`: search the stored messages, newest first.
+pub async fn search(opts: &Opts, client: &Client, args: &[&str]) -> Result<(), CliError> {
+    let (query, peer) = match args {
+        [query] => (*query, None),
+        [query, "--in", peer] => (*query, Some(bare(peer)?.to_string())),
+        _ => return Err("usage: search <text> [--in <jid>]".to_owned().into()),
+    };
+    let hits = client
+        .handle
+        .search_messages(peer, query.to_owned(), 50)
+        .await
+        .map_err(err)?;
+    if opts.json {
+        let items = hits.iter().map(|h| {
+            Obj::new()
+                .str("id", &h.id)
+                .str("peer", &h.peer)
+                .str("sender", &h.sender)
+                .str("body", &h.body)
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        for h in &hits {
+            println!("{} {} {}: {}", h.id, h.peer, h.sender, h.body);
+        }
+        println!("{} found", hits.len());
     }
     Ok(())
 }
