@@ -6,7 +6,7 @@
 
 use futures_channel::oneshot;
 use jid::Jid;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::message_correct::Replace;
 use xmpp_parsers::minidom::Element;
@@ -157,17 +157,21 @@ fn edit(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), ClientErro
 }
 
 /// True if `row` is the last of our own messages in its chat, room, or private chat, not
-/// counting retracted ones. The desktop UI offers an edit for this message only.
+/// counting retracted ones. The desktop UI offers an edit for this message only. "Last"
+/// goes by time, as the timeline does: an archive catch-up stores older messages after
+/// newer ones, so the row id is not the order.
 fn is_last_own(ctx: &Ctx<'_>, row: &MessageRow) -> Result<bool, ClientError> {
     let last: Option<i64> = ctx
         .store
         .conn()
         .query_row(
-            "SELECT MAX(id) FROM messages
-             WHERE account_id = ?1 AND peer = ?2 AND direction = 'out' AND retracted_at IS NULL",
+            "SELECT id FROM messages
+             WHERE account_id = ?1 AND peer = ?2 AND direction = 'out' AND retracted_at IS NULL
+             ORDER BY timestamp DESC, id DESC LIMIT 1",
             params![ctx.account_id, row.peer],
             |r| r.get(0),
         )
+        .optional()
         .map_err(|e| ClientError::Invalid(format!("store: {e}")))?;
     Ok(last == Some(row.rowid))
 }
@@ -471,6 +475,25 @@ pub(crate) mod tests {
         h.with_ctx(|ctx| edit(ctx, &second, "fixed".into()))
             .unwrap();
         assert_eq!(row(&h, &second).body, "fixed");
+    }
+
+    #[test]
+    fn the_last_message_goes_by_time_not_by_store_order() {
+        let mut h = Harness::new();
+        let me = "alice@chord.localhost";
+        let newest = store_row(&h, MessageKind::Chat, Direction::Out, BOB, me, "new", None);
+        // An archive catch-up stores an older message of ours after the new one.
+        store_row(&h, MessageKind::Chat, Direction::Out, BOB, me, "old", None);
+        h.store
+            .conn()
+            .execute(
+                "UPDATE messages SET timestamp = timestamp - 3600000 WHERE origin_id = 'old'",
+                [],
+            )
+            .unwrap();
+        h.with_ctx(|ctx| edit(ctx, &newest, "fixed".into()))
+            .unwrap();
+        assert_eq!(row(&h, &newest).body, "fixed");
     }
 
     #[test]
