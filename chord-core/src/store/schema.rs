@@ -268,4 +268,18 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE messages ADD COLUMN file_type TEXT;
     ALTER TABLE messages ADD COLUMN file_hash TEXT;
     "#,
+    // 12: pinned messages. The server owns them, in a private PEP node (pins.rs). This table
+    // holds a copy for offline reads. key is the stanza-id, origin-id, or id of the message.
+    r#"
+    CREATE TABLE pins (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        chat       TEXT NOT NULL,             -- bare JID of the room or the contact
+        key        TEXT NOT NULL,
+        sender     TEXT NOT NULL,
+        body       TEXT NOT NULL,
+        timestamp  INTEGER NOT NULL,          -- of the message, Unix ms
+        pinned_at  INTEGER NOT NULL,          -- Unix ms
+        PRIMARY KEY (account_id, chat, key)
+    );
+    "#,
 ];

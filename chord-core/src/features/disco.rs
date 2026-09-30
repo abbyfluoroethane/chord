@@ -36,6 +36,8 @@ pub const FEATURES: &[&str] = &[
     "http://jabber.org/protocol/muc",
     "urn:xmpp:bookmarks:1+notify",
     "urn:xmpp:avatar:metadata+notify",
+    // Pinned messages, in a private PEP node (pins.rs).
+    "urn:chord:pins:0+notify",
     "http://jabber.org/protocol/chatstates",
     // Markers (XEP-0333): every message is markable, and `mark_read` sends displayed.
     "urn:xmpp:chat-markers:0",
@@ -284,7 +286,7 @@ mod tests {
         // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
         // not from the code under test. Update it when `FEATURES` changes.
         let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "2a4c6def271da37976d79c4c5b234477d87cc4be");
+        assert_eq!(hex, "be6df620223ad6f92d4e784a9583d1f5f7f5dcbd");
     }
 
     #[test]

@@ -20,6 +20,8 @@
 //!   contacts | contact-add <jid> [name] | contact-approve <jid>
 //!   block <jid> | unblock <jid|--all> | blocked (blocked works --offline)
 //!   edit <item-id> <text> | retract <item-id> | react <item-id> [emoji...]
+//!   pin <item-id> | unpin <chat> <key> | pins [chat]   pinned messages, in a private PEP node
+//!                                   (pins asks the server first, unless --offline)
 //!   reply <item-id> <text>          <item-id> is the id in `timeline --json`
 //!   read <jid>                      mark as read (also with --offline)
 //!   pm <room> <nick> <text>         private message to a room occupant
@@ -91,7 +93,7 @@ space-create <name> [--private | --authorize] | space-add-room <service> <node> 
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
 block <jid> | unblock <jid|--all> | blocked | \
-contact-add <jid> [name] | contact-approve <jid> | edit <item-id> <text> | retract <item-id> | \
+contact-add <jid> [name] | contact-approve <jid> | edit <item-id> <text> | retract <item-id> | pin <item-id> | unpin <chat> <key> | pins [chat] | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
 read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
@@ -257,6 +259,9 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "contact-approve",
         "edit",
         "retract",
+        "pin",
+        "unpin",
+        "pins",
         "react",
         "reply",
         "read",
@@ -297,6 +302,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "typing"
             | "push-list"
             | "blocked"
+            | "pins"
             | "notify"
             | "presence"
             | "search"
@@ -360,6 +366,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("contact-approve", [jid]) => actions::contact_approve(&client, jid).await,
         ("edit", [item, text]) => actions::edit(&client, item, text).await,
         ("retract", [item]) => actions::retract(&client, item).await,
+        ("pin", [item]) => actions::pin(&client, item).await,
+        ("unpin", [chat, key]) => actions::unpin(&client, chat, key).await,
+        ("pins", []) => actions::pins(opts, &client, None).await,
+        ("pins", [chat]) => actions::pins(opts, &client, Some(chat)).await,
         ("react", args) => actions::react(&client, args).await,
         ("reply", [item, text]) => actions::reply(&client, item, text).await,
         ("read", [peer]) => actions::read(&client, peer).await,

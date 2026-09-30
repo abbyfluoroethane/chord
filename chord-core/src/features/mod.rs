@@ -29,6 +29,7 @@ pub mod message_ext;
 pub mod muc;
 pub mod notify;
 pub mod orphans;
+pub mod pins;
 pub mod presence;
 pub mod pubsub;
 pub mod push;
@@ -97,6 +98,7 @@ pub(crate) enum Pending {
     Presence(presence::Pending),
     Extdisco(extdisco::Pending),
     Adhoc(adhoc::Pending),
+    Pins(pins::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -167,6 +169,7 @@ pub(crate) enum FeatureCommand {
     Extdisco(extdisco::Command),
     Jmi(jmi::Command),
     Adhoc(adhoc::Command),
+    Pins(pins::Command),
 }
 
 /// Everything a feature function can use.
@@ -270,6 +273,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     disco::on_connected(ctx);
     roster::on_connected(ctx, stream_features);
     bookmarks::on_connected(ctx);
+    pins::on_connected(ctx);
     mam::on_connected(ctx);
     muc::on_connected(ctx);
     markers::on_connected(ctx);
@@ -392,6 +396,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Presence(p) => presence::on_response(ctx, p, response),
         Pending::Extdisco(p) => extdisco::on_response(ctx, p, response),
         Pending::Adhoc(p) => adhoc::on_response(ctx, p, response),
+        Pending::Pins(p) => pins::on_response(ctx, p, response),
     }
 }
 
@@ -450,6 +455,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Extdisco(c) => extdisco::on_command(ctx, c),
         FeatureCommand::Jmi(c) => jmi::on_command(ctx, c),
         FeatureCommand::Adhoc(c) => adhoc::on_command(ctx, c),
+        FeatureCommand::Pins(c) => pins::on_command(ctx, c),
     }
 }
 
@@ -496,6 +502,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Extdisco(c) => extdisco::offline(c),
         FeatureCommand::Jmi(c) => jmi::offline(c),
         FeatureCommand::Adhoc(c) => adhoc::offline(c),
+        FeatureCommand::Pins(c) => pins::offline(store, account_id, c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.

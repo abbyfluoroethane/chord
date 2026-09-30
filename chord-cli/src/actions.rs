@@ -869,6 +869,63 @@ pub async fn space_answer(
     Ok(())
 }
 
+/// `pin <item-id>`: pin a message. The pin goes to a private PEP node of our account, so
+/// our other devices see it (XEP-0223).
+pub async fn pin(client: &Client, item: &str) -> Result<(), CliError> {
+    client
+        .handle
+        .pin_message(item.to_owned())
+        .await
+        .map_err(err)?;
+    println!("pinned {item}");
+    Ok(())
+}
+
+/// `unpin <chat> <key>`: remove a pin. `chat` and `key` come from `pins`.
+pub async fn unpin(client: &Client, chat: &str, key: &str) -> Result<(), CliError> {
+    client
+        .handle
+        .unpin_message(chat.to_owned(), key.to_owned())
+        .await
+        .map_err(err)?;
+    println!("unpinned {key} in {chat}");
+    Ok(())
+}
+
+/// `pins [chat]`: the pins of one chat or of all chats. With a session it asks the server
+/// first, so a new database shows the pins that another device made. With `--offline` it
+/// lists what the store has.
+pub async fn pins(opts: &Opts, client: &Client, chat: Option<&str>) -> Result<(), CliError> {
+    if !opts.offline {
+        client.handle.refresh_pins().await.map_err(err)?;
+    }
+    let list = client
+        .handle
+        .pins(chat.map(str::to_owned))
+        .await
+        .map_err(err)?;
+    if opts.json {
+        let items = list.iter().map(|p| {
+            Obj::new()
+                .str("chat", &p.chat)
+                .str("key", &p.key)
+                .opt_str("itemId", p.item_id.as_deref())
+                .str("sender", &p.sender)
+                .str("body", &p.body)
+                .num("timestamp", p.timestamp)
+                .num("pinnedAt", p.pinned_at)
+                .finish()
+        });
+        println!("{}", array(items));
+    } else {
+        println!("pins ({})", list.len());
+        for p in &list {
+            println!("  {} {} {}: {}", p.chat, p.key, p.sender, p.body);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::content_type;
