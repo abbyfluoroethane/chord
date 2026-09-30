@@ -21,6 +21,8 @@ use xmpp_parsers::presence::{Presence, Show, Type as PresenceType};
 use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
 use xmpp_parsers::stanza_id::OriginId;
 
+pub(super) mod health;
+
 use super::chat::{MessageIds, delay_ms};
 use super::message_ext::{self, Incoming, Outgoing};
 use super::{Ctx, IqResponse, bookmarks, mam, new_id, presence as own_presence};
@@ -162,6 +164,8 @@ pub(super) struct Join {
     /// True for a nick change in a room that we are in already.
     changing_nick: bool,
     replies: Vec<Reply>,
+    /// Ticks since the join started. `health::on_tick` ends a join that waits too long.
+    ticks: u8,
 }
 
 /// In-memory state for one session.
@@ -189,6 +193,8 @@ pub(crate) struct State {
     subjects: HashMap<String, (BareJid, Reply)>,
     /// Joins that wait for the reserved nick of the room (XEP-0045, 7.12).
     reserving: HashMap<BareJid, Reserving>,
+    /// The self-ping of the rooms (XEP-0410).
+    pub(super) ping: health::PingState,
 }
 
 /// What to do with the answer to an IQ that this feature sent.
@@ -223,6 +229,8 @@ pub(crate) enum Pending {
         room: BareJid,
         jid: BareJid,
     },
+    /// The answer to a XEP-0410 ping of our own occupant JID in the room.
+    SelfPing(BareJid),
 }
 
 /// A command from the public API.
@@ -708,6 +716,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 }
             }
         }
+        Pending::SelfPing(room) => health::on_response(ctx, room, response),
         Pending::Grant { room, jid } => match response {
             IqResponse::Result(_) => log::debug!("made {jid} a member of {room}"),
             IqResponse::Error(e) => {
@@ -1513,6 +1522,7 @@ pub(crate) fn join_room(
             nick,
             changing_nick: current.is_some(),
             replies: reply.into_iter().collect(),
+            ticks: 0,
         },
     );
     mark_room(ctx, room);
@@ -1985,6 +1995,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
     if !is_room(ctx, &room) {
         return false;
     }
+    health::heard_from(ctx, &room);
     match message.type_ {
         MessageType::Groupchat => {
             if let Some((_, subject)) = message.get_best_subject(vec![]) {
@@ -2201,6 +2212,7 @@ pub(crate) fn on_presence(ctx: &mut Ctx<'_>, presence: &Presence) -> bool {
     if !is_room(ctx, &room) {
         return false;
     }
+    health::heard_from(ctx, &room);
     let nick = from.resource().map(|r| r.as_str().to_owned());
     match presence.type_ {
         PresenceType::Error => on_error(ctx, &room, nick.as_deref(), presence),

@@ -263,6 +263,8 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
         // The server kept the presence, the carbons state, and the room joins. It did not
         // keep the client state (XEP-0352, 5.2).
         csi::on_connected(ctx, stream_features);
+        // The server kept the session. It may have lost the rooms (XEP-0410).
+        muc::health::on_resumed(ctx);
         return;
     }
     chat_states::on_new_session(ctx);
@@ -548,6 +550,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
 /// A session tick. Features use it for time limits.
 pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     chat_states::on_tick(ctx);
+    muc::health::on_tick(ctx);
     extdisco::on_tick(ctx);
     jmi::on_tick(ctx);
 }
