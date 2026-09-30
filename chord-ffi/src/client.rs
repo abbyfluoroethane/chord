@@ -519,6 +519,17 @@ impl ChordClient {
             .await
     }
 
+    /// Tell the server that the app is active (on screen) or inactive (in the background),
+    /// with Client State Indication (XEP-0352). An inactive client gets fewer presence
+    /// updates and chat states, which saves battery. Returns `true` when the server got
+    /// it, and `false` when the server does not offer CSI or the client is offline. Chord
+    /// sends the state again by itself after each reconnect. Call it with `false` when
+    /// the app goes to the background, and with `true` when it comes back.
+    pub async fn set_client_active(&self, active: bool) -> Result<bool, ChordError> {
+        self.call(move |h| async move { h.set_client_active(active).await })
+            .await
+    }
+
     /// Mark a private chat with a room occupant as read.
     pub async fn mark_read_private(&self, room: String, nick: String) -> Result<(), ChordError> {
         let room = parse_bare(&room)?;

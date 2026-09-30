@@ -58,6 +58,7 @@ const FATAL_SLOT_HOLD: Duration = Duration::from_secs(10);
 
 enum Command {
     Send(Box<Stanza>),
+    ClientState(bool),
     Close,
 }
 
@@ -112,6 +113,13 @@ impl Session for NativeSession {
     async fn send(&self, stanza: Stanza) -> Result<(), SessionError> {
         self.commands
             .send(Command::Send(Box::new(stanza)))
+            .await
+            .map_err(|_| SessionError::Closed)
+    }
+
+    async fn send_client_state(&self, active: bool) -> Result<(), SessionError> {
+        self.commands
+            .send(Command::ClientState(active))
             .await
             .map_err(|_| SessionError::Closed)
     }
@@ -375,6 +383,9 @@ async fn run(
                 Some(Command::Send(stanza)) => {
                     // The token reports delivery progress. Nothing uses it yet.
                     let _token = stream.send(stanza).await;
+                }
+                Some(Command::ClientState(active)) => {
+                    let _token = stream.send_client_state(active).await;
                 }
                 Some(Command::Close) | None => break,
             },

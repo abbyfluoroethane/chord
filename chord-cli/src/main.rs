@@ -25,6 +25,8 @@
 //!   pm <room> <nick> <text>         private message to a room occupant
 //!   read-private <room> <nick>      mark a private chat as read (also with --offline)
 //!   typing <jid> on|off             send a typing state (XEP-0085)
+//!   csi active|inactive [seconds]   client state (XEP-0352). With seconds: stay, print each
+//!                                   event with a time, then send active and watch 5 more seconds
 //!   moderate <item-id> [reason]     retract a message of another occupant (XEP-0425)
 //!   nick <room> <nick>              change our nick in a room
 //!   room-member <room> <jid> [member|admin|owner|none|outcast]   set an affiliation
@@ -86,7 +88,7 @@ space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | conta
 block <jid> | unblock <jid|--all> | blocked | \
 contact-add <jid> [name] | edit <item-id> <text> | retract <item-id> | \
 react <item-id> [emoji...] | reply <item-id> <text> | read <jid> | pm <room> <nick> <text> | \
-read-private <room> <nick> | typing <jid> on|off | moderate <item-id> [reason] | \
+read-private <room> <nick> | typing <jid> on|off | csi active|inactive [seconds] | moderate <item-id> [reason] | \
 room-member <room> <jid> [member|admin|owner|none|outcast] | room-members <room> [affiliation] | \
 invite <room> <jid> [reason] | room-config <room> [--name N] [--public|--private] [--members-only|--open] | \
 push-enable <service> <node> | push-disable <service> [node] | push-list | \
@@ -252,6 +254,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "pm",
         "read-private",
         "typing",
+        "csi",
         "moderate",
         "nick",
         "room-member",
@@ -347,6 +350,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("read", [peer]) => actions::read(&client, peer).await,
         ("pm", [room, nick, text]) => actions::pm(&client, room, nick, text).await,
         ("typing", [peer, state]) => actions::typing(&client, peer, state).await,
+        ("csi", args) => csi(&mut client, args).await,
         ("read-private", [room, nick]) => actions::read_private(&client, room, nick).await,
         ("moderate", args) => actions::moderate(&client, args).await,
         ("nick", [room, nick]) => actions::nick(&client, room, nick).await,
@@ -551,6 +555,64 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// `csi active|inactive [seconds]`: send the client state (XEP-0352). With `seconds`, watch
+/// the events for that long and print each with the time. After an `inactive`, send
+/// `active`, and watch 5 more seconds, to see what the server held back.
+async fn csi(client: &mut Client, args: &[&str]) -> Result<(), CliError> {
+    let usage = || CliError::from("usage: csi active|inactive [seconds]".to_owned());
+    let (active, hold) = match args {
+        ["active"] => (true, None),
+        ["inactive"] => (false, None),
+        ["active", secs] => (true, Some(secs)),
+        ["inactive", secs] => (false, Some(secs)),
+        _ => return Err(usage()),
+    };
+    let hold = match hold {
+        Some(secs) => Some(Duration::from_secs(secs.parse().map_err(|_| usage())?)),
+        None => None,
+    };
+    let stamp = || chrono::Local::now().format("%H:%M:%S%.3f");
+    let told = client
+        .handle
+        .set_client_active(active)
+        .await
+        .map_err(|e| e.to_string())?;
+    let state = if active { "active" } else { "inactive" };
+    println!(
+        "{} csi {state}: the server offers CSI and got it: {told}",
+        stamp()
+    );
+    let Some(hold) = hold else {
+        return Ok(());
+    };
+    watch(client, hold).await;
+    if !active {
+        client
+            .handle
+            .set_client_active(true)
+            .await
+            .map_err(|e| e.to_string())?;
+        println!("{} csi active sent", stamp());
+        watch(client, Duration::from_secs(5)).await;
+    }
+    Ok(())
+}
+
+/// Print the events of the next `duration`, each with the time.
+async fn watch(client: &mut Client, duration: Duration) {
+    let end = tokio::time::Instant::now() + duration;
+    while let Ok(Some(event)) = tokio::time::timeout_at(end, next(&mut client.events)).await {
+        let line = match event {
+            ClientEvent::MessageReceived(m) => format!("message from {}: {}", m.sender, m.body),
+            ClientEvent::Typing { peer, typers } => format!("typing in {peer}: {typers:?}"),
+            ClientEvent::ContactChanged(jid) => format!("contact or presence changed: {jid}"),
+            ClientEvent::ConnectionState(state) => format!("connection: {state:?}"),
+            _ => continue,
+        };
+        println!("{} {line}", chrono::Local::now().format("%H:%M:%S%.3f"));
+    }
 }
 
 pub async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {

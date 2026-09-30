@@ -383,6 +383,14 @@ pub async fn set_typing(state: State<'_, AppState>, peer: String, typing: bool) 
     Ok(state.handle()?.set_typing(peer, typing)?)
 }
 
+/// Tell the server that the window is in use (`true`) or not (`false`), with Client State
+/// Indication (XEP-0352). Returns whether the server got it. Chord sends it again after a
+/// reconnect, and keeps it while offline.
+#[tauri::command]
+pub async fn set_client_active(state: State<'_, AppState>, active: bool) -> Res<bool> {
+    Ok(state.handle()?.set_client_active(active).await?)
+}
+
 /// Fetch older messages of a chat or a room from the archive (MAM).
 #[tauri::command]
 pub async fn load_older(state: State<'_, AppState>, peer: String) -> Res<()> {

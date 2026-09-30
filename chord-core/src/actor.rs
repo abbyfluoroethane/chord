@@ -496,6 +496,13 @@ impl<S: Session> Actor<S> {
                         log::warn!("cannot send a stanza: {e}");
                     }
                 }
+                Effect::ClientState(active) => {
+                    if let Some(online) = &self.online
+                        && let Err(e) = online.session.send_client_state(active).await
+                    {
+                        log::warn!("cannot send the client state: {e}");
+                    }
+                }
                 Effect::Emit(event) => self.emit(event),
                 Effect::Upload(request) => {
                     features::upload::start(request, self.internal_tx.clone());
@@ -595,6 +602,9 @@ impl<S: Session> Actor<S> {
                 {
                     self.with_ctx(|ctx| features::need_older(ctx, &room));
                 }
+            }
+            Command::Feature(FeatureCommand::Csi(command)) if self.online.is_none() => {
+                features::csi::offline(&mut self.state.csi, command);
             }
             Command::Feature(command) => {
                 if self.online.is_some() {
@@ -1036,6 +1046,46 @@ mod tests {
         assert_eq!(stored[0].key, origin_id);
         assert_eq!(stored[0].direction, Direction::Out);
         assert_eq!(stored[0].body, "hello bob");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn client_state_goes_to_the_session_and_again_after_a_resume() {
+        let path = temp_db();
+        let features = vec![crate::features::csi::NS_CSI.to_owned()];
+        let connect = |resumed| SessionEvent::Connected {
+            bound_jid: jid("alice@chord.localhost/chord"),
+            resumed,
+            features: features.clone(),
+        };
+        FakeSession::prepare_connect(vec![connect(false)]);
+        let (handle, _events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
+
+        let (offline, at_connect, after_resume, after_active) = run_with(actor.run(), async {
+            // Offline, the actor keeps the state and reports that the server did not get it.
+            let offline = handle.set_client_active(false).await.unwrap();
+            handle.login(config()).await.unwrap();
+            // Any answer of the actor shows that it handled the connect event.
+            handle.set_client_active(false).await.unwrap();
+            let at_connect = FakeSession::live_client_states();
+            FakeSession::push_event(SessionEvent::Disconnected(DisconnectReason::Suspended));
+            FakeSession::push_event(connect(true));
+            handle.own_presence().await.unwrap();
+            let after_resume = FakeSession::live_client_states();
+            let again = handle.set_client_active(true).await.unwrap();
+            assert!(again);
+            let after_active = FakeSession::live_client_states();
+            drop(handle);
+            (offline, at_connect, after_resume, after_active)
+        });
+
+        assert!(!offline);
+        // The connect sent inactive, and the command sent it again.
+        assert_eq!(at_connect, vec![false, false]);
+        // A resumed stream starts as active, so inactive goes out again (XEP-0352, 5.2).
+        assert_eq!(after_resume, vec![false, false, false]);
+        assert_eq!(after_active, vec![false, false, false, true]);
         let _ = std::fs::remove_file(&path);
     }
 

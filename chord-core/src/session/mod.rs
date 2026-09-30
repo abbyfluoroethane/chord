@@ -253,6 +253,10 @@ pub trait Session: Sized {
     /// Queue a stanza. The session sends it when the stream is up.
     async fn send(&self, stanza: Stanza) -> Result<(), SessionError>;
 
+    /// Send a XEP-0352 client state as a stream element: `<active/>` for `true`,
+    /// `<inactive/>` for `false`. Queued like a stanza, and in order with the stanzas.
+    async fn send_client_state(&self, active: bool) -> Result<(), SessionError>;
+
     /// Take the event stream. The first call returns it. Each later call returns `None`.
     fn events(&mut self) -> Option<Self::Events>;
 

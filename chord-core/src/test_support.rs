@@ -23,6 +23,7 @@ pub struct FakeSession {
     events: Option<FakeEvents>,
     queue: Queue,
     sent: Rc<RefCell<Vec<Stanza>>>,
+    client_states: Rc<RefCell<Vec<bool>>>,
     closed: bool,
 }
 
@@ -55,6 +56,8 @@ thread_local! {
     static NEXT_CONNECT: RefCell<Option<Prepared>> = const { RefCell::new(None) };
     /// The event queue of the last session that `connect` returned on this thread.
     static LIVE_QUEUE: RefCell<Option<Queue>> = const { RefCell::new(None) };
+    /// The client states of the last session that `connect` returned on this thread.
+    static LIVE_CLIENT_STATES: RefCell<Option<Rc<RefCell<Vec<bool>>>>> = const { RefCell::new(None) };
 }
 
 impl FakeSession {
@@ -76,6 +79,7 @@ impl FakeSession {
             }),
             queue,
             sent,
+            client_states: Rc::default(),
             closed: false,
         }
     }
@@ -115,6 +119,16 @@ impl FakeSession {
         Rc::clone(&self.sent)
     }
 
+    /// The client states (`true` is active) that the live session of the last `connect`
+    /// on this thread got.
+    pub fn live_client_states() -> Vec<bool> {
+        LIVE_CLIENT_STATES.with(|live| {
+            let live = live.borrow();
+            let states = live.as_ref().expect("no live FakeSession on this thread");
+            states.borrow().clone()
+        })
+    }
+
     /// Close the fake, so that the next `send` fails.
     pub fn close(&mut self) {
         self.closed = true;
@@ -132,6 +146,8 @@ impl Session for FakeSession {
             }) => {
                 let session = Self::new(events, sent, false);
                 LIVE_QUEUE.with(|live| *live.borrow_mut() = Some(Rc::clone(&session.queue)));
+                LIVE_CLIENT_STATES
+                    .with(|live| *live.borrow_mut() = Some(Rc::clone(&session.client_states)));
                 Ok(session)
             }
             Some(Prepared {
@@ -156,6 +172,14 @@ impl Session for FakeSession {
             self.queue.borrow_mut().push_back(event);
         }
         self.sent.borrow_mut().push(stanza);
+        Ok(())
+    }
+
+    async fn send_client_state(&self, active: bool) -> Result<(), SessionError> {
+        if self.closed {
+            return Err(SessionError::Closed);
+        }
+        self.client_states.borrow_mut().push(active);
         Ok(())
     }
 

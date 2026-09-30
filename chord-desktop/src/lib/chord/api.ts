@@ -190,6 +190,12 @@ export const markReadPrivate = (room: string, nick: string) =>
 export const setTyping = (peer: string, typing: boolean) =>
   invoke<void>('set_typing', { peer, typing });
 /**
+ * Tell the server that the window is in use or not (XEP-0352). The server then holds back
+ * presence and chat states. Resolves to true when the server got it. Core sends the state
+ * again after a reconnect.
+ */
+export const setClientActive = (active: boolean) => invoke<boolean>('set_client_active', { active });
+/**
  * Open the system file dialog and upload the files that the user picks (100 MB each at
  * most) to `to`. Rust runs the dialog and reads the files: the page never gives a path.
  * Returns the URLs. The list is empty when the user cancels.

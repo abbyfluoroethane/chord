@@ -72,6 +72,7 @@ pub fn run() {
             notify::set_notice_prefs,
             files::upload_files,
             files::upload_dropped,
+            commands::set_client_active,
             commands::load_older,
             commands::join_room,
             commands::room_info,

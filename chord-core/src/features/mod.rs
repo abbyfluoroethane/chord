@@ -17,6 +17,7 @@ pub mod carbons;
 pub mod chat;
 pub mod chat_states;
 pub mod corrections;
+pub mod csi;
 pub mod disco;
 pub mod mam;
 pub mod markers;
@@ -55,6 +56,8 @@ use crate::views::ViewKey;
 pub(crate) enum Effect {
     /// Boxed, because a stanza is large.
     Send(Box<Stanza>),
+    /// Send a XEP-0352 client state: `true` for `<active/>`, `false` for `<inactive/>`.
+    ClientState(bool),
     Emit(ClientEvent),
     /// Run an HTTP PUT for XEP-0363 upload. The actor gives it to the runtime.
     Upload(upload::PutRequest),
@@ -126,6 +129,7 @@ pub(crate) struct FeatureState {
     pub upload: upload::State,
     pub avatars: avatars::State,
     pub chat_states: chat_states::State,
+    pub csi: csi::State,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
@@ -150,6 +154,7 @@ pub(crate) enum FeatureCommand {
     Blocking(blocking::Command),
     Presence(presence::Command),
     Search(search::Command),
+    Csi(csi::Command),
 }
 
 /// Everything a feature function can use.
@@ -230,7 +235,9 @@ pub(crate) enum IqResponse {
 /// `stream_features` lists the namespaces of the other stream features.
 pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[String]) {
     if resumed {
-        // The server kept the presence, the carbons state, and the room joins.
+        // The server kept the presence, the carbons state, and the room joins. It did not
+        // keep the client state (XEP-0352, 5.2).
+        csi::on_connected(ctx, stream_features);
         return;
     }
     chat_states::on_new_session(ctx);
@@ -238,8 +245,10 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     let muc_state = muc::next_session(ctx);
     // Commands that wait for service discovery stay: the new session runs discovery again.
     let deferred = std::mem::take(&mut ctx.state.deferred);
+    let inactive = ctx.state.csi.inactive;
     *ctx.state = FeatureState::default();
     ctx.state.muc = muc_state;
+    ctx.state.csi.inactive = inactive;
     ctx.state.deferred = deferred;
     if let Err(e) = crate::store::queries::clear_volatile(ctx.store, ctx.account_id) {
         ctx.store_error("clear presence and occupants", e);
@@ -254,6 +263,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     markers::on_connected(ctx);
     spaces::on_connected(ctx);
     avatars::on_connected(ctx);
+    csi::on_connected(ctx, stream_features);
 }
 
 /// A stanza from the server that is not the answer to one of our IQs.
@@ -416,6 +426,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Blocking(c) => blocking::on_command(ctx, c),
         FeatureCommand::Presence(c) => presence::on_command(ctx, c),
         FeatureCommand::Search(c) => search::on_command(ctx, c),
+        FeatureCommand::Csi(c) => csi::on_command(ctx, c),
     }
 }
 
@@ -461,6 +472,8 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Push(c) => push::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
+        // The actor keeps the wanted state (`csi::offline`), so it never gets here.
+        FeatureCommand::Csi(_) => {}
         FeatureCommand::Presence(c) => {
             presence::offline(store, account_id, c);
             return true;
