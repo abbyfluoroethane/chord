@@ -384,6 +384,10 @@ class LiveController {
       case 'roomDestroyed':
         roomAlerts.destroyed(e.data.room, e.data.reason, e.data.alternate);
         break;
+      case 'roomCaptcha':
+        // The join waits until the user answers.
+        ui.captchaAsk = { room: e.data.room, form: e.data.form };
+        break;
       case 'typing':
         app.typing[e.data.peer] = e.data.typers.map((t) =>
           t.includes('@') ? (contactsStore.person(t.split('/')[0]).name) : t

@@ -177,7 +177,9 @@ pub async fn open(app: AppHandle, state: State<'_, AppState>, account: String) -
     .await
     .map_err(|e| ChordError::io("the open task failed", e))??;
 
-    let (handle, events, actor) = actor::new::<NativeSession>(store, jid.clone())?;
+    let (handle, events, mut actor) = actor::new::<NativeSession>(store, jid.clone())?;
+    // Room passwords live in the system keychain, not in the database.
+    actor.set_secret_store(std::sync::Arc::new(keychain::RoomSecrets));
     drop(tauri::async_runtime::spawn(actor.run()));
     // The saved choice is in place before the first login, so the first presence has it.
     if !crate::settings::share_info(&app) {
@@ -539,11 +541,21 @@ pub async fn add_bookmark(
     name: Option<String>,
     autojoin: bool,
     nick: Option<String>,
+    share_password: Option<bool>,
 ) -> Res<()> {
-    Ok(state
-        .handle()?
-        .add_bookmark(bare(&room)?, name, autojoin, nick)
-        .await?)
+    let handle = state.handle()?;
+    let room = bare(&room)?;
+    // The room password goes into the bookmark only when the user agreed. With no answer
+    // the bookmark does what it did before.
+    match share_password {
+        Some(share) => {
+            handle
+                .add_bookmark_with_password_choice(room, name, autojoin, nick, share)
+                .await?;
+        }
+        None => handle.add_bookmark(room, name, autojoin, nick).await?,
+    }
+    Ok(())
 }
 
 /// Remove a room from the bookmarks. This does not leave the room.

@@ -7,6 +7,8 @@
   import CircleDialog from './CircleDialog.svelte';
   import CircleRail from './CircleRail.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
+  import CreateRoomModal from './CreateRoomModal.svelte';
+  import RoomCaptchaModal from './RoomCaptchaModal.svelte';
   import ContextMenuHost from './ContextMenuHost.svelte';
   import ForwardModal from './ForwardModal.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
@@ -176,6 +178,12 @@
 <RoomAlertCards />
 {#if ui.passwordAsk}
   <PasswordModal ask={ui.passwordAsk} onclose={() => (ui.passwordAsk = null)} />
+{/if}
+{#if ui.createRoomAsk}
+  <CreateRoomModal ask={ui.createRoomAsk} onclose={() => (ui.createRoomAsk = null)} />
+{/if}
+{#if ui.captchaAsk}
+  <RoomCaptchaModal ask={ui.captchaAsk} onclose={() => (ui.captchaAsk = null)} />
 {/if}
 {#if ui.confirm}<ConfirmModal state={ui.confirm} onclose={() => (ui.confirm = null)} />{/if}
 {#if ui.circleDialog}

@@ -24,17 +24,20 @@ pub(crate) mod testing {
     use super::SecretStore;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A store in memory. `fail` makes every write fail.
     #[derive(Debug, Default)]
     pub struct MemorySecrets {
         pub map: Mutex<HashMap<String, String>>,
         pub fail: AtomicBool,
+        /// How many times `get` ran.
+        pub gets: AtomicUsize,
     }
 
     impl SecretStore for MemorySecrets {
         fn get(&self, key: &str) -> Result<Option<String>, String> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
             Ok(self.map.lock().unwrap().get(key).cloned())
         }
         fn set(&self, key: &str, value: &str) -> Result<(), String> {

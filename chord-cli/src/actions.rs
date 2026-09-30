@@ -1124,7 +1124,7 @@ pub async fn room_members(client: &Client, args: &[&str]) -> Result<(), CliError
 /// `invite <room> <jid> [reason] [--direct]`: invite a JID. An owner or admin adds it as a
 /// member. With `--direct`, send a direct invitation (XEP-0249) for a room that does not
 /// pass on invitations.
-pub async fn invite(client: &Client, args: &[&str]) -> Result<(), CliError> {
+pub async fn invite(client: &mut Client, args: &[&str]) -> Result<(), CliError> {
     let direct = args.contains(&"--direct");
     let args: Vec<&str> = args.iter().copied().filter(|a| *a != "--direct").collect();
     let (room, jid, reason) = match args.as_slice() {
@@ -1155,6 +1155,15 @@ pub async fn invite(client: &Client, args: &[&str]) -> Result<(), CliError> {
         .await
         .map_err(err)?;
     println!("invited {jid} to {room}");
+    // A room can refuse the invitation a moment later, and Chord then sends a direct one.
+    // Show what it says.
+    let end = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while let Ok(Some(event)) = tokio::time::timeout_at(end, crate::next(&mut client.events)).await
+    {
+        if let chord_core::actor::ClientEvent::Notice(notice) = event {
+            println!("notice: {notice}");
+        }
+    }
     Ok(())
 }
 

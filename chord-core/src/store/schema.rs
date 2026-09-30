@@ -324,7 +324,8 @@ pub const MIGRATIONS: &[&str] = &[
     // disco#info. The raw `<extensions/>` child of the room bookmark, so that a republish
     // keeps what other clients wrote. Whether the bookmark carries the room password (the
     // user agreed, or another client published it). The XEP-0421 occupant-id of each
-    // occupant and of each room message.
+    // occupant and of each room message. `rooms.password` is an empty string when the
+    // system keychain holds the password (muc/password.rs).
     r#"
     ALTER TABLE rooms ADD COLUMN anonymity TEXT;              -- non-anonymous, semi-anonymous, anonymous
     ALTER TABLE rooms ADD COLUMN bookmark_extensions TEXT;    -- XML of the bookmark extensions

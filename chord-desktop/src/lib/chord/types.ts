@@ -236,6 +236,11 @@ export type ClientEvent =
     }
   /** The owner destroyed a room that we were in. The core left it and retracted its bookmark. */
   | { type: 'roomDestroyed'; data: { room: Jid; reason: string | null; alternate: Jid | null } }
+  /**
+   * A room holds our join until we solve a CAPTCHA (XEP-0158). Show `form`, then call
+   * `answerRoomCaptcha` with the filled form, or `cancelRoomCaptcha`.
+   */
+  | { type: 'roomCaptcha'; data: { room: Jid; form: DataForm } }
   /** `typers` holds bare JIDs in a chat and nicks in a room. Empty: nobody types. */
   | { type: 'typing'; data: { peer: string; typers: string[] } }
   /** The blocklist changed. Read it again with `blockedContacts`. */
@@ -296,6 +301,11 @@ export interface RoomCard {
   membersOnly: boolean;
   /** Any occupant may change the subject. False: only moderators, or the room does not say. */
   changeSubject: boolean;
+  /**
+   * Who sees the real addresses: everyone (`non-anonymous`), moderators (`semi-anonymous`),
+   * or nobody (`anonymous`). Null when the room does not say.
+   */
+  anonymity: 'non-anonymous' | 'semi-anonymous' | 'anonymous' | null;
 }
 
 export interface JoinRequest {

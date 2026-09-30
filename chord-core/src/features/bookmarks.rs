@@ -1050,7 +1050,7 @@ mod tests {
                 ),
             )
         });
-        assert_eq!(column_password(&h), None);
+        assert_eq!(column_password(&h).as_deref(), Some(""), "a marker only");
         assert_eq!(
             secrets
                 .map

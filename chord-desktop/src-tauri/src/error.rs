@@ -49,6 +49,8 @@ impl From<ClientError> for ChordError {
                 Some("not-authorized") => "notAuthorized",
                 Some("conflict") => "conflict",
                 Some("registration-required") => "registrationRequired",
+                // A room that does not exist: the UI asks before it makes one.
+                Some("item-not-found") => "itemNotFound",
                 _ => "server",
             },
             ClientError::Invalid(_) => "invalid",
@@ -108,6 +110,10 @@ mod tests {
             (
                 ClientError::Server("registration-required: only members".into()),
                 "registrationRequired",
+            ),
+            (
+                ClientError::Server("item-not-found: the room does not exist".into()),
+                "itemNotFound",
             ),
             (ClientError::Invalid("x".into()), "invalid"),
             (ClientError::Unsupported("x".into()), "unsupported"),

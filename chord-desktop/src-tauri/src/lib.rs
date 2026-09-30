@@ -155,6 +155,8 @@ pub fn run() {
             forms::command_step,
             forms::room_config_form,
             forms::submit_room_config_form,
+            forms::answer_room_captcha,
+            forms::cancel_room_captcha,
             forms::change_password,
             forms::delete_account,
             certpin::cert_status,

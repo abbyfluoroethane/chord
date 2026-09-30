@@ -3,6 +3,7 @@ import { live } from './bridge';
 import { settings } from './local';
 import type { DialogKind } from './CircleDialog.svelte';
 import type { Placement } from './Popover.svelte';
+import type { DataForm } from '$lib/chord/types';
 import type { SettingsPage, TimelineItem } from './types';
 
 const MEMBERS_KEY = 'chord.membersOpen';
@@ -39,6 +40,18 @@ export interface PasswordAsk {
   resolve: (password: string | null) => void;
 }
 
+/** A join that would make a new room. `resolve` gets true when the user says to make it. */
+export interface CreateRoomAsk {
+  room: string;
+  resolve: (create: boolean) => void;
+}
+
+/** A room that holds our join until we solve a CAPTCHA (XEP-0158). */
+export interface CaptchaAsk {
+  room: string;
+  form: DataForm;
+}
+
 /** An anchor for a menu that opens at the pointer. Popover only needs two methods. */
 export function pointAnchor(x: number, y: number): HTMLElement {
   return {
@@ -63,6 +76,10 @@ class UiState {
   confirm = $state<ConfirmState | null>(null);
   /** The question for the password of a room. */
   passwordAsk = $state<PasswordAsk | null>(null);
+  /** The question before a join makes a new room. */
+  createRoomAsk = $state<CreateRoomAsk | null>(null);
+  /** The CAPTCHA that a room asks for. */
+  captchaAsk = $state<CaptchaAsk | null>(null);
   /** The message in the forward dialog. */
   forwarding = $state<TimelineItem | null>(null);
   /** Popovers and dialogs that are open now. Esc marks read only at 0. */
@@ -182,6 +199,14 @@ class UiState {
     return new Promise((resolve) => {
       this.passwordAsk?.resolve(null);
       this.passwordAsk = { room, again, resolve };
+    });
+  }
+
+  /** Ask before a join makes a new room. Resolves with false when the user cancels. */
+  askCreateRoom(room: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.createRoomAsk?.resolve(false);
+      this.createRoomAsk = { room, resolve };
     });
   }
 

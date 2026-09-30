@@ -513,7 +513,7 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("nick", [room, nick]) => actions::nick(&client, room, nick).await,
         ("room-member", args) => actions::room_member(&client, args).await,
         ("room-members", args) => actions::room_members(&client, args).await,
-        ("invite", args) => actions::invite(&client, args).await,
+        ("invite", args) => actions::invite(&mut client, args).await,
         ("room-config", args) => actions::room_config(&client, args).await,
         ("subject", args) => actions::subject(&client, args).await,
         ("room-role", args) => actions::room_role(&client, args).await,

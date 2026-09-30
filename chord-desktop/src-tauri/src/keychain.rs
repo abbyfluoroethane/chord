@@ -63,6 +63,36 @@ pub fn delete(account: &str) -> Res<()> {
     Ok(())
 }
 
+/// The room passwords of the core, in the system keychain. The core gives each secret a key
+/// (`account#room-password#room`), and the key is the keychain user under the service of
+/// the app. A failure says what failed and never the secret.
+#[derive(Debug)]
+pub struct RoomSecrets;
+
+impl chord_core::secrets::SecretStore for RoomSecrets {
+    fn get(&self, key: &str) -> Result<Option<String>, String> {
+        let entry = keyring::Entry::new(SERVICE, key).map_err(|e| e.to_string())?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn set(&self, key: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new(SERVICE, key)
+            .and_then(|entry| entry.set_password(value))
+            .map_err(|e| e.to_string())
+    }
+
+    fn delete(&self, key: &str) -> Result<(), String> {
+        match keyring::Entry::new(SERVICE, key).and_then(|entry| entry.delete_credential()) {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +100,15 @@ mod tests {
     #[test]
     fn the_server_entry_has_its_own_user() {
         assert_eq!(server_user("a@b.example"), "a@b.example#server");
+    }
+
+    #[test]
+    fn the_room_secrets_use_the_key_of_the_core_as_the_keychain_user() {
+        // The user of a room password has a `#room-password#` part, so that it cannot be
+        // the user of the saved password or of the server entry of an account.
+        let key = chord_core::secrets::room_password_key("a@b.example", "r@c.example");
+        assert_eq!(key, "a@b.example#room-password#r@c.example");
+        assert_ne!(key, server_user("a@b.example"));
     }
 
     #[test]

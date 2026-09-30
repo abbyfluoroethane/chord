@@ -880,7 +880,8 @@ fn a_join_password_goes_to_the_keychain_and_not_to_the_database() {
             None,
         )
     });
-    assert_eq!(column_password(&h), None);
+    // The column holds a marker only.
+    assert_eq!(column_password(&h).as_deref(), Some(""));
     assert_eq!(
         secrets.map.lock().unwrap().get(&key()).map(String::as_str),
         Some("hunter2")
@@ -892,7 +893,7 @@ fn a_join_password_goes_to_the_keychain_and_not_to_the_database() {
     h.take_sent();
     h.with_ctx(|ctx| join_room(ctx, &room(), Some("alice".into()), None, None));
     assert_eq!(join_password(&h.take_sent()).as_deref(), Some("hunter2"));
-    assert_eq!(column_password(&h), None);
+    assert_eq!(column_password(&h).as_deref(), Some(""));
 }
 
 #[test]
@@ -905,9 +906,9 @@ fn a_password_in_an_old_row_moves_to_the_keychain_when_it_is_used() {
     let found = h.with_ctx(|ctx| stored_password(ctx, &room()));
     assert_eq!(found.as_deref(), Some("old-secret"));
     assert_eq!(
-        column_password(&h),
-        None,
-        "the column clears after the move"
+        column_password(&h).as_deref(),
+        Some(""),
+        "the column holds a marker after the move"
     );
     assert_eq!(
         secrets.map.lock().unwrap().get(&key()).map(String::as_str),
@@ -953,16 +954,40 @@ fn with_no_keychain_the_column_holds_the_password_as_before() {
 }
 
 #[test]
-fn the_keychain_is_the_truth_when_the_column_has_a_leftover() {
+fn a_password_in_the_column_wins_over_the_keychain_and_moves_there() {
+    // The keychain refused a new password for a while, so the column holds the newer one.
     let mut h = Harness::new();
-    h.with_ctx(|ctx| ensure_room(ctx, &room(), Some("alice"), Some("stale")));
+    h.with_ctx(|ctx| ensure_room(ctx, &room(), Some("alice"), Some("newer")));
     let secrets = secrets_for(&mut h);
-    secrets.map.lock().unwrap().insert(key(), "fresh".into());
+    secrets.map.lock().unwrap().insert(key(), "older".into());
     assert_eq!(
         h.with_ctx(|ctx| stored_password(ctx, &room())).as_deref(),
-        Some("fresh")
+        Some("newer")
     );
-    assert_eq!(column_password(&h), None);
+    assert_eq!(column_password(&h).as_deref(), Some(""));
+    assert_eq!(
+        secrets.map.lock().unwrap().get(&key()).map(String::as_str),
+        Some("newer")
+    );
+}
+
+#[test]
+fn a_room_with_no_password_never_asks_the_keychain() {
+    let mut h = Harness::new();
+    let secrets = secrets_for(&mut h);
+    h.with_ctx(|ctx| join_room(ctx, &room(), Some("alice".into()), None, None));
+    assert_eq!(h.with_ctx(|ctx| stored_password(ctx, &room())), None);
+    assert_eq!(secrets.gets.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_keychain_marker_without_a_keychain_is_no_password() {
+    // A database that a build with a keychain wrote, read by a build with none.
+    let mut h = Harness::new();
+    h.with_ctx(|ctx| ensure_room(ctx, &room(), Some("alice"), Some("")));
+    assert_eq!(h.with_ctx(|ctx| stored_password(ctx, &room())), None);
+    h.with_ctx(|ctx| join_room(ctx, &room(), None, None, None));
+    assert_eq!(join_password(&h.take_sent()), None);
 }
 
 #[test]

@@ -78,6 +78,25 @@ pub async fn submit_room_config_form(
         .await?)
 }
 
+/// Answer the CAPTCHA of a room that holds our join (XEP-0158). `form` is the form of the
+/// `roomCaptcha` event with the answer in its values.
+#[tauri::command]
+pub async fn answer_room_captcha(state: State<'_, AppState>, room: String, form: Form) -> Res<()> {
+    Ok(state
+        .handle()?
+        .answer_room_captcha(read_bare(&room)?, form)
+        .await?)
+}
+
+/// Give up the CAPTCHA of a room: the core tells the room and stops the join.
+#[tauri::command]
+pub async fn cancel_room_captcha(state: State<'_, AppState>, room: String) -> Res<()> {
+    Ok(state
+        .handle()?
+        .cancel_room_captcha(read_bare(&room)?)
+        .await?)
+}
+
 /// Change the password of the account (XEP-0077). When the keychain holds a password for
 /// the account, it gets the new one.
 #[tauri::command]

@@ -273,9 +273,24 @@ export const setRoomRole = (room: string, nick: string, role: RoomRole, reason?:
 /** Read a room with a disco#info query. It does not join the room. */
 export const roomInfo = (room: string) => invoke<RoomCard>('room_info', { room });
 export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
-/** Save a room in the account bookmarks (XEP-0402). Not for a channel of a space. */
-export const addBookmark = (room: string, nick: string | null, name: string | null = null) =>
-  invoke<void>('add_bookmark', { room, name, autojoin: true, nick });
+/**
+ * Save a room in the account bookmarks (XEP-0402). Not for a channel of a space.
+ * `sharePassword` says if the bookmark carries the room password: true puts it in, false
+ * keeps it out, and leaving it out does what the bookmark did before.
+ */
+export const addBookmark = (
+  room: string,
+  nick: string | null,
+  name: string | null = null,
+  sharePassword?: boolean
+) =>
+  invoke<void>('add_bookmark', {
+    room,
+    name,
+    autojoin: true,
+    nick,
+    sharePassword: sharePassword ?? null
+  });
 export const removeBookmark = (room: string) => invoke<void>('remove_bookmark', { room });
 export const changeNick = (room: string, nick: string) =>
   invoke<void>('change_nick', { room, nick });
@@ -501,6 +516,11 @@ export const commandStep = (
 export const roomConfigForm = (room: string) => invoke<DataForm>('room_config_form', { room });
 export const submitRoomConfigForm = (room: string, form: DataForm) =>
   invoke<void>('submit_room_config_form', { room, form });
+/** Answer the CAPTCHA of a room that holds our join (XEP-0158). */
+export const answerRoomCaptcha = (room: string, form: DataForm) =>
+  invoke<void>('answer_room_captcha', { room, form });
+/** Give up the CAPTCHA of a room. The join stops. */
+export const cancelRoomCaptcha = (room: string) => invoke<void>('cancel_room_captcha', { room });
 /** Change the password. The keychain gets the new one when it holds a saved password. */
 export const changePassword = (password: string) => invoke<void>('change_password', { password });
 /** Delete the account on the server. It cannot be undone. `confirm` is the address that the

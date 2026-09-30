@@ -28,6 +28,7 @@ import type {
 } from './types';
 import { failureNote, runBatch } from './batch';
 import { canSetTopic, isModerator } from './rooms';
+import { roomIsMissing, sharePasswordQuestion } from './roomjoin';
 import { isGroup, spaceKey } from './types';
 import { totalUnread as sumUnread, unreadChannels } from './unread';
 import { ui } from './ui.svelte';
@@ -302,9 +303,12 @@ class AppState {
       const b = await api();
       if (c.kind === 'channel' && !c.joined) {
         const nick = this.myNick(c.space);
-        await this.joinAsking(b, c.jid, nick);
+        const typed = await this.joinAsking(b, c.jid, nick);
         // A room in a space is listed by the space. Only a room outside one is bookmarked.
-        if (!c.space) await this.bookmark(b, c.jid, nick);
+        if (!c.space) {
+          await this.bookmark(b, c.jid, nick);
+          if (typed !== undefined) this.offerSharedPassword(c.jid, nick);
+        }
       }
       if (c.kind === 'channel') void this.readSubjectRight(c.jid);
       await this.readOnBridge(c);
@@ -324,19 +328,47 @@ class AppState {
     nick: string | null,
     password?: string,
     fallbackNick?: string
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     let given = password;
+    let typed: string | undefined;
     for (;;) {
       try {
         await b.joinRoom(jid, nick, given, fallbackNick);
-        return;
+        // The password that the user typed in the question, if there was one.
+        return typed;
       } catch (e) {
         if ((e as ChordError | null)?.code !== 'notAuthorized') throw e;
         const asked = await ui.askPassword(jid, given !== undefined);
         if (asked === null) throw e;
         given = asked;
+        typed = asked;
       }
     }
+  }
+
+  /**
+   * After a join with a password that the user typed: ask if the bookmark should carry it,
+   * so that the other devices join too. The bookmark is private to the account, but the
+   * server keeps the password as plain text, so the answer is the user's. The password stays
+   * on this device (in the system keychain) whatever the answer is.
+   * Maps to api.addBookmark(room, nick, name, sharePassword).
+   */
+  private offerSharedPassword(jid: string, nick: string | null) {
+    ui.confirm = {
+      title: 'Share the room password?',
+      text: sharePasswordQuestion(jid),
+      confirm: 'Share the password',
+      onconfirm: () => {
+        void (async () => {
+          try {
+            await (await api()).addBookmark(jid, nick, null, true);
+            ui.say('The password is in your bookmarks.');
+          } catch (e) {
+            ui.say(plainError(e));
+          }
+        })();
+      }
+    };
   }
 
   /** Ask once if any occupant may set the topic of a room. A failure keeps "no". */
@@ -1063,14 +1095,35 @@ class AppState {
     }
     // A first join: no nick of our own, so that the room can give the nick that it reserved
     // for us. Without one, the nick is what we use in the spaces.
+    // A join to a room that does not exist makes a new one, and a typo in an address would
+    // do it. Read the room first, and ask before a new room is made (XEP-0045, 10.1).
+    const may = await this.call((b) => this.mayJoin(b, jid));
+    if (!may.ok || !may.value) return false;
+    let typed: string | undefined;
     const r = await this.call(async (b) => {
-      await this.joinAsking(b, jid, null, password ?? undefined, this.myNick(null));
+      typed = await this.joinAsking(b, jid, null, password ?? undefined, this.myNick(null));
       await this.bookmark(b, jid, null);
     });
     if (!r.ok) return false;
+    if (typed !== undefined) this.offerSharedPassword(jid, null);
     this.pending = { jid };
     this.ensureSelection();
     return true;
+  }
+
+  /**
+   * Read the disco#info of a room before a join. A room that does not exist makes the UI
+   * ask: true means make it. Any other answer, good or bad, lets the join go on.
+   * Maps to api.roomInfo(room).
+   */
+  private async mayJoin(b: Awaited<ReturnType<typeof api>>, jid: string): Promise<boolean> {
+    try {
+      await b.roomInfo(jid);
+      return true;
+    } catch (e) {
+      if (roomIsMissing(e)) return ui.askCreateRoom(jid);
+      return true;
+    }
   }
 
   /**

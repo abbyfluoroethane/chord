@@ -1609,8 +1609,8 @@ pub(crate) fn is_joined_or_joining(ctx: &Ctx<'_>, room: &BareJid) -> bool {
 
 /// Add a room row, or set its nick and password. `None` keeps the stored value.
 fn ensure_room(ctx: &Ctx<'_>, room: &BareJid, nick: Option<&str>, password: Option<&str>) {
-    // With a keychain the password goes there, and the column stays empty.
-    let in_keychain = password.is_some_and(|p| password::keep(ctx, room, p));
+    // With a keychain the password goes there, and the column gets a marker.
+    let in_keychain = password.is_some_and(|p| password::store_secret(ctx, room, p));
     let password = if in_keychain { None } else { password };
     db(
         ctx,
@@ -1624,7 +1624,7 @@ fn ensure_room(ctx: &Ctx<'_>, room: &BareJid, nick: Option<&str>, password: Opti
         ),
     );
     if in_keychain {
-        password::clear_column(ctx, room);
+        password::mark_in_keychain(ctx, room);
     }
 }
 
