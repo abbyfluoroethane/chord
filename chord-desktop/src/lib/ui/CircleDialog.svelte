@@ -35,7 +35,10 @@
   /** Join requests of the space. Only an owner gets them. */
   let requests = $state<{ jid: string; subid: string | null }[]>([]);
   let requestsNote = $state('');
-  /** I own the space: I can remove its channels and delete it. The preview owns all. */
+  /**
+   * I own the space: I can remove its channels, delete it, change its settings and manage its
+   * members. The join requests and the members list both prove it. The preview owns all.
+   */
   let owner = $state(!live);
   const channelsHere = $derived(app.channels.filter((c) => c.space === space && c.kind === 'channel'));
 
@@ -54,8 +57,6 @@
       });
   });
 
-  /** True when the server lets us read the members: we own the space. */
-  let owner = $state(false);
   let description = $state('');
   let savedDescription = '';
   let members = $state<SpaceMember[]>([]);
@@ -76,7 +77,8 @@
         savedDescription = description;
         owner = true;
       } catch {
-        owner = false;
+        // Not the owner, or the service refused the read. The join request check above
+        // decides too, so this does not clear what it found.
       }
     })();
   });
