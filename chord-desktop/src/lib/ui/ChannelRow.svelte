@@ -5,7 +5,6 @@
   import Pencil from 'lucide-svelte/icons/pencil';
   import Avatar from './Avatar.svelte';
   import Settings from 'lucide-svelte/icons/settings';
-  import Pencil from 'lucide-svelte/icons/pencil';
   import ChannelSettings from './ChannelSettings.svelte';
   import TopicModal from './TopicModal.svelte';
   import Icon from './Icon.svelte';
