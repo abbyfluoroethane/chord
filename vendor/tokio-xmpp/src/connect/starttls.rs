@@ -13,7 +13,9 @@ use xmpp_parsers::{
 
 use crate::{
     connect::{
-        tls_common::{establish_tls_connection, TlsAsyncStream, TlsConnectorError, TlsStream},
+        tls_common::{
+            establish_tls_connection_with, CertCheck, TlsAsyncStream, TlsConnectorError, TlsStream,
+        },
         DnsConfig, ServerConnector,
     },
     error::{Error, ProtocolError},
@@ -91,8 +93,17 @@ impl ServerConnector for StartTlsServerConnector {
 /// Performs `<starttls/>` on an XmppStream and returns a binary
 /// TlsStream.
 pub async fn starttls<S: TlsAsyncStream>(
+    stream: XmppStream<BufStream<S>>,
+    domain: &str,
+) -> Result<(TlsStream<S>, ChannelBinding), Error> {
+    starttls_checked(stream, domain, None).await
+}
+
+/// Like `starttls`, with a check on the certificate of the server (CHORD PATCH).
+pub async fn starttls_checked<S: TlsAsyncStream>(
     mut stream: XmppStream<BufStream<S>>,
     domain: &str,
+    check: Option<&CertCheck>,
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
     stream
         .send(&XmppStreamElement::Starttls(starttls::Nonza::Request(
@@ -122,7 +133,7 @@ pub async fn starttls<S: TlsAsyncStream>(
     }
 
     let inner_stream = stream.into_inner().into_inner();
-    establish_tls_connection(inner_stream, domain).await
+    establish_tls_connection_with(inner_stream, domain, &[], check).await
 }
 
 /// StartTLS ServerConnector Error - now just an alias to the common error type

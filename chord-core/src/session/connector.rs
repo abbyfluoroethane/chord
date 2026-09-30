@@ -19,8 +19,8 @@ use sasl::common::ChannelBinding;
 use tokio::io::BufStream;
 use tokio::net::TcpStream;
 use tokio_xmpp::Error;
-use tokio_xmpp::connect::tls_common::{TlsStream, establish_tls_connection_with_alpn};
-use tokio_xmpp::connect::{DnsConfig, ServerConnector, SrvRecord, starttls::starttls};
+use tokio_xmpp::connect::tls_common::{CertCheck, TlsStream, establish_tls_connection_with};
+use tokio_xmpp::connect::{DnsConfig, ServerConnector, SrvRecord, starttls::starttls_checked};
 use tokio_xmpp::error::ProtocolError;
 use tokio_xmpp::jid::Jid;
 use tokio_xmpp::xmlstream::{PendingFeaturesRecv, StreamHeader, Timeouts, initiate_stream};
@@ -44,8 +44,10 @@ pub(super) enum Mode {
     DirectTls { host: String, port: u16 },
 }
 
+/// The connector, and an optional check of the server certificate (the pin). The check
+/// runs in the TLS handshake of every target, for STARTTLS and for direct TLS.
 #[derive(Clone, Debug)]
-pub(super) struct Connector(pub Mode);
+pub(super) struct Connector(pub Mode, pub Option<CertCheck>);
 
 /// One place to connect to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +69,7 @@ impl ServerConnector for Connector {
         timeouts: Timeouts,
     ) -> Result<(PendingFeaturesRecv<Self::Stream>, ChannelBinding), Error> {
         let targets = targets(&self.0, jid.domain().as_str()).await;
-        connect_any(targets, jid, ns, timeouts).await
+        connect_any(targets, jid, ns, timeouts, self.1.as_ref()).await
     }
 }
 
@@ -77,6 +79,7 @@ async fn connect_any(
     jid: &Jid,
     ns: &'static str,
     timeouts: Timeouts,
+    check: Option<&CertCheck>,
 ) -> Result<(PendingFeaturesRecv<TlsTcp>, ChannelBinding), Error> {
     {
         let mut last = Error::Disconnected;
@@ -87,8 +90,11 @@ async fn connect_any(
                 "STARTTLS"
             };
             log::info!("connecting to {}:{} with {how}", target.host, target.port);
-            match tokio::time::timeout(TARGET_TIMEOUT, connect_target(&target, jid, ns, timeouts))
-                .await
+            match tokio::time::timeout(
+                TARGET_TIMEOUT,
+                connect_target(&target, jid, ns, timeouts, check),
+            )
+            .await
             {
                 Ok(Ok(connected)) => return Ok(connected),
                 Ok(Err(e)) => {
@@ -235,6 +241,7 @@ async fn connect_target(
     jid: &Jid,
     ns: &'static str,
     timeouts: Timeouts,
+    check: Option<&CertCheck>,
 ) -> Result<(PendingFeaturesRecv<TlsTcp>, ChannelBinding), Error> {
     let domain = jid.domain().as_str();
     let tcp = DnsConfig::no_srv(&target.host, target.port)
@@ -242,7 +249,7 @@ async fn connect_target(
         .await?;
     if target.direct_tls {
         let (tls, binding) =
-            establish_tls_connection_with_alpn(tcp, domain, &[ALPN_XMPP_CLIENT]).await?;
+            establish_tls_connection_with(tcp, domain, &[ALPN_XMPP_CLIENT], check).await?;
         let header = StreamHeader {
             to: Some(domain.into()),
             // The server needs `from` to offer SASL 2 (XEP-0388).
@@ -263,7 +270,7 @@ async fn connect_target(
     if !features.can_starttls() {
         return Err(Error::Protocol(ProtocolError::NoTls));
     }
-    let (tls, binding) = starttls(plain, domain).await?;
+    let (tls, binding) = starttls_checked(plain, domain, check).await?;
     let stream = initiate_stream(BufStream::new(tls), ns, header(), timeouts).await?;
     Ok((stream, binding))
 }
@@ -384,9 +391,10 @@ mod tests {
             target("127.0.0.1", 1, true),
             target("chat.foid.space", 5222, false),
         ];
-        let (stream, binding) = connect_any(targets, &jid, "jabber:client", Timeouts::default())
-            .await
-            .unwrap();
+        let (stream, binding) =
+            connect_any(targets, &jid, "jabber:client", Timeouts::default(), None)
+                .await
+                .unwrap();
         let (features, _) = stream
             .recv_features::<tokio_xmpp::xmlstream::FallibleStreamElement>()
             .await

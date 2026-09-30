@@ -17,6 +17,9 @@ mod connector;
 #[cfg(feature = "native-session")]
 pub mod native;
 
+pub mod cert_pin;
+pub use cert_pin::CertPin;
+
 /// Default time limit for the first login.
 pub const DEFAULT_LOGIN_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -45,6 +48,8 @@ pub struct SessionConfig {
     pub server: ServerAddr,
     /// Time limit for each login attempt. `connect` returns `ConnectError::Timeout` after it.
     pub login_timeout: Duration,
+    /// An opt-in pin of the server certificate. See `cert_pin`.
+    pub pin: Option<CertPin>,
 }
 
 impl SessionConfig {
@@ -55,7 +60,14 @@ impl SessionConfig {
             password,
             server,
             login_timeout: DEFAULT_LOGIN_TIMEOUT,
+            pin: None,
         }
+    }
+
+    /// The same config with a certificate pin.
+    pub fn with_pin(mut self, pin: CertPin) -> Self {
+        self.pin = Some(pin);
+        self
     }
 }
 
@@ -66,6 +78,7 @@ impl fmt::Debug for SessionConfig {
             .field("password", &"<hidden>")
             .field("server", &self.server)
             .field("login_timeout", &self.login_timeout)
+            .field("pin", &self.pin)
             .finish()
     }
 }

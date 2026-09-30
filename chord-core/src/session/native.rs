@@ -15,6 +15,7 @@ use core::time::Duration;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io;
+use std::sync::Arc;
 
 use futures_core::Stream;
 use jid::Jid;
@@ -25,6 +26,7 @@ use sasl::common::scram::{Sha1, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_xmpp::connect::ServerConnector;
+use tokio_xmpp::connect::tls_common::CertCheck;
 use tokio_xmpp::error::AuthError;
 use tokio_xmpp::rustls;
 use tokio_xmpp::stanzastream::{Connection, Event, StanzaStream, StreamEvent};
@@ -101,16 +103,22 @@ impl Session for NativeSession {
             password,
             server,
             login_timeout,
+            pin,
         } = config;
         let jid = Jid::from(jid);
+        // The pin check runs in the TLS handshake, before SASL sends anything, for STARTTLS
+        // and for direct TLS.
+        let check = pin.map(|pin| CertCheck(Arc::new(move |der| pin.check(der))));
         match server {
-            ServerAddr::Srv => start(Connector(Mode::Srv), jid, password, login_timeout).await,
+            ServerAddr::Srv => {
+                start(Connector(Mode::Srv, check), jid, password, login_timeout).await
+            }
             ServerAddr::StartTls { host, port } => {
-                let server = Connector(Mode::StartTls { host, port });
+                let server = Connector(Mode::StartTls { host, port }, check);
                 start(server, jid, password, login_timeout).await
             }
             ServerAddr::DirectTls { host, port } => {
-                let server = Connector(Mode::DirectTls { host, port });
+                let server = Connector(Mode::DirectTls { host, port }, check);
                 start(server, jid, password, login_timeout).await
             }
             #[cfg(feature = "dev-insecure")]

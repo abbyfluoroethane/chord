@@ -61,6 +61,31 @@ use {native_tls::TlsConnector as NativeTlsConnector, tokio_native_tls::TlsConnec
 use crate::{connect::ServerConnectorError, error::Error};
 use sasl::common::ChannelBinding;
 
+/// CHORD PATCH (SECURITYAUTH-13): a check on the certificate of the server, for a pin.
+/// The function gets the DER bytes of the end-entity certificate after the TLS handshake
+/// and the normal validation passed. An `Err` stops the connection with a certificate
+/// error. Upstream has no such hook.
+#[derive(Clone)]
+pub struct CertCheck(pub alloc::sync::Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>);
+
+impl fmt::Debug for CertCheck {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str("CertCheck")
+    }
+}
+
+/// The text of a failed `CertCheck`, as the error inside the certificate error.
+#[derive(Debug)]
+struct CertCheckError(String);
+
+impl fmt::Display for CertCheckError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_str(&self.0)
+    }
+}
+
+impl StdError for CertCheckError {}
+
 /// Common TLS error type used by both direct_tls and starttls
 #[derive(Debug)]
 pub enum TlsConnectorError {
@@ -108,9 +133,9 @@ impl From<InvalidDnsNameError> for TlsConnectorError {
 pub async fn establish_tls_connection_with_alpn<S: TlsAsyncStream>(
     stream: S,
     domain: &str,
-    _alpn: &[&[u8]],
+    alpn: &[&[u8]],
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
-    establish_tls_connection(stream, domain).await
+    establish_tls_connection_with(stream, domain, alpn, None).await
 }
 
 /// Establish TLS connection using native-tls
@@ -119,6 +144,24 @@ pub async fn establish_tls_connection<S: TlsAsyncStream>(
     stream: S,
     domain: &str,
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
+    establish_tls_connection_with(stream, domain, &[], None).await
+}
+
+/// CHORD PATCH: the one function behind the other two, with a `CertCheck`. The native-tls
+/// backend ignores `alpn` and has no check, so a check fails the connection instead of
+/// being skipped.
+#[cfg(feature = "native-tls")]
+pub async fn establish_tls_connection_with<S: TlsAsyncStream>(
+    stream: S,
+    domain: &str,
+    _alpn: &[&[u8]],
+    check: Option<&CertCheck>,
+) -> Result<(TlsStream<S>, ChannelBinding), Error> {
+    if check.is_some() {
+        return Err(Error::Io(std::io::Error::other(
+            "a certificate check needs the rustls backend",
+        )));
+    }
     let domain = domain.to_owned();
     let tls_stream = TlsConnector::from(NativeTlsConnector::builder().build().unwrap())
         .connect(&domain, stream)
@@ -136,7 +179,7 @@ pub async fn establish_tls_connection<S: TlsAsyncStream>(
     stream: S,
     domain: &str,
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
-    establish_tls_connection_with_alpn(stream, domain, &[]).await
+    establish_tls_connection_with(stream, domain, &[], None).await
 }
 
 /// CHORD PATCH: `establish_tls_connection` with ALPN protocols. XEP-0368 direct TLS
@@ -146,6 +189,18 @@ pub async fn establish_tls_connection_with_alpn<S: TlsAsyncStream>(
     stream: S,
     domain: &str,
     alpn: &[&[u8]],
+) -> Result<(TlsStream<S>, ChannelBinding), Error> {
+    establish_tls_connection_with(stream, domain, alpn, None).await
+}
+
+/// CHORD PATCH: the one function behind the other two. The certificate of the server goes
+/// through `check` after the handshake. The normal validation runs first.
+#[cfg(all(feature = "rustls-any-backend", not(feature = "native-tls")))]
+pub async fn establish_tls_connection_with<S: TlsAsyncStream>(
+    stream: S,
+    domain: &str,
+    alpn: &[&[u8]],
+    check: Option<&CertCheck>,
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
     let domain =
         ServerName::try_from(domain.to_owned()).map_err(TlsConnectorError::DnsNameError)?;
@@ -178,6 +233,24 @@ pub async fn establish_tls_connection_with_alpn<S: TlsAsyncStream>(
         .connect(domain, stream)
         .await
         .map_err(crate::Error::Io)?;
+
+    // CHORD PATCH: the pin check.
+    if let Some(check) = check {
+        let (_, connection) = tls_stream.get_ref();
+        let verdict = match connection.peer_certificates().and_then(|c| c.first()) {
+            Some(leaf) => (check.0)(leaf.as_ref()),
+            None => Err("the server sent no certificate".to_owned()),
+        };
+        if let Err(message) = verdict {
+            use tokio_rustls::rustls::{CertificateError, Error as RustlsError, OtherError};
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                RustlsError::InvalidCertificate(CertificateError::Other(OtherError(
+                    Arc::new(CertCheckError(message)),
+                ))),
+            )));
+        }
+    }
 
     // Extract the channel-binding information before we hand the stream over to ktls.
     let (_, connection) = tls_stream.get_ref();

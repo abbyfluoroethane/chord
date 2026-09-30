@@ -56,6 +56,12 @@
 //!   CHORD_PASSWORD   password (never an argument, so it stays out of the shell history)
 //!   CHORD_SERVER     "srv" (default), "starttls://host:port" or
 //!                    "xmpps://host:port" (direct TLS). With the dev-insecure feature also "tcp://host:port" (no TLS).
+//!   CHORD_CERT_PIN   optional certificate pin: the SHA-256 fingerprint of the server
+//!                    certificate (hex, colons optional), or "learn" to pin nothing and
+//!                    print the fingerprint. The pin comes on top of the normal checks, for
+//!                    STARTTLS and for direct TLS. A server with another certificate is
+//!                    refused before any password goes out (exit code 3). `login` prints
+//!                    the fingerprint that it saw.
 //!   SSL_CERT_FILE    optional PEM file of trusted CAs. It replaces the system trust store.
 //!   CHORD_DB         account database (default: ~/.local/share/chord/<jid>.sqlite3)
 //!   CHORD_LOG        log level on stderr: error, warn, info, debug, or trace (default: no log)
@@ -83,7 +89,7 @@ use chord_core::actor::{
 };
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::native::NativeSession;
-use chord_core::session::{ConnectError, ServerAddr, SessionConfig, Stream};
+use chord_core::session::{CertPin, ConnectError, ServerAddr, SessionConfig, Stream};
 use chord_core::store::Store;
 use tokio::task::JoinHandle;
 
@@ -345,6 +351,9 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
                 "logged in as {}",
                 client.bound_jid.as_ref().map_or("?".into(), Jid::to_string)
             );
+            if let Some(seen) = PIN.get().and_then(CertPin::observed) {
+                println!("server certificate SHA-256: {seen}");
+            }
             Ok(())
         }
         ("send", [to, text]) => send(&client, to, text).await,
@@ -437,8 +446,28 @@ fn config() -> Result<SessionConfig, String> {
         None | Some("srv") => ServerAddr::Srv,
         Some(s) => parse_server(s)?,
     };
-    Ok(SessionConfig::new(jid, password, server))
+    let config = SessionConfig::new(jid, password, server);
+    match std::env::var("CHORD_CERT_PIN")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("") => Ok(config),
+        Some(text) => {
+            let expected = if text.eq_ignore_ascii_case("learn") {
+                None
+            } else {
+                Some(text)
+            };
+            let pin = CertPin::new(expected).map_err(|e| format!("bad CHORD_CERT_PIN: {e}"))?;
+            let _ = PIN.set(pin.clone());
+            Ok(config.with_pin(pin))
+        }
+    }
 }
+
+/// The pin of this run, if `CHORD_CERT_PIN` is set. The session reports to it.
+static PIN: std::sync::OnceLock<CertPin> = std::sync::OnceLock::new();
 
 fn parse_server(s: &str) -> Result<ServerAddr, String> {
     let (scheme, rest) = s

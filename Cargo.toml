@@ -36,6 +36,9 @@ sha1 = "0.11"
 #   nonzas. Upstream sends nothing but stanzas.
 # - `DnsConfig::srv_records` returns the SRV records, and
 #   `establish_tls_connection_with_alpn` sets the ALPN protocol of XEP-0368 direct TLS.
+# - `CertCheck` and `establish_tls_connection_with` (connect/tls_common.rs) and
+#   `starttls_checked` (connect/starttls.rs) check the server certificate after the TLS
+#   handshake, for the certificate pin (SECURITYAUTH-13). Both STARTTLS and direct TLS use it.
 # Drop these when upstream gets an API for them.
 [patch.crates-io]
 tokio-xmpp = { path = "vendor/tokio-xmpp" }
