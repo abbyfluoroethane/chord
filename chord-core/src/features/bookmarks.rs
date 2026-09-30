@@ -358,7 +358,8 @@ fn stored_extensions(ctx: &Ctx<'_>, room: &BareJid) -> Option<Vec<Element>> {
 
 fn unmark(ctx: &Ctx<'_>, room: &BareJid) {
     let result = ctx.store.conn().execute(
-        "UPDATE rooms SET bookmarked = 0, autojoin = 0 WHERE account_id = ?1 AND jid = ?2",
+        "UPDATE rooms SET bookmarked = 0, autojoin = 0, password_shared = 0
+         WHERE account_id = ?1 AND jid = ?2",
         params![ctx.account_id, room.as_str()],
     );
     if let Err(e) = result {
@@ -1063,6 +1064,37 @@ mod tests {
         // And the republish reads it from there.
         assert_eq!(
             republish(&mut h, None).password.as_deref(),
+            Some("from-phone")
+        );
+    }
+
+    #[test]
+    fn a_removed_bookmark_shares_nothing_when_the_room_is_bookmarked_again() {
+        let mut h = Harness::new();
+        h.with_ctx(|ctx| {
+            on_event(
+                ctx,
+                event(
+                    vec![(A, conference_xml("<password>from-phone</password>"))],
+                    vec![],
+                ),
+            )
+        });
+        assert_eq!(
+            republish(&mut h, None).password.as_deref(),
+            Some("from-phone")
+        );
+        // The bookmark goes (we left the room, or another client removed it).
+        h.with_ctx(|ctx| on_event(ctx, event(vec![], vec![A])));
+        assert_eq!(
+            column_password(&h).as_deref(),
+            Some("from-phone"),
+            "kept here"
+        );
+        // A new bookmark of the room has no password until the user agrees.
+        assert_eq!(republish(&mut h, None).password, None);
+        assert_eq!(
+            republish(&mut h, Some(true)).password.as_deref(),
             Some("from-phone")
         );
     }
