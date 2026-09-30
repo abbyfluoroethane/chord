@@ -4,8 +4,10 @@
 //! fallback in the body for clients that do not know XEP-0461. The store keeps only the
 //! text of the user, so the timeline shows the reply reference and not the quote.
 //!
-//! An incoming reply may carry the same fallback. `strip_fallback` gives the body without
-//! it. The code that stores an incoming body must call it.
+//! An incoming message may carry the same fallback, and a fallback for another feature that
+//! Chord reads (a shared file, a retraction, a reaction, a correction).
+//! `strip_fallback` gives the body without them. The code that stores an incoming body must
+//! call it.
 
 use futures_channel::oneshot;
 use jid::Jid;
@@ -90,28 +92,60 @@ pub(crate) fn reference(message: &Message) -> Option<(String, Option<String>)> {
     Some((id.to_owned(), reply.attr("to").map(str::to_owned)))
 }
 
-/// The body of a message without its XEP-0428 fallback for a reply. Returns `None` if the
-/// message has no such fallback, or if the range is not valid.
+/// The features whose XEP-0428 fallback text Chord removes from a body: a reply, a shared
+/// file (XEP-0447), a retraction and a moderation (XEP-0424, XEP-0425), a reaction
+/// (XEP-0444) and a correction (XEP-0308). Chord reads the payload of each one, so the
+/// fallback text would only repeat it. A fallback for any other feature stays in the body.
+const KNOWN_FALLBACKS: [&str; 7] = [
+    NS_REPLY,
+    "urn:xmpp:sfs:0",
+    "urn:xmpp:message-retract:1",
+    "urn:xmpp:message-retract:0",
+    "urn:xmpp:message-moderate:1",
+    "urn:xmpp:reactions:0",
+    "urn:xmpp:message-correct:0",
+];
+
+/// The body of a message without the XEP-0428 fallback of every feature in
+/// `KNOWN_FALLBACKS`. Returns `None` if the message has no such fallback, or if no range
+/// is valid. A fallback with a bad range stays in the body, and the others still go.
 ///
-/// The range counts Unicode code points (XEP-0426).
+/// The ranges count Unicode code points (XEP-0426) of the whole body, so all of them are
+/// read before any text is cut.
 pub(crate) fn strip_fallback(message: &Message) -> Option<String> {
     let (_, body) = message.get_best_body(vec![])?;
-    let fallback = message
-        .payloads
-        .iter()
-        .find(|p| p.is("fallback", NS_FALLBACK) && p.attr("for") == Some(NS_REPLY))?;
-    let range = fallback.get_child("body", NS_FALLBACK)?;
     let chars: Vec<char> = body.chars().collect();
-    let (start, end) = match (range.attr("start"), range.attr("end")) {
-        (Some(s), Some(e)) => (s.parse::<usize>().ok()?, e.parse::<usize>().ok()?),
-        // No range means the fallback is the whole body.
-        (None, None) => (0, chars.len()),
-        _ => return None,
-    };
-    if start > end || end > chars.len() {
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for fallback in message.payloads.iter().filter(|p| {
+        p.is("fallback", NS_FALLBACK) && p.attr("for").is_some_and(|f| KNOWN_FALLBACKS.contains(&f))
+    }) {
+        let Some(range) = fallback.get_child("body", NS_FALLBACK) else {
+            continue;
+        };
+        let (start, end) = match (range.attr("start"), range.attr("end")) {
+            (Some(s), Some(e)) => match (s.parse::<usize>(), e.parse::<usize>()) {
+                (Ok(s), Ok(e)) => (s, e),
+                _ => continue,
+            },
+            // No range means the fallback is the whole body.
+            (None, None) => (0, chars.len()),
+            _ => continue,
+        };
+        if start <= end && end <= chars.len() {
+            ranges.push((start, end));
+        }
+    }
+    if ranges.is_empty() {
         return None;
     }
-    Some(chars[..start].iter().chain(&chars[end..]).collect())
+    Some(
+        chars
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !ranges.iter().any(|&(start, end)| (start..end).contains(i)))
+            .map(|(_, c)| c)
+            .collect(),
+    )
 }
 
 /// The quoted fallback text for `target`: `> ` lines with the start of its body.
@@ -278,6 +312,68 @@ mod tests {
         assert_eq!(strip_fallback(&m).as_deref(), Some("answer"));
         let plain = Message::chat(None).with_body("".into(), "hi".into());
         assert_eq!(strip_fallback(&plain), None);
+    }
+
+    #[test]
+    fn strips_the_fallback_of_every_known_feature() {
+        // "> q\n" (4) is the reply quote, then the answer, then a file URL of 6 characters.
+        let m = parse(format!(
+            "<message xmlns='jabber:client' type='chat'><body>&gt; q\nanswer\nhttp:x</body>\
+             <fallback xmlns='{NS_FALLBACK}' for='{NS_REPLY}'><body start='0' end='4'/></fallback>\
+             <fallback xmlns='{NS_FALLBACK}' for='urn:xmpp:sfs:0'><body start='11' end='17'/></fallback>\
+             </message>"
+        ));
+        assert_eq!(strip_fallback(&m).as_deref(), Some("answer\n"));
+    }
+
+    #[test]
+    fn a_retraction_fallback_with_no_range_covers_the_body() {
+        let m = parse(format!(
+            "<message xmlns='jabber:client' type='chat'><body>This person attempted to retract a previous message.</body>\
+             <fallback xmlns='{NS_FALLBACK}' for='urn:xmpp:message-retract:1'><body/></fallback></message>"
+        ));
+        assert_eq!(strip_fallback(&m).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_fallback_for_an_unknown_feature_stays() {
+        let m = parse(format!(
+            "<message xmlns='jabber:client' type='chat'><body>keep me</body>\
+             <fallback xmlns='{NS_FALLBACK}' for='urn:example:other'><body/></fallback></message>"
+        ));
+        assert_eq!(strip_fallback(&m), None);
+    }
+
+    #[test]
+    fn one_bad_range_does_not_stop_the_others() {
+        let m = parse(format!(
+            "<message xmlns='jabber:client' type='chat'><body>ab cd</body>\
+             <fallback xmlns='{NS_FALLBACK}' for='urn:xmpp:sfs:0'><body start='0' end='99'/></fallback>\
+             <fallback xmlns='{NS_FALLBACK}' for='{NS_REPLY}'><body start='0' end='3'/></fallback>\
+             </message>"
+        ));
+        assert_eq!(strip_fallback(&m).as_deref(), Some("cd"));
+    }
+
+    #[test]
+    fn a_reply_to_an_edited_message_quotes_the_edited_text() {
+        let mut h = Harness::new();
+        let id = insert(
+            &h,
+            MessageKind::Chat,
+            PEER,
+            "bob@chord.localhost/phone",
+            "old text",
+        );
+        h.store
+            .conn()
+            .execute("UPDATE messages SET edited_body = 'new text'", [])
+            .unwrap();
+        h.with_ctx(|ctx| send_reply(ctx, &id, "yes".into()))
+            .unwrap();
+        let m = sent_message(&mut h);
+        let (_, wire) = m.get_best_body(vec![]).unwrap();
+        assert_eq!(wire, "> new text\nyes");
     }
 
     #[test]

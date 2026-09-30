@@ -129,8 +129,15 @@ mod oob_tests {
     }
 }
 
-/// The body to store for a new message: without the XEP-0428 fallback of a reply.
+/// The body to store for a new message: without the XEP-0428 fallback of a reply, and for
+/// a message that says it is encrypted (XEP-0380) and has a body, the notice that Chord
+/// cannot read it.
 pub(crate) fn body(message: &Message) -> Option<String> {
+    if message.get_best_body(vec![]).is_some()
+        && let Some(notice) = super::encrypted::notice(message)
+    {
+        return Some(notice);
+    }
     replies::strip_fallback(message)
         .or_else(|| message.get_best_body(vec![]).map(|(_, body)| body.clone()))
 }

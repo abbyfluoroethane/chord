@@ -20,6 +20,7 @@ pub mod chat_states;
 pub mod corrections;
 pub mod csi;
 pub mod disco;
+pub mod encrypted;
 pub mod extdisco;
 pub mod file_sharing;
 pub mod jmi;
