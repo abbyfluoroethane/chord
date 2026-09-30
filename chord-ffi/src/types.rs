@@ -100,6 +100,8 @@ pub struct ChannelItem {
     pub unread: u32,
     /// For a direct chat: the blocklist holds the peer.
     pub blocked: bool,
+    /// For a joined room outside a space: the people in it now.
+    pub members: Option<u32>,
 }
 
 /// A space in the space rail.
@@ -210,6 +212,7 @@ impl From<core_views::ChannelItem> for ChannelItem {
             last_activity: i.last_activity,
             unread: i.unread,
             blocked: i.blocked,
+            members: i.members,
         }
     }
 }
@@ -989,6 +992,7 @@ mod tests {
             last_activity: Some(5),
             unread: 3,
             blocked: false,
+            members: None,
         }
     }
 

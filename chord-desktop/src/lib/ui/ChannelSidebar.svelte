@@ -9,6 +9,8 @@
   import Icon from './Icon.svelte';
   import UserPanel from './UserPanel.svelte';
   import { app, HOME } from './app.svelte';
+  import { leaveGroup } from './menus';
+  import { isGroup } from './types';
   import { tooltip } from './tooltip';
   import { ui } from './ui.svelte';
 
@@ -49,7 +51,11 @@
             channel={c}
             selected={c.jid === app.selectedJid && !app.showContacts}
             onclick={() => app.selectChannel(c.jid)}
-            onclose={c.kind === 'dm' ? () => app.closeDm(c.jid) : undefined}
+            onclose={c.kind === 'dm'
+              ? () => app.closeDm(c.jid)
+              : isGroup(c) && c.joined
+                ? () => leaveGroup(c.jid, c.name)
+                : undefined}
           />
         </li>
       {/each}

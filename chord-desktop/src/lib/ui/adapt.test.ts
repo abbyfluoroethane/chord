@@ -32,6 +32,7 @@ function channel(over: Partial<ChannelItem>): ChannelItem {
     lastActivity: null,
     unread: 3,
     blocked: false,
+    members: null,
     ...over
   };
 }

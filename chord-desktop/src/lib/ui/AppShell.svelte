@@ -11,6 +11,7 @@
   import ForwardModal from './ForwardModal.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import ContactsPage from './ContactsPage.svelte';
+  import DmProfile from './DmProfile.svelte';
   import MemberList from './MemberList.svelte';
   import PersonLayer from './PersonLayer.svelte';
   import QuickSwitcher from './QuickSwitcher.svelte';
@@ -125,8 +126,10 @@
     {:else}
       <Chat />
     {/if}
-    {#if ui.membersOpen && app.selectedSpace !== HOME}
+    {#if ui.membersOpen && app.sideRail === 'members'}
       <MemberList />
+    {:else if ui.membersOpen && app.sideRail === 'profile' && app.channel}
+      <DmProfile address={app.channel.jid} name={app.channel.name} />
     {/if}
   </div>
 </div>

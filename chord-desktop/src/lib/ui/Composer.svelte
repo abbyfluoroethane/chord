@@ -19,6 +19,7 @@
   import { typingText } from './format';
   import { pastedFiles } from './filetransfer';
   import { tooltip } from './tooltip';
+  import { isGroup } from './types';
   import {
     loadShortcodes,
     replaceShortcodesOutsideCode,
@@ -285,7 +286,9 @@
   }
 
   const placeholder = $derived(
-    app.channel ? `Message ${app.channel.kind === 'dm' ? '' : '#'}${app.channel.name}` : 'Message'
+    app.channel
+      ? `Message ${app.channel.kind === 'dm' || isGroup(app.channel) ? '' : '#'}${app.channel.name}`
+      : 'Message'
   );
   const typing = $derived(typingText(app.typingHere));
   // XEP-0245: a body that starts with "/me " shows as an action. It goes out as typed.

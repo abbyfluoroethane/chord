@@ -1,6 +1,8 @@
 <script lang="ts">
   import { AVATAR_RETRY_MS, avatarTry } from '$lib/chord/avatars';
   import { initials, tint } from './format';
+  import type { ComponentType } from 'svelte';
+  import Icon from './Icon.svelte';
   import Presence from './Presence.svelte';
   import type { PresenceKind } from './types';
 
@@ -9,7 +11,8 @@
     src = null,
     size = 40,
     presence = null,
-    cut = 'var(--surface-200)'
+    cut = 'var(--surface-200)',
+    icon = null
   }: {
     name: string;
     src?: string | null;
@@ -17,6 +20,8 @@
     presence?: PresenceKind | null;
     /** Colour of the cut-out ring around the presence shape. */
     cut?: string;
+    /** Shown on the tint in place of the initials, for example for a group chat. */
+    icon?: ComponentType | null;
   } = $props();
 
   const dot = $derived(Math.max(10, Math.round(size * 0.36)));
@@ -44,7 +49,7 @@
     <img src={shown} alt="" onerror={onError} />
   {:else}
     <span class="fallback" style:background={tint(name)} style:font-size="{Math.round(size * 0.4)}px">
-      {initials(name)}
+      {#if icon}<Icon {icon} size={Math.round(size * 0.55)} />{:else}{initials(name)}{/if}
     </span>
   {/if}
   {#if presence}

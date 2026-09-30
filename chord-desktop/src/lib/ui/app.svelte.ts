@@ -27,7 +27,7 @@ import type {
   TimelineItem
 } from './types';
 import { canSetTopic, isModerator } from './rooms';
-import { spaceKey } from './types';
+import { isGroup, spaceKey } from './types';
 import { ui } from './ui.svelte';
 
 export const HOME = 'home';
@@ -129,9 +129,23 @@ class AppState {
     return list.map((m) => (this.mentionIds[m.id] ? { ...m, mention: true } : m));
   });
   dividerId = $derived(this.newFrom[this.selectedJid] ?? null);
+  // A group chat on the home list keeps its members under HOME (live.svelte.ts watchMembers).
   membersHere = $derived(
-    this.selectedSpace === HOME ? [] : (this.members[this.selectedSpace] ?? [])
+    this.selectedSpace === HOME && !(this.channel && isGroup(this.channel))
+      ? []
+      : (this.members[this.selectedSpace] ?? [])
   );
+  /**
+   * What the right rail shows for the open chat: the members of a channel or a group chat,
+   * the profile of the peer of a 1:1 DM, or nothing (a private message in a room).
+   */
+  sideRail = $derived.by((): 'members' | 'profile' | null => {
+    const c = this.channel;
+    if (this.selectedSpace !== HOME) return 'members';
+    if (this.showContacts || !c) return null;
+    if (isGroup(c)) return 'members';
+    return c.kind === 'dm' && !c.pm ? 'profile' : null;
+  });
   spaceChannels = $derived(this.channelsOf(this.selectedSpace));
   currentSpace = $derived(this.spaces.find((s) => spaceKey(s) === this.selectedSpace) ?? null);
   typingHere = $derived(this.typing[this.selectedJid] ?? []);

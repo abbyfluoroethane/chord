@@ -105,7 +105,8 @@ export function toChannel(c: BChannel, ctx: ChannelContext): ChannelItem {
     show: ctx.presence?.show ?? null,
     online: ctx.presence?.online ?? false,
     pm,
-    unknownPresence: !ctx.presence
+    unknownPresence: !ctx.presence,
+    members: c.members ?? null
   };
 }
 

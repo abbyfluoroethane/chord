@@ -8,7 +8,7 @@
   import { live } from './bridge';
   import { clock, dayLabel, sameDay } from './format';
   import { jumpToMessage } from './search';
-  import type { TimelineItem } from './types';
+  import { isGroup, type TimelineItem } from './types';
 
   type Row =
     | { kind: 'day'; key: string; label: string }
@@ -130,12 +130,16 @@
   <div class="list" bind:this={scroller} {onscroll} role="log" aria-label="Messages" aria-live="polite">
     {#if app.channel}
       <div class="welcome">
-        <h2>{app.channel.kind === 'dm' ? app.channel.name : `Welcome to #${app.channel.name}`}</h2>
-        <p>
-          {app.channel.kind === 'dm'
-            ? `This is the start of your direct messages with ${app.channel.name}.`
-            : 'This is the start of the channel.'}
-        </p>
+        {#if app.channel.kind === 'dm'}
+          <h2>{app.channel.name}</h2>
+          <p>This is the start of your direct messages with {app.channel.name}.</p>
+        {:else if isGroup(app.channel)}
+          <h2>{app.channel.name}</h2>
+          <p>Welcome to the beginning of the {app.channel.name} group.</p>
+        {:else}
+          <h2>Welcome to #{app.channel.name}</h2>
+          <p>This is the start of the channel.</p>
+        {/if}
       </div>
     {/if}
     {#each rows as row (row.key)}

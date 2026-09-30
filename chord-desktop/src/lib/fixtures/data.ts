@@ -92,6 +92,22 @@ function dm(
 
 export const channels: ChannelItem[] = [
   dm('Rin', 'rin@foid.space', 'chat', true, { unread: 2, mentions: 2 }),
+  // A room outside any space: a group chat among the DMs.
+  {
+    jid: 'pad-crew@conference.foid.space',
+    name: 'Pad Crew',
+    kind: 'channel',
+    unread: 3,
+    joined: true,
+    mentions: 0,
+    muted: false,
+    topic: null,
+    space: null,
+    avatar: null,
+    show: null,
+    online: false,
+    members: 4
+  },
   dm('Sam', 'sam@other.example', 'away', true),
   dm('Jo', 'jo@foid.space', 'dnd', true),
   dm('Lee', 'lee@foid.space', null, false),
@@ -180,9 +196,15 @@ const cast: MemberItem[] = [
   mem('lee@foid.space', 'Lee', 'member', null, false)
 ];
 
-export const members: Record<string, MemberItem[]> = Object.fromEntries(
-  Object.values(K).map((k, i) => [k, cast.filter((_, j) => j < 3 || (j + i) % 2 === 0 || j === 3)])
-);
+export const members: Record<string, MemberItem[]> = {
+  ...Object.fromEntries(
+    Object.values(K).map((k, i) => [k, cast.filter((_, j) => j < 3 || (j + i) % 2 === 0 || j === 3)])
+  ),
+  // The group chat on the home list keeps its members under the home key.
+  home: cast.filter((c) =>
+    ['abby@foid.space', 'rin@foid.space', 'bay@foid.space', 'kit@foid.space'].includes(c.id)
+  )
+};
 
 // --- timelines -------------------------------------------------------
 
@@ -500,6 +522,7 @@ export const timelines: Record<string, TimelineItem[]> = {
     { id: 'd2', who: 'rin', ts: at(0, 12, 41), body: 'Yes. One more thing about the checklist.', mention: true },
     { id: 'd3', who: 'rin', ts: at(0, 12, 42), body: 'The valve order on page two is wrong.', mention: true }
   ]),
+  'pad-crew@conference.foid.space': small(['bay', 'abby', 'rin', 'kit', 'bay'], 50),
   'sam@other.example': small(['sam', 'abby'], 40),
   'jo@foid.space': [],
   'lee@foid.space': []

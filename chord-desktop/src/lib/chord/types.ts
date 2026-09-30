@@ -75,6 +75,8 @@ export interface ChannelItem {
   unread: number;
   /** Direct chats only: the blocklist holds the peer. */
   blocked: boolean;
+  /** A joined room outside a space: the people in it now. */
+  members: number | null;
 }
 
 export interface SpaceItem {

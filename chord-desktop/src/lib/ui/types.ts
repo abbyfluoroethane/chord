@@ -31,6 +31,18 @@ export interface ChannelItem {
   pm?: { room: string; nick: string } | null;
   /** The bridge has no presence for this chat yet. The row shows no presence. */
   unknownPresence?: boolean;
+  /** A group chat: the people in it now. */
+  members?: number | null;
+}
+
+/** A room outside a space is a group chat. It sits with the DMs, as on Discord. */
+export function isGroup(c: ChannelItem): boolean {
+  return c.kind === 'channel' && c.space === null && !c.pm;
+}
+
+/** "3 Members" under the name of a group chat. Empty when the count is not known. */
+export function memberLine(n: number | null | undefined): string {
+  return n ? `${n} ${n === 1 ? 'Member' : 'Members'}` : '';
 }
 
 export interface MemberItem {

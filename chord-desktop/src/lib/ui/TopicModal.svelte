@@ -4,7 +4,7 @@
   import { onMount } from 'svelte';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
-  import type { ChannelItem } from './types';
+  import { isGroup, type ChannelItem } from './types';
 
   let { channel, onclose }: { channel: ChannelItem; onclose: () => void } = $props();
 
@@ -33,7 +33,7 @@
     }}
   >
     <div class="field">
-      <label for="room-topic">Topic of #{channel.name}</label>
+      <label for="room-topic">Topic of {isGroup(channel) ? '' : '#'}{channel.name}</label>
       <input id="room-topic" class="input" maxlength="300" bind:this={input} bind:value />
       <span class="meta">Everyone in the channel sees it in the header.</span>
     </div>

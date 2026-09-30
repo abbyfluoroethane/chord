@@ -3,22 +3,26 @@
   import AtSign from 'lucide-svelte/icons/at-sign';
   import Hash from 'lucide-svelte/icons/hash';
   import Users from 'lucide-svelte/icons/users';
+  import UserRound from 'lucide-svelte/icons/user-round';
   import Icon from './Icon.svelte';
   import PinsPanel from './PinsPanel.svelte';
   import Presence from './Presence.svelte';
   import SearchPanel from './SearchPanel.svelte';
-  import { app, HOME } from './app.svelte';
+  import { app } from './app.svelte';
   import { tooltip } from './tooltip';
-  import { presenceKind } from './types';
+  import { isGroup, presenceKind } from './types';
   import { ui } from './ui.svelte';
 
   const c = $derived(app.channel);
   const isDm = $derived(c?.kind === 'dm');
+  const group = $derived(!!c && isGroup(c));
+  // The rail button: the member list of a room or a group, the profile of a DM peer.
+  const railWhat = $derived(app.sideRail === 'profile' ? 'user profile' : 'member list');
 </script>
 
 <header class="bar">
   {#if c}
-    <span class="ico"><Icon icon={isDm ? AtSign : Hash} size={20} /></span>
+    <span class="ico"><Icon icon={isDm ? AtSign : group ? Users : Hash} size={20} /></span>
     <h1 class="title">{c.name}</h1>
     {#if isDm && c.unknownPresence !== true}
       <Presence kind={presenceKind(c.online, c.show)} size={10} />
@@ -29,16 +33,16 @@
     {/if}
   {/if}
   <span class="spacer"></span>
-  {#if app.selectedSpace !== HOME}
+  {#if app.sideRail}
     <button
       class="icon"
       class:on={ui.membersOpen}
-      aria-label="Member list"
+      aria-label={app.sideRail === 'profile' ? 'User profile' : 'Member list'}
       aria-pressed={ui.membersOpen}
-      use:tooltip={{ text: ui.membersOpen ? 'Hide member list' : 'Show member list', side: 'bottom' }}
+      use:tooltip={{ text: `${ui.membersOpen ? 'Hide' : 'Show'} ${railWhat}`, side: 'bottom' }}
       onclick={() => ui.toggleMembers()}
     >
-      <Icon icon={Users} size={20} />
+      <Icon icon={app.sideRail === 'profile' ? UserRound : Users} size={20} />
     </button>
   {/if}
   {#if c && !c.pm}<PinsPanel />{/if}

@@ -30,7 +30,7 @@ import type { QuickReactions } from './contextmenu.svelte';
 import type { MenuItem } from './Menu.svelte';
 import { channelLink } from './messagelink';
 import { pins } from './pins.svelte';
-import type { Attachment, ChannelItem, NotificationLevel, TimelineItem } from './types';
+import { isGroup, type Attachment, type ChannelItem, type NotificationLevel, type TimelineItem } from './types';
 import { ui } from './ui.svelte';
 
 /** Join groups of rows. A divider goes above the first row of every group but the first. */
@@ -179,8 +179,20 @@ export function levelSubmenu(jid: string, current: NotificationLevel): MenuItem[
   }));
 }
 
+/** Ask, then leave a group chat. Maps to api.leaveRoom(room), which also drops its bookmark. */
+export function leaveGroup(jid: string, name: string) {
+  ui.confirm = {
+    title: `Leave '${name}'`,
+    text: `Leave ${name}? You stop getting its messages, and it goes from your list. You can join again with an invite.`,
+    confirm: 'Leave group',
+    onconfirm: () => app.leaveRoom(jid)
+  };
+}
+
 export function channelMenu(c: ChannelItem, extra: MenuItem[] = []): MenuItem[] {
   const dm = c.kind === 'dm';
+  const group = isGroup(c);
+  const what = group ? 'group' : 'channel';
   const quiet = c.unread === 0 && c.mentions === 0;
   const read: MenuItem[] = [
     {
@@ -199,12 +211,12 @@ export function channelMenu(c: ChannelItem, extra: MenuItem[] = []): MenuItem[] 
     },
     c.muted
       ? {
-          label: dm ? 'Unmute conversation' : 'Unmute channel',
+          label: dm ? 'Unmute conversation' : `Unmute ${what}`,
           icon: Bell,
           onselect: () => void app.unmute(c.jid)
         }
       : {
-          label: dm ? 'Mute conversation' : 'Mute channel',
+          label: dm ? 'Mute conversation' : `Mute ${what}`,
           icon: BellOff,
           submenu: MUTES.map((m) => ({
             label: m.label,
@@ -216,7 +228,7 @@ export function channelMenu(c: ChannelItem, extra: MenuItem[] = []): MenuItem[] 
     ? []
     : [
         {
-          label: 'Copy channel address',
+          label: `Copy ${what} address`,
           icon: Copy,
           onselect: () => void copyText(c.jid, 'Address copied.')
         }
@@ -225,16 +237,18 @@ export function channelMenu(c: ChannelItem, extra: MenuItem[] = []): MenuItem[] 
     !dm && c.joined
       ? [
           {
-            label: 'Leave channel',
+            label: `Leave ${what}`,
             icon: LogOut,
             danger: true,
             onselect: () =>
-              (ui.confirm = {
-                title: 'Leave channel',
-                text: `Leave #${c.name}? You stop getting its messages. You can join again later.`,
-                confirm: 'Leave channel',
-                onconfirm: () => app.leaveRoom(c.jid)
-              })
+              group
+                ? leaveGroup(c.jid, c.name)
+                : (ui.confirm = {
+                    title: 'Leave channel',
+                    text: `Leave #${c.name}? You stop getting its messages. You can join again later.`,
+                    confirm: 'Leave channel',
+                    onconfirm: () => app.leaveRoom(c.jid)
+                  })
           }
         ]
       : [];

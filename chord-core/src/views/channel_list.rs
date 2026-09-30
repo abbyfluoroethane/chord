@@ -69,6 +69,9 @@ pub struct ChannelItem {
     pub unread: u32,
     /// For a direct chat: the blocklist (XEP-0191) holds the peer. Always false otherwise.
     pub blocked: bool,
+    /// For a joined room outside a space: the people in it now, us included. A UI shows it
+    /// as the size of a group chat. `None` for other items.
+    pub members: Option<u32>,
 }
 
 impl ViewItem for ChannelItem {
@@ -105,7 +108,8 @@ pub(crate) fn unread(q: &QueryCtx<'_>, peer: &str) -> rusqlite::Result<u32> {
         .query_row(params![q.account_id, peer], |row| row.get(0))
 }
 
-/// Direct chats by newest activity, then the rooms that are in no space, by name.
+/// Direct chats and the rooms that are in no space (group chats), by newest activity. The
+/// rooms with no message yet come last, by name.
 fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
     let conn = q.store.conn();
     let mut out = Vec::new();
@@ -137,12 +141,15 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
             last_activity: Some(last),
             unread: 0,
             blocked: false,
+            members: None,
         });
     }
     let mut stmt = conn.prepare_cached(
         "SELECT r.jid, r.name, r.joined,
                 (SELECT MAX(timestamp) FROM messages m
-                 WHERE m.account_id = r.account_id AND m.peer = r.jid)
+                 WHERE m.account_id = r.account_id AND m.peer = r.jid),
+                (SELECT COUNT(*) FROM occupants o
+                 WHERE o.account_id = r.account_id AND o.room = r.jid)
          FROM rooms r
          WHERE r.account_id = ?1 AND (r.bookmarked = 1 OR r.joined = 1)
            AND NOT EXISTS (SELECT 1 FROM space_items s
@@ -152,20 +159,26 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
     let rooms = stmt.query_map(params![q.account_id], |row| {
         let jid: String = row.get(0)?;
         let name: Option<String> = row.get(1)?;
+        let joined = row.get::<_, i64>(2)? != 0;
+        let members: u32 = row.get(4)?;
         Ok(ChannelItem {
             name: name.unwrap_or_else(|| local_part(&jid)),
             jid,
             kind: ChannelKind::Room,
             category: None,
-            joined: row.get::<_, i64>(2)? != 0,
+            joined,
             last_activity: row.get(3)?,
             unread: 0,
             blocked: false,
+            members: (joined && members > 0).then_some(members),
         })
     })?;
     for room in rooms {
         out.push(room?);
     }
+    // As in a DM list: the newest first. `None` sorts last, and the sort keeps the name
+    // order of the rooms without a message.
+    out.sort_by_key(|item| std::cmp::Reverse(item.last_activity));
     Ok(out)
 }
 
@@ -192,6 +205,7 @@ fn space(q: &QueryCtx<'_>, service: &str, node: &str) -> rusqlite::Result<Vec<Ch
             last_activity: row.get(4)?,
             unread: 0,
             blocked: false,
+            members: None,
         })
     })?;
     rows.collect()
@@ -225,6 +239,81 @@ mod tests {
         .unwrap()
         .unwrap()
         .rowid
+    }
+
+    #[test]
+    fn group_chats_sit_among_the_dms_by_activity_with_a_member_count() {
+        let store = Store::open_in_memory().unwrap();
+        let account = BareJid::new("alice@chord.localhost").unwrap();
+        let account_id = ensure_account(store.conn(), account.as_str()).unwrap();
+        let q = QueryCtx {
+            store: &store,
+            account_id,
+            account: &account,
+        };
+        let conn = store.conn();
+        let at = |peer: &str, ms: i64| {
+            put(
+                &store,
+                account_id,
+                &format!("{peer}-{ms}"),
+                Direction::In,
+                peer,
+            );
+            if peer.contains("@muc.") {
+                conn.execute(
+                    "UPDATE messages SET kind = 'groupchat' WHERE stanza_id = ?1",
+                    params![format!("{peer}-{ms}")],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "UPDATE messages SET timestamp = ?1 WHERE stanza_id = ?2",
+                params![ms, format!("{peer}-{ms}")],
+            )
+            .unwrap();
+        };
+        let room = |jid: &str, joined: bool, occupants: &[&str]| {
+            conn.execute(
+                "INSERT INTO rooms (account_id, jid, name, joined, bookmarked) VALUES (?1, ?2, ?3, ?4, 1)",
+                params![account_id, jid, jid.split('@').next().unwrap(), joined],
+            )
+            .unwrap();
+            for nick in occupants {
+                conn.execute(
+                    "INSERT INTO occupants (account_id, room, nick) VALUES (?1, ?2, ?3)",
+                    params![account_id, jid, nick],
+                )
+                .unwrap();
+            }
+        };
+        room("hikers@muc.chord.localhost", true, &["al", "bo", "cy"]);
+        room("quiet@muc.chord.localhost", true, &[]);
+        room("zebra@muc.chord.localhost", false, &[]);
+        room("apes@muc.chord.localhost", false, &[]);
+        at("bob@chord.localhost", 100);
+        at("hikers@muc.chord.localhost", 200);
+        at("carol@chord.localhost", 300);
+        let items = query(&q, &ChannelScope::Home).unwrap();
+        let order: Vec<&str> = items.iter().map(|i| i.jid.as_str()).collect();
+        assert_eq!(
+            order,
+            [
+                "carol@chord.localhost",
+                "hikers@muc.chord.localhost",
+                "bob@chord.localhost",
+                // No message yet: by name.
+                "apes@muc.chord.localhost",
+                "quiet@muc.chord.localhost",
+                "zebra@muc.chord.localhost",
+            ]
+        );
+        let members = |jid: &str| items.iter().find(|i| i.jid == jid).unwrap().members;
+        assert_eq!(members("hikers@muc.chord.localhost"), Some(3));
+        // A joined room with no occupant yet, a room we left, and a DM: no count.
+        assert_eq!(members("quiet@muc.chord.localhost"), None);
+        assert_eq!(members("zebra@muc.chord.localhost"), None);
+        assert_eq!(members("bob@chord.localhost"), None);
     }
 
     #[test]
