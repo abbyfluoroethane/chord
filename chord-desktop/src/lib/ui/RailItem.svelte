@@ -84,7 +84,6 @@
   .tile:hover,
   .tile:focus-visible,
   .tile.selected,
-  .tile.home,
   .tile.folder {
     width: 44px;
     height: 44px;
@@ -92,9 +91,11 @@
     border-width: 0;
     border-radius: var(--radius-circle-icon);
   }
-  .tile.home {
-    /* Home is always a squircle, with the Chord mark. */
-    border-radius: var(--radius-circle-icon);
+  /* Home, with the Chord mark: a neutral circle at rest, like the circles. Hover and
+     selection make it an amber squircle. */
+  .tile.home:hover,
+  .tile.home:focus-visible,
+  .tile.home.selected {
     background: var(--brand);
     color: var(--on-brand);
   }
