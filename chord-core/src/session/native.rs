@@ -42,8 +42,10 @@ use xmpp_parsers::ns;
 use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stream_features::StreamFeatures;
 
+use super::backoff::{Backoff, FIRST_DELAY, next_delay};
 use super::binding::choose_binding;
 use super::connector::{Connector, Mode};
+use super::mechanisms::password_mechanisms;
 use super::{
     AuthFailure, ConnectError, DisconnectReason, SaslRetry, ServerAddr, Session, SessionConfig,
     SessionError, SessionEvent, TICK, sasl_retry,
@@ -67,10 +69,6 @@ const STREAM_TIMEOUTS: Timeouts = Timeouts {
 
 /// Time limit for a clean close of the `StanzaStream`.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// First and largest delay between two login attempts. Same values as `new_c2s`.
-const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// After a fatal auth failure on a reconnect, the connector waits this long for Chord to
 /// close the session. Then it drops the slot anyway, so it never holds it forever.
@@ -200,7 +198,8 @@ async fn first_login<C: ServerConnector>(
     jid: &Jid,
     password: &str,
 ) -> Result<Connection, ConnectError> {
-    let mut delay = FIRST_RETRY_DELAY;
+    let backoff = Backoff::new();
+    let mut delay = FIRST_DELAY;
     loop {
         match login(server.clone(), jid, password).await {
             Ok(connection) => return Ok(connection),
@@ -208,9 +207,10 @@ async fn first_login<C: ServerConnector>(
             Err(LoginError::Unreachable(msg)) => return Err(ConnectError::Unreachable(msg)),
             Err(LoginError::TlsInvalid(msg)) => return Err(ConnectError::TlsInvalid(msg)),
             Err(LoginError::Temporary(msg)) => {
-                log::info!("temporary login failure: {msg}. Retrying in {delay:?}.");
-                tokio::time::sleep(delay).await;
-                delay = (delay * 2).min(MAX_RETRY_DELAY);
+                let wait = backoff.wait(delay);
+                log::info!("temporary login failure: {msg}. Retrying in {wait:?}.");
+                tokio::time::sleep(wait).await;
+                delay = next_delay(delay);
             }
         }
     }
@@ -229,9 +229,11 @@ impl NativeSession {
         let (auth_tx, auth_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let mut first = first;
+        let backoff = Arc::new(Mutex::new(Backoff::new()));
         let connector = Box::new(
             move |_: Option<String>, slot: oneshot::Sender<Connection>| {
                 if let Some(connection) = first.take() {
+                    lock(&backoff).connected(FIRST_DELAY);
                     // The receiver lives in the worker, which called us. It cannot be gone yet.
                     let _ = slot.send(connection);
                     return;
@@ -243,6 +245,7 @@ impl NativeSession {
                     auth_tx.clone(),
                     shutdown_rx.clone(),
                     login_timeout,
+                    Arc::clone(&backoff),
                 ));
             },
         );
@@ -280,12 +283,13 @@ async fn retry_login<T, F, Fut, R>(
     auth_failed: mpsc::UnboundedSender<AuthFailure>,
     shutdown: watch::Receiver<bool>,
     login_timeout: Duration,
+    backoff: Arc<Mutex<Backoff>>,
 ) where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, LoginError>>,
     R: FnOnce(oneshot::Sender<T>),
 {
-    match login_until_stop(attempt, auth_failed, shutdown, login_timeout).await {
+    match login_until_stop(attempt, auth_failed, shutdown, login_timeout, &backoff).await {
         Some(connection) => {
             // An error means that the worker is gone. Nothing waits for the connection.
             let _ = slot.send(connection);
@@ -301,19 +305,34 @@ async fn login_until_stop<T, F, Fut>(
     auth_failed: mpsc::UnboundedSender<AuthFailure>,
     mut shutdown: watch::Receiver<bool>,
     login_timeout: Duration,
+    backoff: &Mutex<Backoff>,
 ) -> Option<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, LoginError>>,
 {
-    let mut delay = FIRST_RETRY_DELAY;
+    // The last stream can be short: the server took the login and dropped the stream. Then
+    // the loop keeps the delay, and waits before its first attempt (CORESESSION-14).
+    let (mut delay, wait_first) = lock(backoff).start();
+    if wait_first {
+        let wait = lock(backoff).wait(delay);
+        log::info!("the last stream was short. Waiting {wait:?} before the login.");
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = shutdown.wait_for(|stop| *stop) => return None,
+        }
+        delay = next_delay(delay);
+    }
     loop {
         let result = tokio::select! {
             result = tokio::time::timeout(login_timeout, attempt()) => result,
             _ = shutdown.wait_for(|stop| *stop) => return None,
         };
         match result {
-            Ok(Ok(connection)) => return Some(connection),
+            Ok(Ok(connection)) => {
+                lock(backoff).connected(delay);
+                return Some(connection);
+            }
             Ok(Err(LoginError::Fatal(failure))) => {
                 log::warn!("login failed on reconnect: {failure}. Stopping.");
                 let _ = auth_failed.send(failure);
@@ -324,12 +343,17 @@ where
             Ok(Err(error)) => log::info!("reconnect failed: {error}. Retrying in {delay:?}."),
             Err(_) => log::info!("reconnect timed out. Retrying in {delay:?}."),
         }
+        let wait = lock(backoff).wait(delay);
         tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
+            _ = tokio::time::sleep(wait) => {}
             _ = shutdown.wait_for(|stop| *stop) => return None,
         }
-        delay = (delay * 2).min(MAX_RETRY_DELAY);
+        delay = next_delay(delay);
     }
+}
+
+fn lock(backoff: &Mutex<Backoff>) -> std::sync::MutexGuard<'_, Backoff> {
+    backoff.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Fill the slot with a connection whose server end is closed already.
@@ -572,6 +596,8 @@ impl core::fmt::Display for LoginError {
 ///   `choose_binding` says so (session/binding.rs). With binding data, the sasl crate names
 ///   SCRAM only as `-PLUS` (sasl-0.5.2 src/client/mechanisms/scram.rs:103-108), so
 ///   `client_login` skips SCRAM and falls back to PLAIN (client/login.rs:36-45).
+/// - The mechanism list has no ANONYMOUS, and no PLAIN when the server offers a SCRAM that
+///   we can use (session/mechanisms.rs).
 /// - It logs the SASL mechanism.
 async fn login<C: ServerConnector>(
     server: C,
@@ -597,13 +623,14 @@ async fn login<C: ServerConnector>(
         &features.sasl_mechanisms,
         features.sasl_cb.as_ref(),
     );
+    let mechanisms = password_mechanisms(&features.sasl_mechanisms, &channel_binding);
     let creds = Credentials::default()
         .with_username(username)
         .with_password(password)
         .with_channel_binding(channel_binding);
-    let mechanism = chosen_mechanism(&creds, &features.sasl_mechanisms);
+    let mechanism = chosen_mechanism(&creds, &mechanisms);
 
-    let stream = tokio_xmpp::client_login(stream, features.sasl_mechanisms, creds)
+    let stream = tokio_xmpp::client_login(stream, mechanisms, creds)
         .await
         .map_err(map_error)?;
     log::info!(
@@ -704,6 +731,11 @@ mod tests {
 
     const LOGIN_TIMEOUT: Duration = Duration::from_secs(15);
 
+    /// A backoff with no jitter, for exact times.
+    fn exact() -> Arc<Mutex<Backoff>> {
+        Arc::new(Mutex::new(Backoff::exact()))
+    }
+
     #[tokio::test(start_paused = true)]
     async fn fatal_failure_reports_once_and_drops_slot_on_shutdown() {
         let (calls, attempt) = scripted::<u32>(vec![Err(not_authorized())]);
@@ -717,6 +749,7 @@ mod tests {
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
+            exact(),
         ));
 
         let failure = auth_rx.recv().await.unwrap();
@@ -745,6 +778,7 @@ mod tests {
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
+            exact(),
         ));
         assert!(slot_rx.await.is_err());
         assert_eq!(start.elapsed(), FATAL_SLOT_HOLD);
@@ -766,6 +800,7 @@ mod tests {
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
+            exact(),
         ));
 
         assert_eq!(slot_rx.await.unwrap(), 7);
@@ -776,6 +811,37 @@ mod tests {
             auth_rx.try_recv().is_err(),
             "no auth failure for a temporary error"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_short_stream_keeps_the_delay_for_the_next_login() {
+        // The last stream lived 0 s and the delay was 4 s: wait 4 s, then fail once and wait
+        // 8 s. A server that takes the login and drops the stream does not get one attempt
+        // per second.
+        let backoff = exact();
+        backoff.lock().unwrap().connected(Duration::from_secs(4));
+        let (calls, attempt) = scripted(vec![
+            Err(LoginError::Unreachable("refused".into())),
+            Ok(7_u32),
+        ]);
+        let (slot, slot_rx) = oneshot::channel();
+        let (auth_tx, _auth_rx) = mpsc::unbounded_channel();
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let start = tokio::time::Instant::now();
+        tokio::spawn(retry_login(
+            attempt,
+            slot,
+            drop,
+            auth_tx,
+            shutdown_rx,
+            LOGIN_TIMEOUT,
+            Arc::clone(&backoff),
+        ));
+        assert_eq!(slot_rx.await.unwrap(), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(start.elapsed(), Duration::from_secs(4 + 8));
+        // The stream is new: the next loop would start with a delay of 16 s.
+        assert_eq!(backoff.lock().unwrap().start().0, Duration::from_secs(16));
     }
 
     #[tokio::test(start_paused = true)]
@@ -792,6 +858,7 @@ mod tests {
             auth_tx,
             shutdown_rx,
             LOGIN_TIMEOUT,
+            exact(),
         ));
         tokio::task::yield_now().await;
         shutdown_tx.send(true).unwrap();

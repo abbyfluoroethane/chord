@@ -11,9 +11,13 @@ pub use xmpp_parsers::sasl::DefinedCondition as SaslCondition;
 use xmpp_parsers::stanza::Stanza;
 
 #[cfg(feature = "native-session")]
+mod backoff;
+#[cfg(feature = "native-session")]
 mod binding;
 #[cfg(feature = "native-session")]
 mod connector;
+#[cfg(feature = "native-session")]
+mod mechanisms;
 #[cfg(feature = "native-session")]
 pub mod native;
 #[cfg(feature = "native-session")]
