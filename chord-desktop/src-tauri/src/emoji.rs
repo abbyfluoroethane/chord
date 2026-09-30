@@ -252,9 +252,35 @@ fn install_from(dir: &Path, p: &Pack, bytes: &[u8]) -> Res<()> {
         }
     }
     std::fs::write(temp.join(DONE), p.url).map_err(|e| io("write an emoji", e))?;
-    let target = dir.join(p.id);
-    let _ = std::fs::remove_dir_all(&target);
-    std::fs::rename(&temp, &target).map_err(|e| io("move the emoji folder", e))
+    swap_in(&temp, &dir.join(p.id), &dir.join(format!(".{}-old", p.id)))
+        .map_err(|e| io("move the emoji folder", e))
+}
+
+/// Put the folder `temp` in place of `target`. The old folder moves to `backup` first and
+/// comes back if the last rename fails, so a failure never leaves the pack missing. A
+/// backup that an earlier crash left behind is restored if `target` is gone, else dropped.
+fn swap_in(temp: &Path, target: &Path, backup: &Path) -> std::io::Result<()> {
+    if backup.exists() {
+        if target.exists() {
+            std::fs::remove_dir_all(backup)?;
+        } else {
+            std::fs::rename(backup, target)?;
+        }
+    }
+    let had_old = target.exists();
+    if had_old {
+        std::fs::rename(target, backup)?;
+    }
+    if let Err(e) = std::fs::rename(temp, target) {
+        if had_old {
+            let _ = std::fs::rename(backup, target);
+        }
+        return Err(e);
+    }
+    if had_old {
+        let _ = std::fs::remove_dir_all(backup);
+    }
+    Ok(())
 }
 
 /// One install at a time, so two requests do not write the same folder.
@@ -422,6 +448,49 @@ mod tests {
             std::env::temp_dir().join(format!("chord-emoji-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    fn folder(dir: &Path, name: &str, file: &str) -> PathBuf {
+        let d = dir.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(file), "x").unwrap();
+        d
+    }
+
+    #[test]
+    fn a_swap_replaces_the_old_folder() {
+        let dir = temp_dir("swap");
+        let temp = folder(&dir, "new", "b");
+        let target = folder(&dir, "pack", "a");
+        let backup = dir.join("old");
+        swap_in(&temp, &target, &backup).unwrap();
+        assert!(target.join("b").exists() && !target.join("a").exists());
+        assert!(!backup.exists() && !temp.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_swap_keeps_the_old_folder() {
+        let dir = temp_dir("swap-fail");
+        let target = folder(&dir, "pack", "a");
+        let backup = dir.join("old");
+        // The new folder is missing, so the last rename fails.
+        assert!(swap_in(&dir.join("gone"), &target, &backup).is_err());
+        assert!(target.join("a").exists());
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_backup_from_a_crash_comes_back() {
+        let dir = temp_dir("swap-crash");
+        let backup = folder(&dir, "old", "a");
+        let temp = folder(&dir, "new", "b");
+        let target = dir.join("pack");
+        swap_in(&temp, &target, &backup).unwrap();
+        assert!(target.join("b").exists());
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
