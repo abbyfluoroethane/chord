@@ -66,7 +66,10 @@
       const code = (e as { code?: string } | null)?.code;
       error =
         code === 'gifUnavailable'
-          ? { text: 'GIF search is not set up in this build of Chord.', retry: false }
+          ? {
+              text: 'This build of Chord has no KLIPY key, so GIF search is off. The file docs/gifs.md tells you how to add one.',
+              retry: false
+            }
           : { text: plainError(e), retry: true };
     } finally {
       if (id === request) loading = false;
