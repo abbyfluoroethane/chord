@@ -227,6 +227,27 @@ export interface SpaceInfo {
   accessModel: string | null;
 }
 
+/** What `spaceInfo` reads about a space. `channels` is null when the service hides the items. */
+export interface SpaceCard {
+  service: string;
+  node: string;
+  name: string;
+  description: string | null;
+  accessModel: string | null;
+  channels: number | null;
+}
+
+/** What `roomInfo` reads about a room. */
+export interface RoomCard {
+  jid: string;
+  name: string | null;
+  description: string | null;
+  subject: string | null;
+  occupants: number | null;
+  passwordProtected: boolean;
+  membersOnly: boolean;
+}
+
 export interface JoinRequest {
   jid: string;
   subid: string | null;

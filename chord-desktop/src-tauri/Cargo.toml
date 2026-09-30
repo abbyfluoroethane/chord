@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# The xmpp: link handler (src/links.rs). The scheme goes into the app bundle with the config
+# in tauri.conf.json.
+tauri-plugin-deep-link = "2"
 # Desktop notifications for ClientEvent::Notification (src/notify.rs).
 tauri-plugin-notification = "2"
 # The system file dialog for the upload button. It gives the bridge a real file path.
@@ -43,6 +46,11 @@ flate2 = "1"
 tar = "0.4"
 sha2 = "0.10"
 base64 = "0.22"
+
+# One running app. On Windows and Linux the OS starts a second copy for an xmpp: link. The
+# `deep-link` feature passes the link to the first copy, which then gets the link event.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 
 # The system keychain for the saved password (src/keychain.rs). Each platform names its
 # own store. A target with no store feature would fall back to a mock store that keeps

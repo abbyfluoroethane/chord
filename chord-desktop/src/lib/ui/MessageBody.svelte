@@ -1,6 +1,7 @@
 <script lang="ts">
   // Message text with Discord markdown. The parser makes a tree and this file draws it with
-  // Svelte markup. No {@html}. Links are only http or https.
+  // Svelte markup. No {@html}. Links are http, https, or xmpp:. A click on an xmpp: link
+  // opens the question dialog of Chord and never goes to the OS.
   import { app } from './app.svelte';
   import CodeBlock from './CodeBlock.svelte';
   import EmojiText from './EmojiText.svelte';
@@ -8,6 +9,7 @@
   import Spoiler from './Spoiler.svelte';
   import { loadShortcodes, mayHaveShortcode, shortcodesNow, type Shortcodes } from './shortcodes';
   import TimeChip from './TimeChip.svelte';
+  import { xmppLinks } from './xmpplinks.svelte';
 
   let { body }: { body: string } = $props();
 
@@ -32,6 +34,13 @@
 {#snippet inline(nodes: Inline[])}{#each nodes as n, i (i)}{#if n.t === 'text'}<EmojiText
         text={n.v}
       />{:else if n.t === 'code'}<code class="inline">{n.v}</code
+      >{:else if n.t === 'link' && n.xmpp}<a
+        href={n.href}
+        title={n.masked ? n.href : undefined}
+        onclick={(e) => {
+          e.preventDefault();
+          xmppLinks.open(n.href);
+        }}>{@render inline(n.children)}</a
       >{:else if n.t === 'link'}<a
         href={n.href}
         title={n.masked ? n.href : undefined}

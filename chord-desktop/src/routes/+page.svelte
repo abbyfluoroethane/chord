@@ -8,6 +8,7 @@
   import LoginScreen from '$lib/ui/LoginScreen.svelte';
   import Splash from '$lib/ui/Splash.svelte';
   import { session } from '$lib/ui/session.svelte';
+  import { startDeepLinks } from '$lib/ui/deeplink';
 
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -15,8 +16,11 @@
     // The Svelte splash or the app is on screen now. Remove the inline splash of app.html.
     document.getElementById('boot-splash')?.remove();
     void session.boot();
+    // Links that open the app must reach the queue before the sign-in ends.
+    const stop = startDeepLinks();
     const conn = new URLSearchParams(location.search).get('conn');
     if (conn === 'connected' || conn === 'reconnecting') session.force(conn);
+    return () => void stop.then((f) => f());
   });
 </script>
 

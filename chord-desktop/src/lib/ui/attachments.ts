@@ -54,8 +54,12 @@ export async function saveImage(file: Attachment): Promise<void> {
   }
 }
 
-/** Open a link in the system browser. */
+/** Open a link in the system browser. An xmpp: link asks the user inside Chord instead. */
 export async function openLink(url: string): Promise<void> {
+  if (/^xmpp:/i.test(url)) {
+    (await import('./xmpplinks.svelte')).xmppLinks.open(url);
+    return;
+  }
   if (!/^(https?|mailto):/i.test(url)) return;
   if (!live) {
     window.open(url, '_blank', 'noopener,noreferrer');

@@ -12,6 +12,7 @@ mod error;
 mod gif;
 mod keychain;
 mod link_preview;
+mod links;
 mod notify;
 mod settings;
 mod state;
@@ -19,11 +20,18 @@ mod theme_fetch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // The single-instance plugin must be the first plugin. A second copy of the app sends its
+    // arguments (an xmpp: link on Windows and Linux) to the first copy and quits.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(links::second_instance));
+    let builder = builder
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(state::AppState::default());
+        .manage(state::AppState::default())
+        .setup(links::setup);
     emoji::register(avatars::register(builder))
         .invoke_handler(tauri::generate_handler![
             commands::open,
@@ -54,6 +62,7 @@ pub fn run() {
             commands::upload,
             commands::load_older,
             commands::join_room,
+            commands::room_info,
             commands::leave_room,
             commands::change_nick,
             commands::send_private,
@@ -69,6 +78,7 @@ pub fn run() {
             commands::configure_room,
             commands::browse_spaces,
             commands::join_space,
+            commands::space_info,
             commands::leave_space,
             commands::create_space,
             commands::delete_space,

@@ -16,13 +16,16 @@
   import QuickSwitcher from './QuickSwitcher.svelte';
   import SettingsOverlay from './SettingsOverlay.svelte';
   import ShortcutsModal from './ShortcutsModal.svelte';
+  import XmppLinkModal from './XmppLinkModal.svelte';
   import Toast from './Toast.svelte';
   import { app, HOME } from './app.svelte';
   import { contactsStore } from './contacts.svelte';
   import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
+  import { session } from './session.svelte';
   import { spaceKey } from './types';
   import { ui } from './ui.svelte';
+  import { xmppLinks } from './xmpplinks.svelte';
 
   onMount(() => {
     ui.load();
@@ -45,6 +48,11 @@
   $effect(() => {
     const ids = app.spaces.map(spaceKey);
     if (app.spacesReady) rail.sync(ids);
+  });
+
+  // A link that arrived before the sign-in waits. Ask about it when the session is up.
+  $effect(() => {
+    if (session.state === 'connected') xmppLinks.flush();
   });
 
   function keydown(e: KeyboardEvent) {
@@ -95,6 +103,9 @@
 {#if ui.shortcutsOpen}<ShortcutsModal onclose={() => (ui.shortcutsOpen = false)} />{/if}
 {#if ui.forwarding}
   <ForwardModal item={ui.forwarding} onclose={() => (ui.forwarding = null)} />
+{/if}
+{#if xmppLinks.asking}
+  <XmppLinkModal link={xmppLinks.asking} onclose={() => xmppLinks.dismiss()} />
 {/if}
 {#if ui.confirm}<ConfirmModal state={ui.confirm} onclose={() => (ui.confirm = null)} />{/if}
 {#if ui.circleDialog}

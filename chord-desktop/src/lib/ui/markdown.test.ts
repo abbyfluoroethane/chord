@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseMarkdown, previewUrls, type Block, type Inline } from './markdown';
+import { parseMarkdown, previewUrls, xmppUrls, type Block, type Inline } from './markdown';
 
 /** The inline nodes of a one-paragraph message. */
 function inl(body: string, opt = {}): Inline[] {
@@ -143,6 +143,49 @@ describe('links', () => {
       'https://a.example.org',
       'https://b.example.org'
     ]);
+  });
+});
+
+describe('xmpp links', () => {
+  const space = 'xmpp:pubsub.chord.example?pubsub;action=subscribe;node=launch-ops';
+  const room = 'xmpp:dev@conference.chord.example?join';
+
+  it('reads a bare xmpp: link', () => {
+    expect(inl(`Join us: ${space}`)).toEqual([
+      text('Join us: '),
+      { t: 'link', href: space, children: [text(space)], masked: false, preview: true, xmpp: true }
+    ]);
+  });
+  it('drops the punctuation after the link', () => {
+    const n = inl(`Try ${room}.`)[1];
+    expect(n).toMatchObject({ t: 'link', href: room });
+    expect(inl(`(${room})`)[1]).toMatchObject({ t: 'link', href: room });
+  });
+  it('reads a masked link and a <uri>', () => {
+    expect(inl(`[the room](${room})`)[0]).toMatchObject({
+      t: 'link',
+      href: room,
+      masked: true,
+      xmpp: true
+    });
+    expect(inl(`<${room}>`)[0]).toMatchObject({ t: 'link', href: room, preview: false, xmpp: true });
+  });
+  it('leaves a bad xmpp: link as text', () => {
+    for (const bad of ['xmpp:', 'xmpp:sam@chord.example?remove', 'xmpp:p.example.org?;node=']) {
+      expect(inl(`see ${bad}`).some((n) => n.t === 'link')).toBe(false);
+    }
+    expect(inl('[x](xmpp:sam@chord.example?remove)').some((n) => n.t === 'link')).toBe(false);
+  });
+  it('needs a word boundary', () => {
+    expect(inl('linuxxmpp:sam@chord.example').some((n) => n.t === 'link')).toBe(false);
+  });
+  it('lists xmpp: links apart from web links', () => {
+    const body = `${space} https://a.example.org <${room}> \`${room}\` [r](${room})`;
+    expect(xmppUrls(body)).toEqual([space, room]);
+    expect(previewUrls(body)).toEqual(['https://a.example.org']);
+  });
+  it('finds xmpp: links in quotes and lists', () => {
+    expect(xmppUrls(`> ${room}\n- ${space}`)).toEqual([room, space]);
   });
 });
 

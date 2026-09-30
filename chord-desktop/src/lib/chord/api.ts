@@ -24,9 +24,11 @@ import type {
   PendingJoin,
   PushRegistration,
   RoomAffiliation,
+  RoomCard,
   RoomSettings,
   Settings,
   SpaceAccess,
+  SpaceCard,
   SpaceInfo,
   SpaceItem,
   TimelineItem
@@ -199,6 +201,8 @@ export const loadOlder = (peer: string) => invoke<void>('load_older', { peer });
 
 export const joinRoom = (room: string, nick: string, password?: string) =>
   invoke<void>('join_room', { room, nick, password: password ?? null });
+/** Read a room with a disco#info query. It does not join the room. */
+export const roomInfo = (room: string) => invoke<RoomCard>('room_info', { room });
 export const leaveRoom = (room: string) => invoke<void>('leave_room', { room });
 export const changeNick = (room: string, nick: string) =>
   invoke<void>('change_nick', { room, nick });
@@ -230,6 +234,9 @@ export const configureRoom = (room: string, settings: RoomSettings) =>
 // ---------------------------------------------------------------- spaces
 
 export const browseSpaces = () => invoke<SpaceInfo[]>('browse_spaces');
+/** Read a space (name, description, room count). It does not join the space. */
+export const spaceInfo = (service: string, node: string) =>
+  invoke<SpaceCard>('space_info', { service, node });
 export const joinSpace = (service: string, node: string) =>
   invoke<JoinOutcome>('join_space', { service, node });
 export const leaveSpace = (service: string, node: string) =>

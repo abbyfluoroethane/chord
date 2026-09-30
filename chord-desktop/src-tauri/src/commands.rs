@@ -7,11 +7,13 @@ use std::path::PathBuf;
 
 use chord_core::actor;
 use chord_core::actor::ClientEvent;
-use chord_core::features::muc::{RoomAffiliation, RoomSettings};
+use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomSettings};
 use chord_core::features::notify::{NotificationLevel, NotificationSetting};
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
-use chord_core::features::spaces::{JoinOutcome, JoinRequest, PendingJoin, SpaceAccess, SpaceInfo};
+use chord_core::features::spaces::{
+    JoinOutcome, JoinRequest, PendingJoin, SpaceAccess, SpaceCard, SpaceInfo,
+};
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::native::NativeSession;
 use chord_core::session::{ServerAddr, SessionConfig};
@@ -438,6 +440,12 @@ pub async fn join_room(
         .await?)
 }
 
+/// Read a room with a disco#info query. It does not join the room.
+#[tauri::command]
+pub async fn room_info(state: State<'_, AppState>, room: String) -> Res<RoomCard> {
+    Ok(state.handle()?.room_info(bare(&room)?).await?)
+}
+
 #[tauri::command]
 pub async fn leave_room(state: State<'_, AppState>, room: String) -> Res<()> {
     Ok(state.handle()?.leave_room(bare(&room)?).await?)
@@ -562,6 +570,16 @@ pub async fn configure_room(
 #[tauri::command]
 pub async fn browse_spaces(state: State<'_, AppState>) -> Res<Vec<SpaceInfo>> {
     Ok(state.handle()?.browse_spaces().await?)
+}
+
+/// Read a space (name, description, room count). It does not join the space.
+#[tauri::command]
+pub async fn space_info(
+    state: State<'_, AppState>,
+    service: String,
+    node: String,
+) -> Res<SpaceCard> {
+    Ok(state.handle()?.space_info(&service, &node).await?)
 }
 
 #[tauri::command]

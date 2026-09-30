@@ -18,6 +18,7 @@
   import { app } from './app.svelte';
   import { ui } from './ui.svelte';
   import { live } from './bridge';
+  import { spaceInviteLink } from './xmppuri';
   import type { NotificationLevel } from './types';
 
   let { kind, space, onclose }: { kind: DialogKind; space: string; onclose: () => void } = $props();
@@ -66,7 +67,7 @@
     mute = level === 'nothing';
   });
 
-  const link = $derived(circle ? `xmpp:${circle.service}?pubsub;action=subscribe;node=${encodeURIComponent(circle.node)}` : '');
+  const link = $derived(circle ? spaceInviteLink(circle.service, circle.node) : '');
   const titles: Record<DialogKind, string> = {
     invite: 'Invite people',
     settings: 'Space settings',

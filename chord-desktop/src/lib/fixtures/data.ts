@@ -408,6 +408,18 @@ const opsGeneral = build([
       'The log script:\n```python\nfor row in rows:\n    if row.pressure > 12:\n        print("high", row.id)\n```\n' +
       'The fix is ||a loose fitting||. Full notes are in [the wiki](https://example.org/wiki/stand).'
   },
+  {
+    id: 'g16b',
+    who: 'sam',
+    ts: at(0, 13, 26),
+    body: 'I made a space for people who love synths. Join here: xmpp:chat.foid.space?pubsub;action=subscribe;node=synth'
+  },
+  {
+    id: 'g16c',
+    who: 'kit',
+    ts: at(0, 13, 28),
+    body: 'The hangar crew talks in this room: xmpp:hangar@chat.foid.space?join'
+  },
   { id: 'g17', who: 'jo', ts: at(0, 13, 30), body: ':tada: :fire:' }
 ]);
 
@@ -458,6 +470,15 @@ export const linkPreviews: Record<string, LinkPreview> = {
     image: pic(640, 400, '#c47b0c', '#3a2c16'),
     imageWidth: null,
     imageHeight: null
+  }
+};
+
+/** Rooms that an xmpp: link can name and that the user has not joined. Keyed by address. */
+export const xmppRooms: Record<string, { name: string; subject: string | null; occupants: number | null }> = {
+  'hangar@chat.foid.space': {
+    name: 'hangar',
+    subject: 'Assembly bay schedule and tool checkout',
+    occupants: 12
   }
 };
 

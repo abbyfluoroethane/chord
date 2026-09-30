@@ -3,11 +3,20 @@
 
 import { dateOf, type TimeStyle } from './timestamp';
 import { replaceShortcodes, type Shortcodes } from './shortcodes';
+import { looksLikeXmppUri, parseXmppUri } from './xmppuri';
 
 export type Inline =
   | { t: 'text'; v: string }
   | { t: 'code'; v: string }
-  | { t: 'link'; href: string; children: Inline[]; masked: boolean; preview: boolean }
+  | {
+      t: 'link';
+      href: string;
+      children: Inline[];
+      masked: boolean;
+      preview: boolean;
+      /** An xmpp: link that Chord knows. It gets a card, and a click asks the user. */
+      xmpp?: true;
+    }
   | { t: 'mention'; v: string; me: boolean }
   | { t: 'time'; seconds: number; style: TimeStyle }
   | { t: 'bold' | 'italic' | 'underline' | 'strike' | 'spoiler'; children: Inline[] };
@@ -47,6 +56,16 @@ interface Ctx {
 const ESCAPABLE = /[\\`*_~|[\]()<>#@:!.>+-]/;
 const WORD = /[\p{L}\p{N}]/u;
 const HTTP = /^https?:\/\/\S+$/i;
+
+/** A link that the message shows: http, https, or an xmpp: URI that Chord knows. */
+function linkable(href: string): boolean {
+  return HTTP.test(href) || (looksLikeXmppUri(href) && parseXmppUri(href).kind !== 'unknown');
+}
+
+/** The extra fields of a link node. An xmpp: link gets `xmpp`. */
+function flags(href: string): { xmpp?: true } {
+  return looksLikeXmppUri(href) ? { xmpp: true } : {};
+}
 
 // ---------------------------------------------------------------- inline
 
@@ -97,13 +116,13 @@ function maskedLink(s: string, i: number): { text: string; href: string; end: nu
   let href = s.slice(j + 2, k).trim();
   href = href.replace(/\s+"[^"]*"$/, '');
   if (href.startsWith('<') && href.endsWith('>')) href = href.slice(1, -1);
-  if (!HTTP.test(href)) return null;
+  if (!linkable(href)) return null;
   return { text, href, end: k + 1 };
 }
 
 /** A bare link that starts at `i`. Punctuation at the end is not part of the link. */
 function bareLink(s: string, i: number): { href: string; end: number } | null {
-  const m = /^https?:\/\/[^\s<>]+/i.exec(s.slice(i, i + 2000));
+  const m = /^(?:https?:\/\/|xmpp:)[^\s<>]+/i.exec(s.slice(i, i + 2100));
   if (!m) return null;
   let url = m[0];
   for (;;) {
@@ -111,6 +130,9 @@ function bareLink(s: string, i: number): { href: string; end: number } | null {
     const balanced = last === ')' && url.split('(').length >= url.split(')').length;
     if (balanced || !/[.,;:!?)"'*_~|]/.test(last)) break;
     url = url.slice(0, -1);
+  }
+  if (looksLikeXmppUri(url)) {
+    return parseXmppUri(url).kind !== 'unknown' ? { href: url, end: i + url.length } : null;
   }
   return /^https?:\/\/[^\s]/i.test(url) && url.length > 8 ? { href: url, end: i + url.length } : null;
 }
@@ -217,12 +239,19 @@ export function parseInline(s: string, ctx: Ctx): Inline[] {
       }
     } else if (c === '<') {
       const rest = s.slice(i, i + 2100);
-      const link = /^<(https?:\/\/[^\s<>]+)>/i.exec(rest);
+      const link = /^<((?:https?:\/\/|xmpp:)[^\s<>]+)>/i.exec(rest);
       const time = /^<t:(-?\d{1,13})(?::([tTdDfFR]))?>/.exec(rest);
       const date = time ? dateOf(Number(time[1])) : null;
-      if (link && !ctx.inLink) {
+      if (link && !ctx.inLink && linkable(link[1])) {
         i = put(
-          { t: 'link', href: link[1], children: [{ t: 'text', v: link[1] }], masked: false, preview: false },
+          {
+            t: 'link',
+            href: link[1],
+            children: [{ t: 'text', v: link[1] }],
+            masked: false,
+            preview: false,
+            ...flags(link[1])
+          },
           i + link[0].length
         );
       } else if (time && date) {
@@ -235,13 +264,27 @@ export function parseInline(s: string, ctx: Ctx): Inline[] {
       const m = maskedLink(s, i);
       if (m) {
         const children = parseInline(m.text, { ...ctx, inLink: true });
-        i = put({ t: 'link', href: m.href, children, masked: true, preview: true }, m.end);
+        i = put(
+          { t: 'link', href: m.href, children, masked: true, preview: true, ...flags(m.href) },
+          m.end
+        );
       } else buf += s[i++];
-    } else if ((c === 'h' || c === 'H') && !ctx.inLink && (i === 0 || !WORD.test(s[i - 1]))) {
+    } else if (
+      (c === 'h' || c === 'H' || c === 'x' || c === 'X') &&
+      !ctx.inLink &&
+      (i === 0 || !WORD.test(s[i - 1]))
+    ) {
       const m = bareLink(s, i);
       if (m) {
         i = put(
-          { t: 'link', href: m.href, children: [{ t: 'text', v: m.href }], masked: false, preview: true },
+          {
+            t: 'link',
+            href: m.href,
+            children: [{ t: 'text', v: m.href }],
+            masked: false,
+            preview: true,
+            ...flags(m.href)
+          },
           m.end
         );
       } else buf += s[i++];
@@ -403,32 +446,41 @@ export function parseMarkdown(body: string, opt: ParseOptions = {}): Parsed {
   return { blocks, jumbo: isJumbo(blocks) };
 }
 
-function walkInline(nodes: Inline[], out: string[]) {
+function walkInline(nodes: Inline[], out: string[], xmpp: boolean) {
   for (const n of nodes) {
     if (n.t === 'link') {
-      if (n.preview) out.push(n.href);
-    } else if ('children' in n) walkInline(n.children, out);
+      if (n.preview && !!n.xmpp === xmpp) out.push(n.href);
+    } else if ('children' in n) walkInline(n.children, out, xmpp);
   }
 }
 
-function walkList(block: Block, out: string[]) {
+function walkList(block: Block, out: string[], xmpp: boolean) {
   if (block.t !== 'list') return;
   for (const item of block.items) {
-    walkInline(item.content, out);
-    if (item.sub) walkList(item.sub, out);
+    walkInline(item.content, out, xmpp);
+    if (item.sub) walkList(item.sub, out, xmpp);
   }
 }
 
-/** The links of a body that get a preview: not `<url>` and not code. */
-export function previewUrls(body: string): string[] {
+function collect(body: string, xmpp: boolean): string[] {
   const out: string[] = [];
   const visit = (blocks: Block[]) => {
     for (const b of blocks) {
       if (b.t === 'quote') visit(b.children);
-      else if (b.t === 'list') walkList(b, out);
-      else if (b.t !== 'code') walkInline(b.children, out);
+      else if (b.t === 'list') walkList(b, out, xmpp);
+      else if (b.t !== 'code') walkInline(b.children, out, xmpp);
     }
   };
   visit(parseMarkdown(body).blocks);
   return out;
+}
+
+/** The web links of a body that get a preview: not `<url>` and not code. */
+export function previewUrls(body: string): string[] {
+  return collect(body, false);
+}
+
+/** The xmpp: links of a body that get a card: not `<uri>` and not code. */
+export function xmppUrls(body: string): string[] {
+  return collect(body, true);
 }

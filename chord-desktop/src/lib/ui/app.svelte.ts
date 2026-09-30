@@ -859,6 +859,41 @@ class AppState {
     return true;
   }
 
+  /**
+   * Join a room by its address, for an xmpp: link. A room that the app knows opens at once.
+   * Maps to api.joinRoom(room, nick, password). A room in no space shows in Home.
+   */
+  async joinRoomLink(jid: string, password: string | null = null): Promise<boolean> {
+    if (this.channels.some((c) => c.jid === jid)) {
+      this.selectChannel(jid);
+      return true;
+    }
+    if (!live) {
+      const info = fx.xmppRooms[jid];
+      this.channels.push({
+        jid,
+        name: info?.name ?? jid.split('@')[0],
+        kind: 'channel',
+        unread: 0,
+        joined: true,
+        mentions: 0,
+        muted: false,
+        topic: info?.subject ?? null,
+        space: null,
+        avatar: null,
+        show: null,
+        online: false
+      });
+      this.selectChannel(jid);
+      return true;
+    }
+    const r = await this.call((b) => b.joinRoom(jid, this.myNick(null), password ?? undefined));
+    if (!r.ok) return false;
+    this.pending = { jid };
+    this.ensureSelection();
+    return true;
+  }
+
   /** Maps to api.browseSpaces(). */
   async loadPublicCircles() {
     if (!live) return;

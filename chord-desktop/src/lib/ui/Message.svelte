@@ -5,6 +5,7 @@
   import DeleteModal from './DeleteModal.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
   import LinkPreviewCard from './LinkPreviewCard.svelte';
+  import XmppLinkCard from './XmppLinkCard.svelte';
   import MessageBody from './MessageBody.svelte';
   import MessageEdit from './MessageEdit.svelte';
   import MessageToolbar from './MessageToolbar.svelte';
@@ -16,7 +17,7 @@
   import { clock, domainOf, stamp } from './format';
   import { linkPreviews } from './linkpreviews.svelte';
   import { prefs } from './prefs.svelte';
-  import { previewUrls } from './markdown';
+  import { previewUrls, xmppUrls } from './markdown';
   import type { TimelineItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -39,6 +40,13 @@
     if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
     const urls = previewUrls(item.body).filter((u) => u !== item.attachment?.url);
     return [...new Set(urls)].slice(0, 3);
+  });
+
+  // Up to three different xmpp: links get a card. The card asks the server that the link
+  // names, so the switch for link previews turns the cards off too.
+  const cards = $derived.by(() => {
+    if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
+    return [...new Set(xmppUrls(item.body))].slice(0, 3);
   });
 
   // Ask for the previews when the message first scrolls into view.
@@ -172,6 +180,11 @@
         </div>
       {/if}
       {#if item.attachment}<AttachmentView file={item.attachment} />{/if}
+      {#if cards.length}
+        <div class="previews">
+          {#each cards as uri (uri)}<XmppLinkCard {uri} />{/each}
+        </div>
+      {/if}
       {#if wanted.length}
         <div class="previews" use:watch>
           {#each wanted as url (url)}
