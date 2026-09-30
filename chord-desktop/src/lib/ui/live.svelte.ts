@@ -18,6 +18,8 @@ import {
   subscribeTimeline
 } from '$lib/chord';
 import { api } from './bridge';
+import { beep, shouldChime } from './notices';
+import { prefs } from './prefs.svelte';
 import type {
   ChannelItem as BChannel,
   ClientEvent,
@@ -362,9 +364,10 @@ class LiveController {
         break;
       case 'notification': {
         const n = e.data;
+        const looking = n.peer === app.selectedJid && document.hasFocus();
+        if (shouldChime(prefs, { room: n.room }, looking)) beep();
         if (!n.mention) break;
         app.mentionIds[n.itemId] = true;
-        const looking = n.peer === app.selectedJid && document.hasFocus();
         if (!looking) app.mentions[n.peer] = (app.mentions[n.peer] ?? 0) + 1;
         break;
       }

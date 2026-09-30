@@ -5,16 +5,52 @@
 //! the focus. The core already applied the notification level and the mute time, so
 //! the pump adds no rule of its own. The UI can show its own in-app alert as well: it
 //! sees the same event.
+//!
+//! Two settings of the user narrow the system notice: the desktop switch, and "mute DMs".
+//! The UI sends them with `set_notice_prefs`. The core has no global default level, so the
+//! per-chat levels are the only level rules.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chord_core::actor::{ClientEvent, ClientEvents};
 use chord_core::features::notify::Notification;
 use chord_core::session::Stream;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::state::{EventSink, lock};
+
+/// What the user allows for the system notice. The UI sets it at start and on each change.
+pub struct NoticePrefs {
+    desktop: AtomicBool,
+    mute_dms: AtomicBool,
+}
+
+impl Default for NoticePrefs {
+    fn default() -> Self {
+        Self {
+            desktop: AtomicBool::new(true),
+            mute_dms: AtomicBool::new(false),
+        }
+    }
+}
+
+impl NoticePrefs {
+    /// True if the settings allow a system notice for `n`.
+    fn allows(&self, n: &Notification) -> bool {
+        self.desktop.load(Ordering::Relaxed)
+            && !(n.room.is_none() && self.mute_dms.load(Ordering::Relaxed))
+    }
+}
+
+/// Set what the system notice may show: `desktop` is the master switch, `mute_dms` silences
+/// the notices of chats. A private message from a room member counts as a chat.
+#[tauri::command]
+pub fn set_notice_prefs(prefs: State<'_, NoticePrefs>, desktop: bool, mute_dms: bool) {
+    prefs.desktop.store(desktop, Ordering::Relaxed);
+    prefs.mute_dms.store(mute_dms, Ordering::Relaxed);
+}
 
 /// The title and the body of the system notification.
 pub fn text(n: &Notification) -> (String, String) {
@@ -36,7 +72,7 @@ fn window_has_focus(app: &AppHandle) -> bool {
 }
 
 fn show(app: &AppHandle, n: &Notification) {
-    if window_has_focus(app) {
+    if !app.state::<NoticePrefs>().allows(n) || window_has_focus(app) {
         return;
     }
     let (title, body) = text(n);
@@ -71,6 +107,19 @@ mod tests {
             mention: false,
             item_id: "m:1".into(),
         }
+    }
+
+    #[test]
+    fn the_settings_narrow_the_system_notice() {
+        let prefs = NoticePrefs::default();
+        let chat = notification(None);
+        let room = notification(Some("dev@muc.example.org"));
+        assert!(prefs.allows(&chat) && prefs.allows(&room));
+        prefs.mute_dms.store(true, Ordering::Relaxed);
+        assert!(!prefs.allows(&chat));
+        assert!(prefs.allows(&room));
+        prefs.desktop.store(false, Ordering::Relaxed);
+        assert!(!prefs.allows(&room));
     }
 
     #[test]

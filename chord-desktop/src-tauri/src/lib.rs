@@ -33,6 +33,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
         .manage(files::Dropped::default())
+        .manage(notify::NoticePrefs::default())
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -68,6 +69,7 @@ pub fn run() {
             commands::mark_read_private,
             commands::mark_unread,
             commands::set_typing,
+            notify::set_notice_prefs,
             files::upload_files,
             files::upload_dropped,
             commands::load_older,

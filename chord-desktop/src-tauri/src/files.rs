@@ -11,9 +11,9 @@
 //! drag-drop event (`Dropped::remember`), and `upload_dropped` accepts only such a path,
 //! once. A page that invents a path gets a refusal.
 
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -45,7 +45,9 @@ impl Dropped {
         if lock(&self.0).remove(path) {
             Ok(())
         } else {
-            Err(ChordError::invalid("the file was not dropped on the window"))
+            Err(ChordError::invalid(
+                "the file was not dropped on the window",
+            ))
         }
     }
 }

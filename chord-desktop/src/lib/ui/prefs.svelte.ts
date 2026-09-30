@@ -1,6 +1,7 @@
 // User settings that live on this device. One JSON blob in localStorage.
 // The bridge can move them to get_settings and set_settings later.
-import type { DisplayMode, NotificationLevel } from './types';
+import { api, live } from './bridge';
+import type { DisplayMode } from './types';
 import { EMOJI_PACK_IDS, type EmojiPackId } from './emojipackids';
 
 const KEY = 'chord.prefs';
@@ -8,8 +9,6 @@ const KEY = 'chord.prefs';
 interface Saved {
   desktopNotifications: boolean;
   sound: boolean;
-  dmLevel: NotificationLevel;
-  channelLevel: NotificationLevel;
   muteDms: boolean;
   autoApprove: boolean;
   display: DisplayMode;
@@ -18,13 +17,9 @@ interface Saved {
   emojiPack: EmojiPackId;
 }
 
-const LEVELS: NotificationLevel[] = ['all', 'mentions', 'nothing'];
-
 class Prefs {
   desktopNotifications = $state(true);
   sound = $state(true);
-  dmLevel = $state<NotificationLevel>('all');
-  channelLevel = $state<NotificationLevel>('mentions');
   muteDms = $state(false);
   autoApprove = $state(false);
   display = $state<DisplayMode>('cozy');
@@ -41,8 +36,6 @@ class Prefs {
         const v = JSON.parse(raw) as Partial<Saved>;
         if (typeof v.desktopNotifications === 'boolean') this.desktopNotifications = v.desktopNotifications;
         if (typeof v.sound === 'boolean') this.sound = v.sound;
-        if (v.dmLevel && LEVELS.includes(v.dmLevel)) this.dmLevel = v.dmLevel;
-        if (v.channelLevel && LEVELS.includes(v.channelLevel)) this.channelLevel = v.channelLevel;
         if (typeof v.muteDms === 'boolean') this.muteDms = v.muteDms;
         if (typeof v.autoApprove === 'boolean') this.autoApprove = v.autoApprove;
         if (v.display === 'cozy' || v.display === 'compact') this.display = v.display;
@@ -54,6 +47,7 @@ class Prefs {
       /* storage blocked or bad JSON, keep the defaults */
     }
     this.applyFont();
+    this.syncNotices();
   }
 
   /** Change one setting, save all, and apply the font size. */
@@ -63,8 +57,6 @@ class Prefs {
       const out: Saved = {
         desktopNotifications: this.desktopNotifications,
         sound: this.sound,
-        dmLevel: this.dmLevel,
-        channelLevel: this.channelLevel,
         muteDms: this.muteDms,
         autoApprove: this.autoApprove,
         display: this.display,
@@ -77,6 +69,15 @@ class Prefs {
       /* ignore */
     }
     if (key === 'fontSize') this.applyFont();
+    if (key === 'desktopNotifications' || key === 'muteDms') this.syncNotices();
+  }
+
+  /** Rust shows the system notice, so it needs these two settings. */
+  private syncNotices() {
+    if (!live) return;
+    void api()
+      .then((b) => b.setNoticePrefs(this.desktopNotifications, this.muteDms))
+      .catch(() => undefined);
   }
 
   private applyFont() {

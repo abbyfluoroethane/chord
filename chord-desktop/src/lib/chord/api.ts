@@ -297,6 +297,12 @@ export const removeAvatar = () => invoke<void>('remove_avatar');
 /** `muteUntil` is a Unix time in ms. */
 export const setNotificationLevel = (peer: string, level: NotificationLevel, muteUntil?: number) =>
   invoke<void>('set_notification_level', { peer, level, muteUntil: muteUntil ?? null });
+/**
+ * Tell Rust what the system notice may show: `desktop` is the master switch and `muteDms`
+ * silences chats. The core has already applied the levels of each chat.
+ */
+export const setNoticePrefs = (desktop: boolean, muteDms: boolean) =>
+  invoke<void>('set_notice_prefs', { desktop, muteDms });
 export const notificationLevel = (peer: string) =>
   invoke<NotificationSetting>('notification_level', { peer });
 export const pushRegistrations = () => invoke<PushRegistration[]>('push_registrations');
