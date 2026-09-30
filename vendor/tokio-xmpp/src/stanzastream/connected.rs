@@ -624,14 +624,23 @@ impl ConnectedState {
                         Poll::Ready(None)
                     }
 
+                    // CHORD PATCH: hand the header of an invalid stanza to the worker. The
+                    // worker answers an IQ get or set with a bad-request error (RFC 6120
+                    // 8.2.3). Upstream drops the stanza without a reply. The stream stays up.
                     Ok(FallibleStreamElement::Err(
                         e @ StreamElementError::InvalidStanza { .. },
                     )) => {
-                        log::warn!("Received invalid stanza: {e}; discarding silently.");
+                        log::warn!("Received invalid stanza: {e}; discarding.");
                         if let Some(sm_state) = sm_state.as_mut() {
                             sm_state.received();
                         }
-                        Poll::Ready(None)
+                        let StreamElementError::InvalidStanza { name, header, .. } = e else {
+                            unreachable!("matched InvalidStanza above");
+                        };
+                        Poll::Ready(Some(ConnectedEvent::Worker(WorkerEvent::InvalidStanza {
+                            name,
+                            header,
+                        })))
                     }
 
                     // Another easy case: Soft timeouts are passed through

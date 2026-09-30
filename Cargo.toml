@@ -39,6 +39,8 @@ sha1 = "0.11"
 # - `CertCheck` and `establish_tls_connection_with` (connect/tls_common.rs) and
 #   `starttls_checked` (connect/starttls.rs) check the server certificate after the TLS
 #   handshake, for the certificate pin (SECURITYAUTH-13). Both STARTTLS and direct TLS use it.
+# - The stanza worker answers an IQ get or set that fails to parse with a bad-request
+#   error (RFC 6120, 8.2.3). Upstream drops it without a reply.
 # Drop these when upstream gets an API for them.
 [patch.crates-io]
 tokio-xmpp = { path = "vendor/tokio-xmpp" }

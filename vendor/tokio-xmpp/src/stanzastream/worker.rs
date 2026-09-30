@@ -21,12 +21,14 @@ use xmpp_parsers::{
     iq,
     jid::Jid,
     ping,
+    stanza_error::{DefinedCondition as StanzaDefinedCondition, ErrorType, StanzaError},
     stream_error::{DefinedCondition, StreamError},
     stream_features::StreamFeatures,
 };
 
 use crate::connect::AsyncReadAndWrite;
-use crate::xmlstream::{FallibleStreamElement, ReadError};
+use crate::xmlstream::xmpp::PartialStanza;
+use crate::xmlstream::{FallibleStreamElement, RawStanzaHeader, ReadError};
 use crate::Stanza;
 
 use super::connected::{ConnectedEvent, ConnectedState};
@@ -80,6 +82,12 @@ pub(super) enum WorkerEvent {
 
     /// Failed to parse pieces from the stream.
     ParseError(xso::error::Error),
+
+    /// CHORD PATCH: a stanza that failed to parse. The stream stays up.
+    InvalidStanza {
+        name: PartialStanza,
+        header: RawStanzaHeader,
+    },
 
     /// Soft timeout noted by the underlying XmppStream.
     SoftTimeout,
@@ -394,6 +402,33 @@ impl Future for Close<'_> {
     }
 }
 
+/// CHORD PATCH: the reply to an IQ get or set that failed to parse. RFC 6120 8.2.3 wants a
+/// `bad-request` error for it. A message, a presence, a result, an error or an IQ without an id
+/// gets no reply (the caller logs it).
+fn invalid_iq_reply(name: PartialStanza, header: RawStanzaHeader) -> Option<Stanza> {
+    if !matches!(name, PartialStanza::Iq) {
+        return None;
+    }
+    if !matches!(header.type_.as_deref(), Some("get" | "set")) {
+        return None;
+    }
+    let id = header.id.filter(|id| !id.is_empty())?;
+    let to = header.from.and_then(|from| Jid::new(&from).ok());
+    let error = StanzaError::new(
+        ErrorType::Modify,
+        StanzaDefinedCondition::BadRequest,
+        "en",
+        "The request could not be parsed",
+    );
+    Some(Stanza::Iq(iq::Iq::Error {
+        from: None,
+        to,
+        id,
+        payload: None,
+        error,
+    }))
+}
+
 pub(super) fn parse_error_to_stream_error(e: xso::error::Error) -> StreamError {
     use xso::error::Error;
     let condition = match e {
@@ -527,6 +562,11 @@ impl StanzaStreamWorker {
                             self.stream.start_send_stream_error(parse_error_to_stream_error(e));
                             // We are not break-ing here, because drive_duplex
                             // is sending the error.
+                        }
+                        WorkerEvent::InvalidStanza { name, header } => {
+                            if let Some(reply) = invalid_iq_reply(name, header) {
+                                self.transmit_queue.enqueue(QueueEntry::untracked(Box::new(reply)));
+                            }
                         }
                         WorkerEvent::SoftTimeout => {
                             if self.stream.queue_sm_request() {

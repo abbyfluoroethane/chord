@@ -760,6 +760,109 @@ mod tests {
         &COUNT
     }
 
+    /// Read from the fake server end until `needle` shows up.
+    async fn read_until(io: &mut tokio::io::DuplexStream, buf: &mut String, needle: &str) {
+        use tokio::io::AsyncReadExt;
+        let mut chunk = [0_u8; 4096];
+        while !buf.contains(needle) {
+            let n = tokio::time::timeout(Duration::from_secs(5), io.read(&mut chunk))
+                .await
+                .expect("the client sends data")
+                .unwrap();
+            assert!(n > 0, "the client closed the stream. Got {buf:?}");
+            buf.push_str(&String::from_utf8_lossy(&chunk[..n]));
+        }
+    }
+
+    /// CORESESSION-12 (RFC 6120 8.2.3): a peer sends an IQ get that does not parse. The stream
+    /// stays up, the client answers with a bad-request error, and the next stanza arrives.
+    /// The fake server is a raw byte stream, because the typed XMPP stream cannot send an
+    /// invalid stanza.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_iq_gets_bad_request_and_stream_stays_up() {
+        use tokio::io::AsyncWriteExt;
+        let (client_io, mut server) = tokio::io::duplex(65536);
+        let server_task = tokio::spawn(async move {
+            let mut buf = String::new();
+            read_until(&mut server, &mut buf, "<stream:stream").await;
+            server
+                .write_all(
+                    b"<?xml version='1.0'?><stream:stream xmlns='jabber:client' \
+                      xmlns:stream='http://etherx.jabber.org/streams' from='example.org' \
+                      to='me@example.org' id='s1' version='1.0'><stream:features>\
+                      <bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>",
+                )
+                .await
+                .unwrap();
+            // The bind request.
+            read_until(&mut server, &mut buf, "</iq>").await;
+            let from_id = buf.split("id=").nth(1).unwrap();
+            let quote = from_id.chars().next().unwrap();
+            let id = from_id[1..].split(quote).next().unwrap().to_owned();
+            let bound = format!(
+                "<iq type='result' id='{id}'><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'>\
+                 <jid>me@example.org/r</jid></bind></iq>"
+            );
+            server.write_all(bound.as_bytes()).await.unwrap();
+            // An IQ get without a payload, then a good message.
+            server
+                .write_all(
+                    b"<iq type='get' id='bad1' from='peer@example.org/x' to='me@example.org/r'/>\
+                      <message type='chat' from='peer@example.org/x'><body>after</body></message>",
+                )
+                .await
+                .unwrap();
+            read_until(&mut server, &mut buf, "bad-request").await;
+            assert!(buf.contains("type=\"error\"") || buf.contains("type='error'"), "{buf}");
+            assert!(buf.contains("bad1"), "{buf}");
+            assert!(buf.contains("peer@example.org/x"), "{buf}");
+            server
+        });
+        let pending = initiate_stream(
+            tokio::io::BufReader::new(client_io),
+            ns::JABBER_CLIENT,
+            StreamHeader {
+                from: Some(Cow::Borrowed("me@example.org")),
+                to: Some(Cow::Borrowed("example.org")),
+                id: None,
+            },
+            Timeouts::default(),
+        )
+        .await
+        .unwrap();
+        let (features, stream) = pending
+            .recv_features::<FallibleStreamElement>()
+            .await
+            .map_err(|_| "no features")
+            .unwrap();
+        let connection = Connection {
+            stream: stream.box_stream(),
+            features,
+            identity: Jid::new("me@example.org").unwrap(),
+        };
+        let attempt = || async { Err::<Connection, _>(not_authorized()) };
+        let mut session = NativeSession::spawn(Some(connection), attempt, LOGIN_TIMEOUT);
+        let mut events = session.events().unwrap();
+        let mut got_message = false;
+        while !got_message {
+            let fut = core::future::poll_fn(|cx| Pin::new(&mut events).poll_next(cx));
+            let event = tokio::time::timeout(Duration::from_secs(5), fut)
+                .await
+                .expect("an event within 5 s")
+                .expect("the session stays up");
+            match event {
+                SessionEvent::Connected { .. } => {}
+                SessionEvent::Stanza(stanza) => {
+                    assert!(matches!(*stanza, Stanza::Message(_)), "got {stanza:?}");
+                    got_message = true;
+                }
+                other => panic!("unexpected event {other:?}"),
+            }
+        }
+        // The server saw the error for the invalid IQ.
+        let _server = server_task.await.unwrap();
+    }
+
     /// The whole path, with the real `StanzaStream` worker and a fake login: a reconnect
     /// fails with `not-authorized`. The session reports `AuthFailed`, then `Closed`, and
     /// the session task ends. The worker gets a dead connection instead of a dropped slot,
