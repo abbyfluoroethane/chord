@@ -6,6 +6,7 @@ use chord_core::actor as core_actor;
 use chord_core::features::avatars::Avatar as CoreAvatar;
 use chord_core::features::muc as core_muc;
 use chord_core::features::notify as core_notify;
+use chord_core::features::presence as core_presence;
 use chord_core::features::push::PushRegistration as CorePushRegistration;
 use chord_core::features::roster::{Contact as CoreContact, Subscription as CoreSubscription};
 use chord_core::features::spaces::{
@@ -509,6 +510,59 @@ pub struct RoomMember {
     pub nick: Option<String>,
 }
 
+/// Our availability, as we choose it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum Availability {
+    Available,
+    Away,
+    /// Do not disturb.
+    Dnd,
+    /// Away for a longer time.
+    ExtendedAway,
+    /// Contacts see us as offline. Needs privacy lists (XEP-0016) on the server.
+    Invisible,
+}
+
+impl From<Availability> for core_presence::Availability {
+    fn from(a: Availability) -> Self {
+        match a {
+            Availability::Available => Self::Available,
+            Availability::Away => Self::Away,
+            Availability::Dnd => Self::Dnd,
+            Availability::ExtendedAway => Self::ExtendedAway,
+            Availability::Invisible => Self::Invisible,
+        }
+    }
+}
+
+impl From<core_presence::Availability> for Availability {
+    fn from(a: core_presence::Availability) -> Self {
+        match a {
+            core_presence::Availability::Available => Self::Available,
+            core_presence::Availability::Away => Self::Away,
+            core_presence::Availability::Dnd => Self::Dnd,
+            core_presence::Availability::ExtendedAway => Self::ExtendedAway,
+            core_presence::Availability::Invisible => Self::Invisible,
+        }
+    }
+}
+
+/// Our own presence: the availability and an optional status text.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct OwnPresence {
+    pub availability: Availability,
+    pub status: Option<String>,
+}
+
+impl From<core_presence::OwnPresence> for OwnPresence {
+    fn from(p: core_presence::OwnPresence) -> Self {
+        Self {
+            availability: p.availability.into(),
+            status: p.status,
+        }
+    }
+}
+
 /// How much a chat, room, or private chat may notify.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum NotificationLevel {
@@ -815,6 +869,26 @@ mod tests {
     use chord_core::session::AuthFailure;
 
     use super::*;
+
+    #[test]
+    fn availability_maps_both_ways() {
+        for a in [
+            Availability::Available,
+            Availability::Away,
+            Availability::Dnd,
+            Availability::ExtendedAway,
+            Availability::Invisible,
+        ] {
+            let core: core_presence::Availability = a.into();
+            assert_eq!(Availability::from(core), a);
+        }
+        let own = OwnPresence::from(core_presence::OwnPresence {
+            availability: core_presence::Availability::Invisible,
+            status: Some("out".into()),
+        });
+        assert_eq!(own.availability, Availability::Invisible);
+        assert_eq!(own.status.as_deref(), Some("out"));
+    }
 
     fn item(id: &str) -> core_views::ChannelItem {
         core_views::ChannelItem {

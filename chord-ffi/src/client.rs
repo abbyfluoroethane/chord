@@ -658,6 +658,26 @@ impl ChordClient {
             .await
     }
 
+    // ---- Presence ----
+
+    /// Set our availability and status text. Offline, the client only stores them. A status
+    /// text over 128 characters is cut. `Invisible` needs privacy lists on the server.
+    pub async fn set_presence(
+        &self,
+        availability: Availability,
+        status: Option<String>,
+    ) -> Result<(), ChordError> {
+        let availability = availability.into();
+        self.call(move |h| async move { h.set_presence(availability, status).await })
+            .await
+    }
+
+    /// Our stored availability and status text. Works offline.
+    pub async fn own_presence(&self) -> Result<OwnPresence, ChordError> {
+        let presence = self.call(|h| async move { h.own_presence().await }).await?;
+        Ok(presence.into())
+    }
+
     // ---- Roster ----
 
     /// Add a contact and ask to see its presence.
@@ -1038,6 +1058,22 @@ mod tests {
             ChordClient::new("/nonexistent-dir/x/db.sqlite3".into(), "a@b".into()),
             Err(ChordError::Store { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn presence_works_offline() {
+        let client = client();
+        assert_eq!(
+            client.own_presence().await.unwrap().availability,
+            Availability::Available
+        );
+        client
+            .set_presence(Availability::Invisible, Some("out".into()))
+            .await
+            .unwrap();
+        let own = client.own_presence().await.unwrap();
+        assert_eq!(own.availability, Availability::Invisible);
+        assert_eq!(own.status.as_deref(), Some("out"));
     }
 
     #[tokio::test]
