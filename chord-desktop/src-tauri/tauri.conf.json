@@ -20,7 +20,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' https: data: blob: chord-avatar: http://chord-avatar.localhost chord-emoji: http://chord-emoji.localhost; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' https: data: blob: chord-avatar: http://chord-avatar.localhost chord-emoji: http://chord-emoji.localhost; media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'",
+      "freezePrototype": true
     }
   },
   "plugins": {
