@@ -468,6 +468,7 @@ pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
     extdisco::on_services_ready(ctx);
     push::on_services_ready(ctx);
     presence::on_services_ready(ctx);
+    mam::on_services_ready(ctx);
     for command in std::mem::take(&mut ctx.state.deferred) {
         dispatch(ctx, command);
     }
@@ -568,6 +569,7 @@ pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     muc::health::on_tick(ctx);
     extdisco::on_tick(ctx);
     jmi::on_tick(ctx);
+    mam::on_tick(ctx);
 }
 
 /// The session gave up on a stanza: the stream lost it, and sending it again did not work.

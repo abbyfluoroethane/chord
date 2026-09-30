@@ -5,6 +5,15 @@
 //!   we stored, and whether the oldest page arrived. The row for '' is the account
 //!   archive. The row for a room JID is that room. The row for a chat peer only tracks
 //!   the completeness of the history with that peer.
+//! - The account archive needs `urn:xmpp:mam:2` in the disco of the server or the account.
+//!   The first query waits for the end of service discovery, and a server without MAM gets
+//!   no query.
+//! - A query that fails with a temporary error, or with an answer that does not parse, runs
+//!   again with a growing delay (`RETRY_TICKS`), at most three times. A permanent error
+//!   does not run again.
+//! - When the catch-up of the account archive is done, a live message that carries a
+//!   stanza-id of our account moves `newest_id` (`on_live`). A reconnect then asks only for
+//!   what came after it.
 //! - A query has a random `queryid`. We accept a result only for a running query, and
 //!   only from the entity that we asked (XEP-0313, section 8: anyone can forge a result).
 
@@ -17,7 +26,7 @@ use xmpp_parsers::mam::{Fin, Query, QueryId, Result_};
 use xmpp_parsers::message::Message;
 use xmpp_parsers::ns;
 use xmpp_parsers::rsm::SetQuery;
-use xmpp_parsers::stanza_error::DefinedCondition;
+use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
 
 use super::{Ctx, IqResponse, Pending as FeaturePending, chat, muc, new_id};
 use crate::actor::{ClientError, ClientHandle};
@@ -26,11 +35,31 @@ use crate::views::ViewKey;
 /// The number of messages that we ask for in one page.
 const PAGE_SIZE: usize = 50;
 
+/// The wait before each retry of a failed query, in session ticks (15 s each): 15 s, 1 min,
+/// 4 min. After the last one, the query stays failed until the next connect.
+const RETRY_TICKS: [u32; 3] = [1, 4, 16];
+
 /// In-memory state for one session.
 #[derive(Debug, Default)]
 pub(crate) struct State {
     /// The queries that wait for their final answer, by queryid.
     queries: std::collections::HashMap<String, Running>,
+    /// The failed queries that wait to run again.
+    retries: Vec<Retry>,
+    /// True when the account catch-up of this session has ended. Only then does a live
+    /// message move the cursor, so that no gap stays behind it.
+    account_synced: bool,
+}
+
+/// A failed query that waits to run again.
+#[derive(Debug)]
+struct Retry {
+    target: Target,
+    kind: Kind,
+    after: Option<String>,
+    /// How many retries ran already.
+    attempt: usize,
+    ticks_left: u32,
 }
 
 /// One query that waits for its answer.
@@ -38,6 +67,10 @@ pub(crate) struct State {
 struct Running {
     target: Target,
     kind: Kind,
+    /// The id that the query asks after (a catch-up) or before.
+    after: Option<String>,
+    /// How many retries ran before this query.
+    attempt: usize,
 }
 
 /// The archive that a query asks.
@@ -222,9 +255,40 @@ fn is_running(ctx: &Ctx<'_>, target: &Target) -> bool {
     ctx.state.mam.queries.values().any(|q| q.target == *target)
 }
 
+/// Whether the server can have the archive of `target`. A room archive cannot be checked
+/// here: the room answers. The account archive needs `urn:xmpp:mam:2` in the disco of the
+/// server or the account, and is unknown until the discovery ends.
+fn server_supports(ctx: &Ctx<'_>, target: &Target) -> bool {
+    match target {
+        Target::Room(_) => true,
+        _ => ctx.state.disco.complete && ctx.state.disco.server_has(ns::MAM),
+    }
+}
+
 /// Send one query and remember it.
 fn send_query(ctx: &mut Ctx<'_>, target: Target, kind: Kind, after: Option<String>) {
+    send_attempt(ctx, target, kind, after, 0);
+}
+
+/// Send one query. `attempt` counts the retries that ran before it.
+fn send_attempt(
+    ctx: &mut Ctx<'_>,
+    target: Target,
+    kind: Kind,
+    after: Option<String>,
+    attempt: usize,
+) {
+    if !server_supports(ctx, &target) {
+        log::debug!(
+            "no MAM query for {:?}: the server has no urn:xmpp:mam:2",
+            target.archive()
+        );
+        return;
+    }
+    // A new query replaces a retry that waits for the same archive.
+    ctx.state.mam.retries.retain(|r| r.target != target);
     let queryid = new_id();
+    let after_copy = after.clone();
     let mut set = SetQuery {
         max: Some(PAGE_SIZE),
         after: None,
@@ -256,17 +320,38 @@ fn send_query(ctx: &mut Ctx<'_>, target: Target, kind: Kind, after: Option<Strin
     if let Some(entity) = target.entity() {
         iq = iq.with_to(entity);
     }
-    ctx.state
-        .mam
-        .queries
-        .insert(queryid.clone(), Running { target, kind });
+    ctx.state.mam.queries.insert(
+        queryid.clone(),
+        Running {
+            target,
+            kind,
+            after: after_copy,
+            attempt,
+        },
+    );
     ctx.request(iq, FeaturePending::Mam(Pending::Page(queryid)));
+}
+
+/// True if the error can go away, so that the same query can work later.
+fn is_temporary(error: &StanzaError) -> bool {
+    error.type_ == ErrorType::Wait
+        || matches!(
+            error.defined_condition,
+            DefinedCondition::InternalServerError
+                | DefinedCondition::RemoteServerTimeout
+                | DefinedCondition::ResourceConstraint
+                | DefinedCondition::UndefinedCondition
+        )
 }
 
 /// Fetch what an archive got after the newest stored id. With no cursor, fetch only the
 /// newest page.
 fn catch_up(ctx: &mut Ctx<'_>, target: Target) {
     if is_running(ctx, &target) {
+        return;
+    }
+    // The discovery decides if there is an archive. `on_services_ready` tries again.
+    if target == Target::Account && !ctx.state.disco.complete {
         return;
     }
     let cursor = load_cursor(ctx, &target.archive());
@@ -278,6 +363,69 @@ fn catch_up(ctx: &mut Ctx<'_>, target: Target) {
 
 pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
     catch_up(ctx, Target::Account);
+}
+
+/// Service discovery ended: the account archive can start (or stay off).
+pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
+    catch_up(ctx, Target::Account);
+}
+
+/// Run the query again after a failure, with a delay, or give up after the last delay.
+fn schedule_retry(ctx: &mut Ctx<'_>, run: Running) {
+    let Some(&ticks) = RETRY_TICKS.get(run.attempt) else {
+        log::warn!("giving up the MAM query for {:?}", run.target.archive());
+        return;
+    };
+    ctx.state.mam.retries.push(Retry {
+        target: run.target,
+        kind: run.kind,
+        after: run.after,
+        attempt: run.attempt + 1,
+        ticks_left: ticks,
+    });
+}
+
+/// A session tick: run the retries that are due.
+pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
+    if ctx.state.mam.retries.is_empty() {
+        return;
+    }
+    let mut due = Vec::new();
+    ctx.state.mam.retries.retain_mut(|r| {
+        r.ticks_left = r.ticks_left.saturating_sub(1);
+        if r.ticks_left == 0 {
+            due.push(Retry {
+                target: r.target.clone(),
+                kind: r.kind,
+                after: r.after.clone(),
+                attempt: r.attempt,
+                ticks_left: 0,
+            });
+            false
+        } else {
+            true
+        }
+    });
+    for retry in due {
+        if !is_running(ctx, &retry.target) {
+            send_attempt(ctx, retry.target, retry.kind, retry.after, retry.attempt);
+        }
+    }
+}
+
+/// A live chat message carries the stanza-id `id` of our account. When the catch-up of
+/// this session has ended, `id` is the newest archive position that we know, so the next
+/// reconnect need not fetch what we have seen live.
+pub(crate) fn on_live(ctx: &mut Ctx<'_>, id: &str) {
+    if !ctx.state.mam.account_synced {
+        return;
+    }
+    let mut cursor = load_cursor(ctx, "");
+    if cursor.newest_id.as_deref() == Some(id) {
+        return;
+    }
+    cursor.newest_id = Some(id.to_owned());
+    save_cursor(ctx, "", &cursor);
 }
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
@@ -292,11 +440,13 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             Ok(fin) => fin,
             Err(e) => {
                 log::warn!("invalid MAM answer for {archive:?}: {e:?}");
+                schedule_retry(ctx, run);
                 return;
             }
         },
         IqResponse::Result(None) => {
             log::warn!("empty MAM answer for {archive:?}");
+            schedule_retry(ctx, run);
             return;
         }
         IqResponse::Error(e) => {
@@ -306,6 +456,8 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             if run.kind == Kind::CatchUp && e.defined_condition == DefinedCondition::ItemNotFound {
                 save_cursor(ctx, &archive, &Cursor::default());
                 send_query(ctx, run.target, Kind::Backward, None);
+            } else if is_temporary(&e) {
+                schedule_retry(ctx, run);
             }
             return;
         }
@@ -350,6 +502,9 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
         }
     }
     save_cursor(ctx, &archive, &cursor);
+    if run.target == Target::Account && next.is_none() {
+        ctx.state.mam.account_synced = true;
+    }
     if let Some(view) = run.target.timeline() {
         ctx.changed(view);
     }
@@ -463,6 +618,16 @@ mod tests {
     use xmpp_parsers::rsm::{First, SetResult};
     use xmpp_parsers::stanza_error::{ErrorType, StanzaError};
 
+    /// A harness whose server discovery is done, and has MAM.
+    fn ready() -> Harness {
+        let mut h = Harness::new();
+        let mut info = crate::features::disco::info(None);
+        info.features.insert(ns::MAM.into());
+        h.state.disco.server = Some(info);
+        h.state.disco.complete = true;
+        h
+    }
+
     fn is_mam(p: &FeaturePending) -> bool {
         matches!(p, FeaturePending::Mam(_))
     }
@@ -561,7 +726,7 @@ mod tests {
 
     #[test]
     fn first_login_fetches_only_the_newest_page() {
-        let mut h = Harness::new();
+        let mut h = ready();
         h.with_ctx(on_connected);
         let (iq, query, qid) = sent_query(&mut h);
         assert_eq!(iq.to(), None);
@@ -593,7 +758,7 @@ mod tests {
 
     #[test]
     fn a_short_archive_is_complete() {
-        let mut h = Harness::new();
+        let mut h = ready();
         h.with_ctx(on_connected);
         h.sent_iqs();
         h.answer(is_mam, Some(fin(true, Some(("a1", Some(0))), Some("a2"))));
@@ -602,7 +767,7 @@ mod tests {
 
     #[test]
     fn complete_with_a_later_first_index_is_not_complete() {
-        let mut h = Harness::new();
+        let mut h = ready();
         h.with_ctx(on_connected);
         h.sent_iqs();
         h.answer(is_mam, Some(fin(true, Some(("a1", Some(3))), Some("a2"))));
@@ -611,7 +776,7 @@ mod tests {
 
     #[test]
     fn catch_up_pages_forward_with_after_until_complete() {
-        let mut h = Harness::new();
+        let mut h = ready();
         let start = Cursor {
             newest_id: Some("a5".into()),
             oldest_id: Some("a1".into()),
@@ -645,7 +810,7 @@ mod tests {
 
     #[test]
     fn catch_up_stops_when_the_cursor_does_not_move() {
-        let mut h = Harness::new();
+        let mut h = ready();
         let start = Cursor {
             newest_id: Some("a5".into()),
             ..Cursor::default()
@@ -659,7 +824,7 @@ mod tests {
 
     #[test]
     fn unknown_cursor_falls_back_to_the_newest_page() {
-        let mut h = Harness::new();
+        let mut h = ready();
         let start = Cursor {
             newest_id: Some("gone".into()),
             oldest_id: Some("older".into()),
@@ -676,7 +841,7 @@ mod tests {
 
     #[test]
     fn results_with_a_foreign_queryid_or_sender_are_dropped() {
-        let mut h = Harness::new();
+        let mut h = ready();
         h.with_ctx(on_connected);
         let (_, _, qid) = sent_query(&mut h);
         let stamp = "2026-01-01T10:00:00Z";
@@ -708,7 +873,7 @@ mod tests {
 
     #[test]
     fn archive_timestamp_comes_from_the_delay() {
-        let mut h = Harness::new();
+        let mut h = ready();
         h.with_ctx(on_connected);
         let (_, _, qid) = sent_query(&mut h);
         feed(
@@ -722,7 +887,7 @@ mod tests {
 
     #[test]
     fn need_older_for_a_chat_asks_the_account_archive_with_a_filter() {
-        let mut h = Harness::new();
+        let mut h = ready();
         // One stored archive message gives the anchor.
         h.with_ctx(on_connected);
         let (_, _, qid) = sent_query(&mut h);
@@ -777,7 +942,7 @@ mod tests {
 
     #[test]
     fn need_older_for_a_chat_stops_when_the_account_archive_is_complete() {
-        let mut h = Harness::new();
+        let mut h = ready();
         let done = Cursor {
             history_complete: true,
             ..Cursor::default()
@@ -789,7 +954,7 @@ mod tests {
 
     #[test]
     fn need_older_for_a_room_asks_the_room_archive() {
-        let mut h = Harness::new();
+        let mut h = ready();
         add_room(&h);
         let start = Cursor {
             newest_id: Some("r9".into()),
@@ -822,7 +987,7 @@ mod tests {
 
     #[test]
     fn room_catch_up_uses_after_and_the_room_cursor() {
-        let mut h = Harness::new();
+        let mut h = ready();
         add_room(&h);
         // No cursor: the newest page.
         h.with_ctx(|ctx| catch_up_room(ctx, &room()));
@@ -845,7 +1010,7 @@ mod tests {
 
     #[test]
     fn error_and_lost_answers_reset_the_query_state() {
-        let mut h = Harness::new();
+        let mut h = ready();
         h.with_ctx(|ctx| need_older(ctx, &bob()));
         assert_eq!(h.sent_iqs().len(), 1);
         h.respond(is_mam, error(DefinedCondition::ServiceUnavailable));
@@ -866,8 +1031,144 @@ mod tests {
     }
 
     #[test]
-    fn commands_answer_and_offline_fails() {
+    fn a_server_without_mam_gets_no_query() {
         let mut h = Harness::new();
+        // Discovery is not done: the account catch-up waits.
+        h.with_ctx(on_connected);
+        assert!(h.sent_iqs().is_empty());
+        // Discovery is done and the server has no MAM: still no query.
+        h.state.disco.server = Some(crate::features::disco::info(None));
+        h.state.disco.complete = true;
+        h.with_ctx(on_services_ready);
+        h.with_ctx(|ctx| need_older(ctx, &bob()));
+        assert!(h.sent_iqs().is_empty());
+        // With MAM in the disco, the services-ready hook starts the catch-up.
+        let mut h = ready();
+        h.state.disco.complete = false;
+        h.with_ctx(on_connected);
+        assert!(h.sent_iqs().is_empty());
+        h.state.disco.complete = true;
+        h.with_ctx(on_services_ready);
+        assert_eq!(h.sent_iqs().len(), 1);
+    }
+
+    fn wait_error() -> IqResponse {
+        IqResponse::Error(StanzaError::new(
+            ErrorType::Wait,
+            DefinedCondition::ResourceConstraint,
+            "en",
+            "busy",
+        ))
+    }
+
+    #[test]
+    fn a_temporary_error_retries_with_a_growing_delay_and_gives_up() {
+        let mut h = ready();
+        let start = Cursor {
+            newest_id: Some("a5".into()),
+            ..Cursor::default()
+        };
+        set_cursor(&mut h, "", start);
+        h.with_ctx(on_connected);
+        h.sent_iqs();
+        let mut waits = Vec::new();
+        for _ in 0..RETRY_TICKS.len() {
+            h.respond(is_mam, wait_error());
+            assert!(h.sent_iqs().is_empty());
+            let mut ticks = 0;
+            loop {
+                h.with_ctx(on_tick);
+                ticks += 1;
+                if !h.sent_iqs().is_empty() {
+                    break;
+                }
+                assert!(ticks < 100, "no retry");
+            }
+            waits.push(ticks);
+            // The retry asks the same thing.
+            let running = h.state.mam.queries.values().next().unwrap();
+            assert_eq!(running.after.as_deref(), Some("a5"));
+        }
+        assert_eq!(waits, RETRY_TICKS);
+        // The fourth failure is the last.
+        h.respond(is_mam, wait_error());
+        for _ in 0..100 {
+            h.with_ctx(on_tick);
+        }
+        assert!(h.sent_iqs().is_empty());
+        assert!(h.state.mam.queries.is_empty());
+        assert!(h.state.mam.retries.is_empty());
+    }
+
+    #[test]
+    fn a_permanent_error_does_not_retry() {
+        let mut h = ready();
+        h.with_ctx(on_connected);
+        h.sent_iqs();
+        h.respond(is_mam, error(DefinedCondition::ServiceUnavailable));
+        assert!(h.state.mam.retries.is_empty());
+    }
+
+    #[test]
+    fn an_answer_that_does_not_parse_retries() {
+        let mut h = ready();
+        h.with_ctx(on_connected);
+        h.sent_iqs();
+        h.answer(is_mam, None);
+        assert_eq!(h.state.mam.retries.len(), 1);
+    }
+
+    #[test]
+    fn a_live_stanza_id_moves_the_cursor_after_the_catch_up() {
+        let mut h = ready();
+        let start = Cursor {
+            newest_id: Some("a5".into()),
+            ..Cursor::default()
+        };
+        set_cursor(&mut h, "", start);
+        h.with_ctx(on_connected);
+        h.sent_iqs();
+        // The catch-up runs: a live message does not move the cursor.
+        h.with_ctx(|ctx| on_live(ctx, "a7"));
+        assert_eq!(cursor(&mut h, "").newest_id.as_deref(), Some("a5"));
+        h.answer(is_mam, Some(fin(true, Some(("a6", None)), Some("a6"))));
+        assert_eq!(cursor(&mut h, "").newest_id.as_deref(), Some("a6"));
+        h.with_ctx(|ctx| on_live(ctx, "a7"));
+        assert_eq!(cursor(&mut h, "").newest_id.as_deref(), Some("a7"));
+    }
+
+    #[test]
+    fn a_live_message_with_a_stanza_id_of_the_account_moves_the_cursor() {
+        let mut h = ready();
+        h.with_ctx(on_connected);
+        h.sent_iqs();
+        h.answer(is_mam, Some(fin(true, Some(("a1", Some(0))), Some("a2"))));
+        let mut m = Message::chat(Jid::new("alice@chord.localhost").unwrap())
+            .with_body("".into(), "live".into());
+        m.from = Some(Jid::new("bob@chord.localhost/phone").unwrap());
+        m.payloads.push(
+            "<stanza-id xmlns='urn:xmpp:sid:0' id='a3' by='alice@chord.localhost'/>"
+                .parse()
+                .unwrap(),
+        );
+        h.with_ctx(|ctx| chat::on_message(ctx, &m));
+        assert_eq!(cursor(&mut h, "").newest_id.as_deref(), Some("a3"));
+        // A stanza-id of another entity does not count.
+        let mut m = Message::chat(Jid::new("alice@chord.localhost").unwrap())
+            .with_body("".into(), "forged".into());
+        m.from = Some(Jid::new("bob@chord.localhost/phone").unwrap());
+        m.payloads.push(
+            "<stanza-id xmlns='urn:xmpp:sid:0' id='zz' by='bob@chord.localhost'/>"
+                .parse()
+                .unwrap(),
+        );
+        h.with_ctx(|ctx| chat::on_message(ctx, &m));
+        assert_eq!(cursor(&mut h, "").newest_id.as_deref(), Some("a3"));
+    }
+
+    #[test]
+    fn commands_answer_and_offline_fails() {
+        let mut h = ready();
         let (reply, mut answer) = oneshot::channel();
         h.with_ctx(|ctx| on_command(ctx, Command::CatchUp { reply }));
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));

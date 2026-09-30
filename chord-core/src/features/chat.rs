@@ -21,6 +21,10 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
         return;
     }
     let ids = MessageIds::of(message, ctx.account);
+    // The archive position of a live message keeps the next catch-up short.
+    if let Some(stanza_id) = &ids.stanza_id {
+        super::mam::on_live(ctx, stanza_id);
+    }
     store(ctx, message, ids, delay_ms(message), true);
 }
 
