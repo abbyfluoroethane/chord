@@ -3,6 +3,7 @@
 pub mod actor;
 pub mod features;
 pub mod forms;
+pub mod ip_filter;
 pub mod runtime;
 pub mod session;
 pub mod store;

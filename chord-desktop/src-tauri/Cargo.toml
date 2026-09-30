@@ -64,5 +64,9 @@ keyring = { version = "3", features = ["windows-native"] }
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
+[dev-dependencies]
+# #[tokio::test] for the resolver tests in src/link_preview.rs.
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 # No [profile] here: the workspace root sets the profiles, with panic = "unwind".
 # Never set panic = "abort" (see the root Cargo.toml).

@@ -33,7 +33,7 @@ tokio-xmpp = { workspace = true, optional = true }
 # Sink and Stream helpers for the stream of session/register.rs.
 futures-util = { version = "0.3", optional = true, default-features = false, features = ["sink", "std"] }
 # Only session/native.rs and runtime.rs use tokio.
-tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time", "io-util"] }
+tokio = { workspace = true, optional = true, features = ["sync", "rt", "macros", "time", "io-util", "net"] }
 
 # HTTP PUT for XEP-0363 upload. Only runtime-gated code in features/upload.rs uses it.
 reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls", "stream"] }

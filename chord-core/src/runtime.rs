@@ -153,23 +153,67 @@ pub(crate) async fn http_put(
 #[cfg(feature = "native-session")]
 const DOWNLOAD_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(60);
 
-/// Accept an https URL, or an http URL to `localhost` or `127.0.0.1` (a dev server).
-/// This is the rule of the upload path. A URL with user info is refused.
+/// Whether a dev server on the loopback may be a download source. Only tests and a
+/// `dev-insecure` build may. A release build never does: the URL comes from a remote
+/// entity, so a private address is a blind request into the network of the user.
 #[cfg(feature = "native-session")]
-fn check_download_url(url: &str) -> Result<(), String> {
+const DEV_LOOPBACK: bool = cfg!(any(test, feature = "dev-insecure"));
+
+/// What `check_download_url` decides.
+#[cfg(feature = "native-session")]
+#[derive(Debug, PartialEq, Eq)]
+enum Target {
+    /// A public host, or a name that the public-only resolver must check.
+    Public,
+    /// `localhost` or `127.0.0.1` over http, in a dev build only.
+    DevLoopback,
+}
+
+/// Accept an https URL. A URL with user info is refused, and so is an IP literal that is
+/// not public. A host name is checked after the DNS lookup, by `PublicOnly`.
+#[cfg(feature = "native-session")]
+fn check_download_url(url: &str) -> Result<Target, String> {
+    use reqwest::Url;
     let bad = || format!("unsafe download URL: {url}");
-    let (scheme, rest) = url.split_once("://").ok_or_else(bad)?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let parsed = Url::parse(url).map_err(|_| bad())?;
     // No user info: it can hide the real host.
-    if authority.is_empty() || authority.contains('@') {
+    if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(bad());
     }
-    let host = authority.rsplit_once(':').map_or(authority, |(h, _)| h);
-    let local = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
-    if scheme.eq_ignore_ascii_case("https") || (scheme.eq_ignore_ascii_case("http") && local) {
-        Ok(())
-    } else {
-        Err(bad())
+    // The parser turns 2130706433 and 0x7f.1 into 127.0.0.1, so this sees the real address.
+    let host = parsed.host_str().ok_or_else(bad)?;
+    let literal = host.trim_start_matches('[').trim_end_matches(']');
+    let local = match literal.parse::<std::net::IpAddr>() {
+        Ok(ip) => {
+            let dev = DEV_LOOPBACK && ip.is_loopback() && ip.is_ipv4();
+            if !crate::ip_filter::is_public_ip(ip) && !dev {
+                return Err(bad());
+            }
+            dev
+        }
+        Err(_) => host.eq_ignore_ascii_case("localhost"),
+    };
+    match parsed.scheme() {
+        "https" if !local => Ok(Target::Public),
+        "http" | "https" if local && DEV_LOOPBACK => Ok(Target::DevLoopback),
+        _ => Err(bad()),
+    }
+}
+
+/// The DNS resolver of the download client. It drops the addresses that are not public,
+/// so a name that points into a private network, or a DNS rebinding trick, fails.
+#[cfg(feature = "native-session")]
+struct PublicOnly;
+
+#[cfg(feature = "native-session")]
+impl reqwest::dns::Resolve for PublicOnly {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_owned();
+        Box::pin(async move {
+            let public = crate::ip_filter::resolve_public(&host).await?;
+            let addrs: reqwest::dns::Addrs = Box::new(public.into_iter());
+            Ok(addrs)
+        })
     }
 }
 
@@ -182,15 +226,23 @@ fn check_size(have: usize, chunk: usize, max_bytes: usize) -> Result<usize, Stri
     }
 }
 
-/// Run an HTTP GET and return the body. It follows no redirect. The download stops
+/// Run an HTTP GET and return the body. It follows no redirect and connects to a public
+/// address only. The download stops
 /// with an error when the body grows over `max_bytes`.
 #[cfg(feature = "native-session")]
 pub async fn http_get(url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
-    check_download_url(url)?;
-    let client = reqwest::Client::builder()
+    let target = check_download_url(url)?;
+    let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(core::time::Duration::from_secs(15))
-        .timeout(DOWNLOAD_TIMEOUT)
+        .timeout(DOWNLOAD_TIMEOUT);
+    if target == Target::Public {
+        // A proxy would do its own DNS lookup and skip the filter.
+        builder = builder
+            .no_proxy()
+            .dns_resolver(std::sync::Arc::new(PublicOnly));
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("cannot build the HTTP client: {e}"))?;
     let mut response = client
@@ -346,23 +398,55 @@ mod tests {
     }
 
     #[test]
-    fn download_urls_follow_the_upload_rule() {
+    fn download_urls_need_https_and_a_public_host() {
         for ok in [
             "https://a.example/x.png",
-            "http://localhost:5280/x",
-            "http://127.0.0.1/x",
+            "https://8.8.8.8/x",
+            "https://[2606:4700:4700::1111]/x",
         ] {
-            assert!(check_download_url(ok).is_ok(), "{ok}");
+            assert_eq!(check_download_url(ok), Ok(Target::Public), "{ok}");
+        }
+        // A dev server on the loopback passes in a test build only.
+        for ok in ["http://localhost:5280/x", "http://127.0.0.1/x"] {
+            assert_eq!(check_download_url(ok), Ok(Target::DevLoopback), "{ok}");
         }
         for bad in [
             "http://a.example/x",
             "http://localhost@evil.example/x",
-            "http://localhost.evil.example/x",
+            "https://user:pw@a.example/x",
             "ftp://a.example/x",
-            "https:///x",
             "nonsense",
+            // Private, link local and loopback literals.
+            "https://10.0.0.1/x",
+            "https://192.168.1.1/x",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[::1]/x",
+            "https://[fe80::1]/x",
+            "https://[::ffff:7f00:1]/x",
+            "http://[::1]/x",
+            // Other spellings of 127.0.0.1.
+            "http://10.0.0.1/x",
+            "http://localhost.:5280/x",
         ] {
             assert!(check_download_url(bad).is_err(), "{bad}");
         }
+        // Other spellings of 127.0.0.1 are the loopback, never a public target.
+        for odd in [
+            "https://2130706433/x",
+            "https://0x7f.1/x",
+            "https://127.1/x",
+        ] {
+            assert_eq!(check_download_url(odd), Ok(Target::DevLoopback), "{odd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_name_that_resolves_to_the_loopback_is_refused() {
+        // "localhost." is not the dev exception, so the resolver must refuse it.
+        let error = http_get("https://localhost./x", 10).await.unwrap_err();
+        assert!(
+            error.contains("failed") || error.contains("unsafe"),
+            "{error}"
+        );
     }
 }

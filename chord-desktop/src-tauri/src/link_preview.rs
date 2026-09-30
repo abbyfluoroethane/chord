@@ -7,8 +7,6 @@
 //! redirect hop goes through the same URL check.
 
 use std::collections::{HashMap, VecDeque};
-use std::error::Error as StdError;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -33,6 +31,8 @@ const MAX_DESCRIPTION_CHARS: usize = 400;
 const CACHE_ENTRIES: usize = 256;
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const USER_AGENT: &str = "Chord/0.1 (link preview)";
+/// The most page fetches at one time. A room with many URLs must not open many sockets.
+const MAX_PARALLEL_FETCHES: usize = 4;
 
 /// What the UI shows for one link. Every field but `url` can be missing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -51,62 +51,10 @@ pub struct LinkPreview {
 
 // ---------------------------------------------------------------- the IP filter
 
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_multicast()
-        || a == 0 // 0.0.0.0/8, "this network"
-        || (a == 100 && (64..=127).contains(&b)) // 100.64.0.0/10, CGNAT
-        || (a == 192 && b == 0 && c == 0) // 192.0.0.0/24, IETF protocol assignments
-        || (a == 192 && b == 0 && c == 2) // 192.0.2.0/24, documentation
-        || (a == 198 && b == 51 && c == 100) // 198.51.100.0/24, documentation
-        || (a == 203 && b == 0 && c == 113) // 203.0.113.0/24, documentation
-        || (a == 198 && (b == 18 || b == 19)) // 198.18.0.0/15, benchmarking
-        || a >= 240) // 240.0.0.0/4, reserved
-}
-
-fn is_public_v6(ip: Ipv6Addr) -> bool {
-    let s = ip.segments();
-    // ::ffff:a.b.c.d and the NAT64 prefix 64:ff9b::/96 carry an IPv4 address.
-    if let Some(v4) = ip.to_ipv4_mapped() {
-        return is_public_v4(v4);
-    }
-    if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-        let [hi, lo] = [s[6].to_be_bytes(), s[7].to_be_bytes()];
-        return is_public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
-    }
-    // The deprecated IPv4-compatible form ::a.b.c.d (but not :: and ::1, checked below).
-    if s[..6] == [0, 0, 0, 0, 0, 0] && (s[6] != 0 || s[7] > 1) {
-        let [hi, lo] = [s[6].to_be_bytes(), s[7].to_be_bytes()];
-        return is_public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1]));
-    }
-    // 6to4, 2002:a.b.c.d::/48: the IPv4 address is in the second and third segments.
-    if s[0] == 0x2002 {
-        let [hi, lo] = [s[1].to_be_bytes(), s[2].to_be_bytes()];
-        if !is_public_v4(Ipv4Addr::new(hi[0], hi[1], lo[0], lo[1])) {
-            return false;
-        }
-    }
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (s[0] & 0xfe00) == 0xfc00 // fc00::/7, unique local
-        || (s[0] & 0xffc0) == 0xfe80 // fe80::/10, link local
-        || (s[0] & 0xffc0) == 0xfec0 // fec0::/10, site local (deprecated)
-        || (s[0] == 0x2001 && s[1] == 0x0db8)) // 2001:db8::/32, documentation
-}
-
-/// True if a connection to `ip` is allowed: a public address only.
-pub fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_public_v4(v4),
-        IpAddr::V6(v6) => is_public_v6(v6),
-    }
-}
+// The ranges live in chord-core, which the space avatar download shares.
+#[cfg(test)]
+use chord_core::ip_filter::is_public_ip;
+use chord_core::ip_filter::{is_public_v4, is_public_v6, resolve_public};
 
 /// Check a URL before the request. Only http and https, no user info, and an IP literal
 /// must be public. A domain is checked by the resolver.
@@ -140,13 +88,7 @@ impl Resolve for PublicOnly {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
         Box::pin(async move {
-            let found = tokio::net::lookup_host((host.as_str(), 0)).await?;
-            let public: Vec<SocketAddr> = found.filter(|a| is_public_ip(a.ip())).collect();
-            if public.is_empty() {
-                let error: Box<dyn StdError + Send + Sync> =
-                    Box::new(std::io::Error::other("the host has no public address"));
-                return Err(error);
-            }
+            let public = resolve_public(&host).await?;
             let addrs: Addrs = Box::new(public.into_iter());
             Ok(addrs)
         })
@@ -323,6 +265,12 @@ fn shared() -> &'static Shared {
     })
 }
 
+/// The permits for the page fetches.
+fn fetch_permits() -> &'static tokio::sync::Semaphore {
+    static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+    PERMITS.get_or_init(|| tokio::sync::Semaphore::new(MAX_PARALLEL_FETCHES))
+}
+
 fn cached(key: &str) -> Option<Option<LinkPreview>> {
     shared().cache.lock().ok()?.get(key, Instant::now())
 }
@@ -429,11 +377,15 @@ pub async fn link_preview(url: String) -> Res<Option<LinkPreview>> {
     // Another request for the same URL can have finished while we waited.
     let result = match cached(&key) {
         Some(hit) => Ok(hit),
-        None => fetch(parsed).await.inspect(|value| {
-            if let Ok(mut cache) = shared().cache.lock() {
-                cache.put(key.clone(), value.clone(), Instant::now());
-            }
-        }),
+        None => {
+            // The permit lives until the fetch ends. The semaphore is never closed.
+            let _permit = fetch_permits().acquire().await.map_err(|_| poisoned())?;
+            fetch(parsed).await.inspect(|value| {
+                if let Ok(mut cache) = shared().cache.lock() {
+                    cache.put(key.clone(), value.clone(), Instant::now());
+                }
+            })
+        }
     };
     if let Ok(mut inflight) = shared().inflight.lock() {
         inflight.remove(&key);
@@ -546,6 +498,7 @@ fn poisoned() -> ChordError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::IpAddr;
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
@@ -892,5 +845,34 @@ mod tests {
         }
         // A 6to4 address of a public IPv4 host stays public.
         assert!(is_public_ip(IpAddr::from_str("2002:0808:0808::1").unwrap()));
+    }
+
+    #[test]
+    fn the_extra_ranges_and_odd_hosts_are_refused() {
+        for text in [
+            "2001::1",
+            "64:ff9b:1::1",
+            "100::1",
+            "192.88.99.1",
+            "192.31.196.1",
+        ] {
+            assert!(!is_public_ip(ip(text)), "{text}");
+        }
+        // A bracketed mapped loopback.
+        assert!(validate_url(&url("http://[::ffff:7f00:1]/")).is_err());
+        assert!(validate_url(&url("http://[::ffff:127.0.0.1]/")).is_err());
+        assert!(validate_url(&url("http://[2001::1]/")).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_trailing_dot_host_does_not_reach_the_loopback() {
+        assert!(resolve_public("localhost.").await.is_err());
+        assert!(link_preview("http://localhost./".into()).await.is_err());
+    }
+
+    #[test]
+    fn the_fetches_have_a_cap_of_four() {
+        assert_eq!(fetch_permits().available_permits(), MAX_PARALLEL_FETCHES);
+        assert_eq!(MAX_PARALLEL_FETCHES, 4);
     }
 }
