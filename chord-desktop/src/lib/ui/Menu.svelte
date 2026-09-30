@@ -40,7 +40,8 @@
     label,
     nested = false,
     header,
-    done
+    done,
+    fill = false
   }: {
     anchor: HTMLElement;
     items: MenuItem[];
@@ -53,6 +54,8 @@
     header?: Snippet;
     /** Close the whole menu after a pick. A submenu gets the close of its root. */
     done?: () => void;
+    /** As wide as the anchor, less the gap at each side (see Popover). */
+    fill?: boolean;
   } = $props();
 
   let list = $state<HTMLDivElement>();
@@ -154,7 +157,7 @@
   });
 </script>
 
-<Popover {anchor} {onclose} {placement} {label} role="menu">
+<Popover {anchor} {onclose} {placement} {label} {fill} role="menu">
   <!-- svelte-ignore a11y_interactive_supports_focus -->
   <div class="menu" bind:this={list} onkeydown={keydown} role="presentation">
     {#if header}<div class="head" role="group" aria-label="Quick reactions">{@render header()}</div>{/if}

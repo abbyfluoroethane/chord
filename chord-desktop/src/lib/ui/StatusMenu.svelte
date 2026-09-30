@@ -1,7 +1,7 @@
 <script lang="ts">
   // Our status: availability with its presence shape, and a status: an optional emoji and
-  // a text. It saves as "$EMOJI $TEXT". It opens above the user panel and is as wide as
-  // the channel list.
+  // a text. It saves as "$EMOJI $TEXT". It opens above the user panel and fills the width
+  // of the channel list, less the popover gap at each side.
   import { onMount } from 'svelte';
   import Check from 'lucide-svelte/icons/check';
   import SmilePlus from 'lucide-svelte/icons/smile-plus';
@@ -18,8 +18,6 @@
 
   let { anchor, onclose }: { anchor: HTMLElement; onclose: () => void } = $props();
 
-  // The popover adds a 1px border on each side.
-  const width = $derived(anchor.getBoundingClientRect().width - 2);
   const saved = splitStatus(app.me.status);
   let emoji = $state(saved.emoji);
   let text = $state(saved.text);
@@ -93,8 +91,8 @@
   }
 </script>
 
-<Popover {anchor} {onclose} placement="top-end" label="Your status" role="dialog">
-  <div class="menu" style:width="{width}px" bind:this={menuEl}>
+<Popover {anchor} {onclose} placement="top-end" label="Your status" role="dialog" fill>
+  <div class="menu" bind:this={menuEl}>
     <ul role="menu" aria-label="Availability">
       {#each choices as show (show)}
         {@const kind = presenceKind(true, show)}

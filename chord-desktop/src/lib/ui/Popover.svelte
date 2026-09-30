@@ -15,6 +15,7 @@
     placement = 'bottom-start',
     label,
     role = 'dialog',
+    fill = false,
     children
   }: {
     anchor: HTMLElement;
@@ -22,6 +23,8 @@
     placement?: Placement;
     label: string;
     role?: 'dialog' | 'menu';
+    /** As wide as the anchor, with the same gap at the sides as between the anchor and the panel. */
+    fill?: boolean;
     children: Snippet;
   } = $props();
 
@@ -30,13 +33,14 @@
   function place() {
     if (!el) return;
     const a = anchor.getBoundingClientRect();
-    const p = el.getBoundingClientRect();
     const gap = 4;
-    let x = a.left;
+    if (fill) el.style.width = `${a.width - 2 * gap}px`;
+    const p = el.getBoundingClientRect();
+    let x = fill ? a.left + gap : a.left;
     let y = a.bottom + gap;
-    if (placement === 'bottom-end') x = a.right - p.width;
+    if (placement === 'bottom-end' && !fill) x = a.right - p.width;
     if (placement === 'top-end') {
-      x = a.right - p.width;
+      if (!fill) x = a.right - p.width;
       y = a.top - p.height - gap;
     }
     if (placement === 'left-start') {
@@ -94,7 +98,7 @@
   });
 </script>
 
-<div bind:this={el} class="popover" {role} aria-label={label} tabindex="-1">
+<div bind:this={el} class="popover" class:fill {role} aria-label={label} tabindex="-1">
   {@render children()}
 </div>
 
@@ -112,6 +116,9 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
     animation: arrive var(--dur-arrive) var(--ease-out);
+  }
+  .fill {
+    min-width: 0;
   }
   .popover:focus {
     outline: none;

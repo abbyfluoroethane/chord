@@ -40,7 +40,7 @@
 </button>
 
 {#if menuOpen && btn}
-  <Menu anchor={btn} {items} label="{name} menu" onclose={() => (menuOpen = false)} />
+  <Menu anchor={btn} {items} fill label="{name} menu" onclose={() => (menuOpen = false)} />
 {/if}
 
 <style>
