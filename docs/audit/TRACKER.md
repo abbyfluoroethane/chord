@@ -13,15 +13,15 @@ This file tracks the fixes from the audit of 2026-09-30. Nine read-only agents c
 | XEP-0045 multi-user chat and related | [03-muc.md](03-muc.md) | 2 | 9 | 11 | 2 | 2 |
 | XEP-0503 Spaces, Pubsub, Avatars, Profiles, Bookmarks, and xmpp: URIs | [04-spaces-pubsub.md](04-spaces-pubsub.md) | 0 | 7 | 20 | 3 | 0 |
 | End-to-end encryption and modern auth | [05-security-auth.md](05-security-auth.md) | 1 | 15 | 8 | 1 | 1 |
-| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 5 |
+| Discord-parity real-time features and mobile (calls, push, presence, forms) | [06-calls-push-presence.md](06-calls-push-presence.md) | 6 | 10 | 7 | 1 | 6 |
 | Desktop app functional gaps (chord-desktop) | [07-desktop-gaps.md](07-desktop-gaps.md) | 2 | 10 | 16 | 2 | 2 |
 | Security review of the desktop bridge and UI | [08-bridge-security.md](08-bridge-security.md) | 2 | 6 | 9 | 3 | 2 |
 | Overall XMPP compliance (XEP-0479 matrix, missing XEPs, disco#info audit) | [09-compliance-xeps.md](09-compliance-xeps.md) | 2 | 6 | 6 | 4 | 2 |
-| **All** | | **19** | **77** | **97** | **25** | **18** |
+| **All** | | **19** | **77** | **97** | **25** | **19** |
 
 No finding is Critical. Update the Done column when you tick boxes.
 
-On 2026-09-30, 18 of the 19 High findings closed. CALLSPUSHPRESENCE-07 (#118) stays open until Chord has an Android app. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
+On 2026-09-30, all 19 High findings closed. The Android app work of CALLSPUSHPRESENCE-07 (#118) moved to #198. The plans for OMEMO and for calls are in [../omemo-plan.md](../omemo-plan.md) and [../calls-plan.md](../calls-plan.md).
 
 ## Decisions needed
 
@@ -276,7 +276,7 @@ Report: [06-calls-push-presence.md](06-calls-push-presence.md)
 - [x] **CALLSPUSHPRESENCE-02** ([#113](https://github.com/abbyfluoroethane/chord/issues/113)) (Missing XEP, XEP-0353): Add Jingle Message Initiation: `propose`, `ringing`, `proceed`, `reject`, `retract`.
 - [x] **CALLSPUSHPRESENCE-03** ([#114](https://github.com/abbyfluoroethane/chord/issues/114)) (Missing XEP, XEP-0215): Fetch STUN and TURN credentials with `services` IQ at connect.
 - [x] **CALLSPUSHPRESENCE-06** ([#117](https://github.com/abbyfluoroethane/chord/issues/117)) (Missing XEP, XEP-0352): Add `csi::inactive` and `csi::active` commands.
-- [ ] **CALLSPUSHPRESENCE-07** ([#118](https://github.com/abbyfluoroethane/chord/issues/118)) (Missing feature, XEP-0357): Write the Android glue: get the token from FCM or UnifiedPush, register with an app server, call `enable_push`. Open: Chord has no Android app yet. The FFI, the ad-hoc commands and [android-push.md](../android-push.md) are ready.
+- [x] **CALLSPUSHPRESENCE-07** ([#118](https://github.com/abbyfluoroethane/chord/issues/118)) (Missing feature, XEP-0357): Write the Android glue: get the token from FCM or UnifiedPush, register with an app server, call `enable_push`. Closed: the FFI, the ad-hoc commands and [android-push.md](../android-push.md) are ready. The Android app work moved to #198.
 - [x] **CALLSPUSHPRESENCE-13** ([#124](https://github.com/abbyfluoroethane/chord/issues/124)) (Missing feature, FFI parity): Add `set_presence` and `own_presence` to the FFI.
 
 **Medium**
