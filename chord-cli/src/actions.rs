@@ -140,6 +140,66 @@ pub async fn space_browse(opts: &Opts, client: &Client) -> Result<(), CliError> 
     Ok(())
 }
 
+/// `space-info <service> <node>`: read a space without joining it.
+pub async fn space_info(
+    opts: &Opts,
+    client: &Client,
+    service: &str,
+    node: &str,
+) -> Result<(), CliError> {
+    let c = client.handle.space_info(service, node).await.map_err(err)?;
+    if opts.json {
+        println!(
+            "{}",
+            Obj::new()
+                .str("service", &c.service)
+                .str("node", &c.node)
+                .str("name", &c.name)
+                .opt_str("description", c.description.as_deref())
+                .opt_str("access_model", c.access_model.as_deref())
+                .opt_num("channels", c.channels.map(|n| n as i64))
+                .finish()
+        );
+    } else {
+        println!("{} ({} {})", c.name, c.service, c.node);
+        if let Some(d) = &c.description {
+            println!("  {d}");
+        }
+        if let Some(n) = c.channels {
+            println!("  {n} channels");
+        }
+    }
+    Ok(())
+}
+
+/// `room-info <room>`: read a room with a disco#info query, without joining it.
+pub async fn room_info(opts: &Opts, client: &Client, room: &str) -> Result<(), CliError> {
+    let c = client.handle.room_info(bare(room)?).await.map_err(err)?;
+    if opts.json {
+        println!(
+            "{}",
+            Obj::new()
+                .str("jid", &c.jid)
+                .opt_str("name", c.name.as_deref())
+                .opt_str("description", c.description.as_deref())
+                .opt_str("subject", c.subject.as_deref())
+                .opt_num("occupants", c.occupants.map(i64::from))
+                .bool("password_protected", c.password_protected)
+                .bool("members_only", c.members_only)
+                .finish()
+        );
+    } else {
+        println!("{} ({})", c.name.as_deref().unwrap_or("no name"), c.jid);
+        if let Some(s) = &c.subject {
+            println!("  subject: {s}");
+        }
+        if let Some(n) = c.occupants {
+            println!("  {n} people");
+        }
+    }
+    Ok(())
+}
+
 pub async fn space_join(client: &Client, service: &str, node: &str) -> Result<(), CliError> {
     match client.handle.join_space(service, node).await.map_err(err)? {
         JoinOutcome::Joined => println!("joined space {service} {node}"),

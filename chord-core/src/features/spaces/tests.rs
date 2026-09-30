@@ -2128,3 +2128,105 @@ fn a_refused_member_list_grants_nothing_and_the_add_succeeds() {
     assert_eq!(rx.try_recv(), Ok(Some(Ok(()))));
     assert!(grant_texts(&mut h).is_empty());
 }
+
+fn card(h: &mut Harness) -> oneshot::Receiver<Result<SpaceCard, ClientError>> {
+    let (reply, rx) = oneshot::channel();
+    h.with_ctx(|ctx| {
+        on_command(
+            ctx,
+            Command::Card {
+                service: service_bare(),
+                node: "dev".into(),
+                reply,
+            },
+        )
+    });
+    rx
+}
+
+fn is_card_info(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::CardInfo { .. }))
+}
+
+fn is_card_items(p: &FeaturePending) -> bool {
+    matches!(p, FeaturePending::Spaces(Pending::CardItems { .. }))
+}
+
+#[test]
+fn space_info_reads_the_name_and_counts_the_rooms_without_joining() {
+    let mut h = harness();
+    let mut rx = card(&mut h);
+    assert_eq!(h.sent_iqs().len(), 1);
+    h.answer(
+        is_card_info,
+        Some(node_info("dev", NS_SPACES, "The dev corner", "open")),
+    );
+    assert_eq!(rx.try_recv(), Ok(None));
+    assert_eq!(h.sent_iqs().len(), 1);
+    h.answer(
+        is_card_items,
+        Some(items_result(
+            "dev",
+            "<item id='a@rooms.chord.localhost'>
+               <conference xmlns='urn:xmpp:bookmarks:1' name='A'/></item>
+             <item id='b@rooms.chord.localhost'>
+               <conference xmlns='urn:xmpp:bookmarks:1' name='B'/></item>
+             <item id='urn:xmpp:spaces:avatar:metadata:0'><metadata xmlns='x'/></item>",
+        )),
+    );
+    let Ok(Some(Ok(card))) = rx.try_recv() else {
+        panic!("expected the card")
+    };
+    assert_eq!(card.name, "The dev corner");
+    assert_eq!(card.service, SERVICE);
+    assert_eq!(card.access_model.as_deref(), Some("open"));
+    assert_eq!(card.channels, Some(2));
+    // Nothing was stored: the space is not followed.
+    assert!(column(&h, "SELECT node FROM spaces").is_empty());
+}
+
+#[test]
+fn space_info_keeps_the_card_when_the_items_are_hidden() {
+    let mut h = harness();
+    let mut rx = card(&mut h);
+    h.answer(
+        is_card_info,
+        Some(node_info("dev", NS_SPACES, "The dev corner", "open")),
+    );
+    h.respond(is_card_items, forbidden());
+    let Ok(Some(Ok(card))) = rx.try_recv() else {
+        panic!("expected the card")
+    };
+    assert_eq!(card.channels, None);
+}
+
+#[test]
+fn space_info_fails_for_a_node_that_is_not_a_space() {
+    let mut h = harness();
+    let mut rx = card(&mut h);
+    assert_eq!(h.sent_iqs().len(), 1);
+    h.answer(is_card_info, Some(node_info("dev", "x", "Other", "open")));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Invalid(_))))
+    ));
+    assert!(h.sent_iqs().is_empty());
+}
+
+#[test]
+fn space_info_fails_on_a_server_error_and_a_lost_session() {
+    let mut h = harness();
+    let mut rx = card(&mut h);
+    h.respond(is_card_info, forbidden());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Some(Err(ClientError::Server(_))))
+    ));
+    let mut rx = card(&mut h);
+    h.answer(
+        is_card_info,
+        Some(node_info("dev", NS_SPACES, "The dev corner", "open")),
+    );
+    h.respond(is_card_items, IqResponse::Lost);
+    assert_eq!(rx.try_recv(), Ok(Some(Err(ClientError::NotConnected))));
+}

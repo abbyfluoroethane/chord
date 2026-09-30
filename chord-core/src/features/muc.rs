@@ -9,6 +9,7 @@ use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use rusqlite::{OptionalExtension, params};
 use xmpp_parsers::data_forms::DataForm;
+use xmpp_parsers::disco::DiscoInfoResult;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
@@ -35,6 +36,9 @@ const NS_MUC_ADMIN: &str = "http://jabber.org/protocol/muc#admin";
 /// XEP-0249 direct invitations.
 const NS_CONFERENCE: &str = "jabber:x:conference";
 const NS_DATA: &str = "jabber:x:data";
+const NS_DISCO_INFO: &str = "http://jabber.org/protocol/disco#info";
+/// The form type of the room information in a disco#info answer (XEP-0045, 15.5).
+const NS_ROOM_INFO: &str = "http://jabber.org/protocol/muc#roominfo";
 
 type Reply = oneshot::Sender<Result<(), ClientError>>;
 type PrivateReply = oneshot::Sender<Result<String, ClientError>>;
@@ -85,6 +89,25 @@ pub struct RoomSettings {
     pub public: Option<bool>,
     /// True lets only members enter (`muc#roomconfig_membersonly`).
     pub members_only: Option<bool>,
+}
+
+/// What `room_info` reads about a room, for an invite card. It is read only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct RoomCard {
+    pub jid: String,
+    /// The name of the room, from the disco identity.
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub subject: Option<String>,
+    /// The number of people in the room (`muc#roominfo_occupants`).
+    pub occupants: Option<u32>,
+    pub password_protected: bool,
+    pub members_only: bool,
 }
 
 /// A join that waits for the self-presence or an error.
@@ -141,6 +164,8 @@ pub(crate) enum Pending {
     },
     /// The configuration form of a room, for `configure_room`.
     SettingsForm(BareJid, RoomSettings, Reply),
+    /// The disco#info of a room, for `room_info`.
+    Card(BareJid, oneshot::Sender<Result<RoomCard, ClientError>>),
     /// The answer to `grant_membership`. Nobody waits for it.
     Grant {
         room: BareJid,
@@ -150,6 +175,11 @@ pub(crate) enum Pending {
 
 /// A command from the public API.
 pub(crate) enum Command {
+    /// The disco#info of a room.
+    Card {
+        room: BareJid,
+        reply: oneshot::Sender<Result<RoomCard, ClientError>>,
+    },
     /// The room service of our server. It waits for service discovery.
     RoomService {
         reply: oneshot::Sender<Result<Option<BareJid>, ClientError>>,
@@ -396,6 +426,15 @@ impl ClientHandle {
         .await
     }
 
+    /// Read the name, the subject, and the number of people of a room, with a disco#info
+    /// query. It does not join the room. Fails when the room does not exist or when the
+    /// server refuses the query.
+    pub async fn room_info(&self, room: BareJid) -> Result<RoomCard, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(super::FeatureCommand::Muc(Command::Card { room, reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
     async fn room_command(
         &self,
         command: impl FnOnce(Reply) -> Command,
@@ -445,6 +484,14 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>) {
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
     match pending {
+        Pending::Card(room, reply) => {
+            let _ = reply.send(match response {
+                IqResponse::Result(Some(query)) => room_card(&room, query),
+                IqResponse::Result(None) => Err(ClientError::Server("empty answer".into())),
+                IqResponse::Error(e) => Err(ClientError::Server(error_text(&e))),
+                IqResponse::Lost => Err(ClientError::NotConnected),
+            });
+        }
         Pending::RoomConfigForm(room, replies) => {
             let form = match response {
                 IqResponse::Result(Some(query)) => query
@@ -566,6 +613,17 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
 
 pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
     match command {
+        Command::Card { room, reply } => {
+            let iq = Iq::Get {
+                from: None,
+                to: Some(Jid::from(room.clone())),
+                id: String::new(),
+                payload: format!("<query xmlns='{NS_DISCO_INFO}'/>")
+                    .parse()
+                    .expect("static XML"),
+            };
+            ctx.request(iq, super::Pending::Muc(Pending::Card(room, reply)));
+        }
         Command::Join {
             room,
             nick,
@@ -701,6 +759,36 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             );
         }
     }
+}
+
+/// The card of a room from its disco#info answer. An answer with no conference identity
+/// is not a room.
+fn room_card(room: &BareJid, query: Element) -> Result<RoomCard, ClientError> {
+    let info =
+        DiscoInfoResult::try_from(query).map_err(|_| ClientError::Server("bad answer".into()))?;
+    let identity = info.identities.iter().find(|i| i.category == "conference");
+    let Some(identity) = identity else {
+        return Err(ClientError::Invalid("the address is not a room".into()));
+    };
+    let form = info
+        .extensions
+        .iter()
+        .find(|f| f.form_type() == Some(NS_ROOM_INFO));
+    let value = |var: &str| {
+        form.and_then(|f| f.fields.iter().find(|f| f.var.as_deref() == Some(var)))
+            .and_then(|f| f.values.first().cloned())
+            .filter(|v| !v.trim().is_empty())
+    };
+    let feature = |name: &str| info.features.contains(&format!("muc_{name}"));
+    Ok(RoomCard {
+        jid: room.to_string(),
+        name: identity.name.clone().filter(|n| !n.trim().is_empty()),
+        description: value("muc#roominfo_description"),
+        subject: value("muc#roominfo_subject"),
+        occupants: value("muc#roominfo_occupants").and_then(|v| v.trim().parse().ok()),
+        password_protected: feature("passwordprotected"),
+        members_only: feature("membersonly"),
+    })
 }
 
 /// True when we are owner or admin of a room that we are in.
@@ -851,6 +939,10 @@ fn on_invitation(ctx: &mut Ctx<'_>, message: &Message) -> bool {
 
 /// A command while no session is up. Answer each reply channel with an error.
 pub(crate) fn offline(command: Command) {
+    if let Command::Card { reply, .. } = command {
+        let _ = reply.send(Err(ClientError::NotConnected));
+        return;
+    }
     if let Command::RoomService { reply } = command {
         let _ = reply.send(Err(ClientError::NotConnected));
         return;
@@ -3505,5 +3597,87 @@ mod tests {
         // A contact on the account domain still gets a chat message.
         let result = h.with_ctx(|ctx| send_chat(ctx, jid("bob@chord.localhost"), "hi".into()));
         assert!(result.is_ok());
+    }
+
+    fn room_info_answer(h: &mut Harness, response: IqResponse) -> Result<RoomCard, ClientError> {
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Card {
+                    room: room(),
+                    reply,
+                },
+            )
+        });
+        let iqs = h.sent_iqs();
+        assert_eq!(iqs.len(), 1);
+        h.respond(is_muc, response);
+        answer.try_recv().unwrap().expect("an answer")
+    }
+
+    #[test]
+    fn room_info_reads_the_name_the_subject_and_the_occupants() {
+        let mut h = Harness::new();
+        let query: Element = "<query xmlns='http://jabber.org/protocol/disco#info'>
+              <identity category='conference' type='text' name='Dev talk'/>
+              <feature var='muc_membersonly'/>
+              <x xmlns='jabber:x:data' type='result'>
+                <field var='FORM_TYPE' type='hidden'>
+                  <value>http://jabber.org/protocol/muc#roominfo</value></field>
+                <field var='muc#roominfo_subject'><value>Build day</value></field>
+                <field var='muc#roominfo_occupants'><value>7</value></field>
+              </x></query>"
+            .parse()
+            .unwrap();
+        let card = room_info_answer(&mut h, IqResponse::Result(Some(query))).unwrap();
+        assert_eq!(card.jid, ROOM);
+        assert_eq!(card.name.as_deref(), Some("Dev talk"));
+        assert_eq!(card.subject.as_deref(), Some("Build day"));
+        assert_eq!(card.occupants, Some(7));
+        assert!(card.members_only);
+        assert!(!card.password_protected);
+    }
+
+    #[test]
+    fn room_info_works_without_the_room_form() {
+        let mut h = Harness::new();
+        let query: Element = "<query xmlns='http://jabber.org/protocol/disco#info'>
+              <identity category='conference' type='text'/></query>"
+            .parse()
+            .unwrap();
+        let card = room_info_answer(&mut h, IqResponse::Result(Some(query))).unwrap();
+        assert_eq!(card.name, None);
+        assert_eq!(card.occupants, None);
+    }
+
+    #[test]
+    fn room_info_refuses_an_address_that_is_not_a_room() {
+        let mut h = Harness::new();
+        let query: Element = "<query xmlns='http://jabber.org/protocol/disco#info'>
+              <identity category='client' type='pc'/></query>"
+            .parse()
+            .unwrap();
+        let result = room_info_answer(&mut h, IqResponse::Result(Some(query)));
+        assert!(matches!(result, Err(ClientError::Invalid(_))));
+    }
+
+    #[test]
+    fn room_info_passes_on_an_error_and_a_lost_session() {
+        let mut h = Harness::new();
+        let error = IqResponse::Error(StanzaError::new(
+            ErrorType::Cancel,
+            DefinedCondition::ItemNotFound,
+            "en",
+            "",
+        ));
+        assert!(matches!(
+            room_info_answer(&mut h, error),
+            Err(ClientError::Server(_))
+        ));
+        assert_eq!(
+            room_info_answer(&mut h, IqResponse::Lost),
+            Err(ClientError::NotConnected)
+        );
     }
 }

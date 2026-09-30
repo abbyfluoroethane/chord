@@ -122,6 +122,24 @@ pub struct SpaceInfo {
     pub access_model: Option<String>,
 }
 
+/// What `space_info` reads about one space, for an invite card. It is read only.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
+pub struct SpaceCard {
+    /// Pubsub service JID.
+    pub service: String,
+    pub node: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub access_model: Option<String>,
+    /// The number of rooms in the space. `None` when the service does not show the items.
+    pub channels: Option<usize>,
+}
+
 /// The result of `join_space`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
@@ -336,6 +354,17 @@ pub(crate) enum Pending {
         subscriptions: bool,
         seen: HashSet<BareJid>,
     },
+    /// The disco#info of a node for `space_info`.
+    CardInfo {
+        service: BareJid,
+        node: String,
+        reply: Reply<SpaceCard>,
+    },
+    /// The items of a node for `space_info`. They give the number of rooms.
+    CardItems {
+        card: SpaceCard,
+        reply: Reply<SpaceCard>,
+    },
     /// The answer does not matter.
     Ignore,
 }
@@ -344,6 +373,11 @@ pub(crate) enum Pending {
 pub(crate) enum Command {
     Browse {
         reply: Reply<Vec<SpaceInfo>>,
+    },
+    Card {
+        service: BareJid,
+        node: String,
+        reply: Reply<SpaceCard>,
     },
     Join {
         service: BareJid,
@@ -407,6 +441,20 @@ impl ClientHandle {
     /// The public spaces of the pubsub service of our server.
     pub async fn browse_spaces(&self) -> Result<Vec<SpaceInfo>, ClientError> {
         self.space_call(|reply| Command::Browse { reply }).await
+    }
+
+    /// Read the name, the description, and the room count of a space. It does not join
+    /// the space and it changes nothing. Fails when the node is not a space, or when the
+    /// service refuses the query.
+    pub async fn space_info(&self, service: &str, node: &str) -> Result<SpaceCard, ClientError> {
+        let service = parse_service(service)?;
+        let node = node.to_owned();
+        self.space_call(|reply| Command::Card {
+            service,
+            node,
+            reply,
+        })
+        .await
     }
 
     /// Join a space: subscribe to its node. Loads its name and items before it returns.
@@ -843,6 +891,21 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 let _ = reply.send(Err(e));
             }
         },
+        Command::Card {
+            service,
+            node,
+            reply,
+        } => {
+            let iq = info_iq(&service, &node);
+            ctx.request(
+                iq,
+                FeaturePending::Spaces(Pending::CardInfo {
+                    service,
+                    node,
+                    reply,
+                }),
+            );
+        }
         Command::Join {
             service,
             node,
@@ -1082,6 +1145,7 @@ pub(crate) fn offline(command: Command) {
     }
     match command {
         Command::Browse { reply } => no(reply),
+        Command::Card { reply, .. } => no(reply),
         Command::Join { reply, .. } => no(reply),
         Command::Leave { reply, .. } => no(reply),
         Command::Create { reply, .. } => no(reply),
@@ -1146,6 +1210,23 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             }
         }
         Pending::BrowseItems { browse } => on_browse_page(ctx, browse, result),
+        Pending::CardInfo {
+            service,
+            node,
+            reply,
+        } => on_card_info(ctx, &service, &node, reply, result),
+        Pending::CardItems { card, reply } => {
+            let mut card = card;
+            match result {
+                Err(ClientError::NotConnected) => {
+                    let _ = reply.send(Err(ClientError::NotConnected));
+                    return;
+                }
+                Ok(Some(payload)) => card.channels = Some(count_rooms(&payload)),
+                other => log::debug!("items of {} {}: {other:?}", card.service, card.node),
+            }
+            let _ = reply.send(Ok(card));
+        }
         Pending::AvatarData {
             service,
             node,
@@ -1703,6 +1784,67 @@ fn on_node_info(
         After::Items => request_items(ctx, service, node, None),
         After::Join(reply) => request_items(ctx, service, node, Some(reply)),
     }
+}
+
+/// The disco#info answer for `space_info`. A node that is no space is an error.
+fn on_card_info(
+    ctx: &mut Ctx<'_>,
+    service: &BareJid,
+    node: &str,
+    reply: Reply<SpaceCard>,
+    result: Result<Option<Element>, ClientError>,
+) {
+    let payload = match result {
+        Ok(Some(payload)) => payload,
+        Ok(None) => {
+            let _ = reply.send(Err(ClientError::Server("empty answer".into())));
+            return;
+        }
+        Err(e) => {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    };
+    let Ok(info) = DiscoInfoResult::try_from(payload) else {
+        let _ = reply.send(Err(ClientError::Server("bad answer".into())));
+        return;
+    };
+    let meta = meta_of(&info);
+    if meta.type_.as_deref() != Some(NS_SPACES) {
+        let _ = reply.send(Err(ClientError::Invalid("the node is not a space".into())));
+        return;
+    }
+    let found = space_info(service, node, meta);
+    let card = SpaceCard {
+        service: found.service,
+        node: found.node,
+        name: found.name,
+        description: found.description,
+        access_model: found.access_model,
+        channels: None,
+    };
+    match items_iq(service, node) {
+        Ok(iq) => {
+            ctx.request(
+                iq,
+                FeaturePending::Spaces(Pending::CardItems { card, reply }),
+            );
+        }
+        Err(_) => {
+            let _ = reply.send(Ok(card));
+        }
+    }
+}
+
+/// The number of room items in an `<items/>` result.
+fn count_rooms(payload: &Element) -> usize {
+    parse_items(payload)
+        .iter()
+        .filter(|(_, p)| {
+            p.as_ref()
+                .is_some_and(|p| p.is("conference", ns::BOOKMARKS2))
+        })
+        .count()
 }
 
 #[derive(Default)]

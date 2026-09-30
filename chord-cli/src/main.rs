@@ -12,6 +12,7 @@
 //!   join <room> [--nick N]          join and bookmark a room (password: CHORD_ROOM_PASSWORD)
 //!   leave <room>
 //!   upload <jid> <file>             XEP-0363 upload, then send the URL
+//!   space-info <service> <node> | room-info <room>   read a space or a room, no join
 //!   space-browse | space-join <service> <node> | space-create <name> [--private | --authorize]
 //!   space-add-room <service> <node> <room> [name] | space-add-member <service> <node> <jid>
 //!   space-delete <service> <node> | space-leave <service> <node> | space-pending
@@ -76,7 +77,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const USAGE: &str = "usage: chord-cli [--json] [--offline] login | send <jid> <text> | \
 listen [--once] | spaces | channels [home | <service> <node>] | members <room> | \
 timeline <jid> [--limit N] [--follow] | state | join <room> [--nick N] | leave <room> | \
-upload <jid> <file> | space-browse | space-join <service> <node> | \
+upload <jid> <file> | space-info <service> <node> | room-info <room> | space-browse | space-join <service> <node> | \
 space-create <name> [--private | --authorize] | space-add-room <service> <node> <room> [name] | \
 space-add-member <service> <node> <jid> | space-delete <service> <node> | space-leave <service> <node> | space-pending | space-requests <service> <node> | \
 space-approve <service> <node> <jid> | space-deny <service> <node> <jid> | contacts | \
@@ -223,6 +224,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "join",
         "leave",
         "upload",
+        "space-info",
+        "room-info",
         "space-browse",
         "space-join",
         "space-create",
@@ -299,6 +302,8 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("join", args) => actions::join(&client, args).await,
         ("leave", [room]) => actions::leave(&client, room).await,
         ("upload", [to, file]) => actions::upload(&client, to, file).await,
+        ("space-info", [service, node]) => actions::space_info(opts, &client, service, node).await,
+        ("room-info", [room]) => actions::room_info(opts, &client, room).await,
         ("space-browse", []) => actions::space_browse(opts, &client).await,
         ("space-join", [service, node]) => actions::space_join(&client, service, node).await,
         ("space-create", args) => actions::space_create(opts, &client, args).await,
