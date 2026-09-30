@@ -38,6 +38,11 @@ tokio = { workspace = true, features = ["net", "sync"] }
 url = "2"
 # html5ever based HTML parser and selectors, for the Open Graph tags.
 scraper = "0.23"
+# Emoji packs (src/emoji.rs): read the npm tarball, and check its SHA-512.
+flate2 = "1"
+tar = "0.4"
+sha2 = "0.10"
+base64 = "0.22"
 
 # The system keychain for the saved password (src/keychain.rs). Each platform names its
 # own store. A target with no store feature would fall back to a mock store that keeps

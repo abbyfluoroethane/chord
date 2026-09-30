@@ -7,6 +7,7 @@
 
 mod avatars;
 mod commands;
+mod emoji;
 mod error;
 mod gif;
 mod keychain;
@@ -22,7 +23,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default());
-    avatars::register(builder)
+    emoji::register(avatars::register(builder))
         .invoke_handler(tauri::generate_handler![
             commands::open,
             commands::login,
@@ -94,6 +95,8 @@ pub fn run() {
             link_preview::link_preview,
             link_preview::save_image,
             gif::gif_search,
+            emoji::emoji_packs,
+            emoji::emoji_pack_install,
             settings::get_settings,
             settings::set_settings,
         ])
