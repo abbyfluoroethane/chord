@@ -957,7 +957,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
         Command::Remove { reply } => {
             let item = Item::new(None, None, Some(Metadata { infos: vec![] }));
             let iq = publish_iq(NODE_METADATA, item);
-            ctx.request(iq, FeaturePending::Avatars(Pending::Unpublish { reply }));
+            ctx.request_publish(iq, FeaturePending::Avatars(Pending::Unpublish { reply }));
         }
         Command::Set {
             mime,
@@ -987,7 +987,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 }),
             );
             let iq = publish_iq(NODE_DATA, item);
-            ctx.request(
+            ctx.request_publish(
                 iq,
                 FeaturePending::Avatars(Pending::PublishData { image, reply }),
             );
@@ -1080,7 +1080,7 @@ fn publish_metadata(ctx: &mut Ctx<'_>, image: Image, reply: Reply) {
     };
     let item = Item::new(Some(ItemId(image.hash.clone())), None, Some(metadata));
     let iq = publish_iq(NODE_METADATA, item);
-    ctx.request(
+    ctx.request_publish(
         iq,
         FeaturePending::Avatars(Pending::PublishMetadata { image, reply }),
     );

@@ -117,6 +117,7 @@ pub(crate) enum Pending {
     OwnerForm(owner_form::Pending),
     Mds(mds::Pending),
     Profile(profile::Pending),
+    Pubsub(pubsub::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -125,6 +126,9 @@ pub(crate) struct PendingIq {
     /// The `to` of the request. The answer must come from it (RFC 6120, 8.1.2.1).
     pub to: Option<Jid>,
     pub then: Pending,
+    /// A publish with options: what `pubsub::on_answer` needs to fix a node that has
+    /// another configuration and to send the publish again (XEP-0060, 7.1.5).
+    pub retry: Option<Box<pubsub::Retry>>,
     /// The session ticks since the request went out. See `actor::IQ_TIMEOUT_TICKS`.
     pub ticks: u8,
 }
@@ -224,10 +228,24 @@ impl Ctx<'_> {
             PendingIq {
                 to: iq.to().cloned(),
                 then,
+                retry: None,
                 ticks: 0,
             },
         );
         self.send(iq);
+        id
+    }
+
+    /// Like `request`, for a publish with publish-options. If the node exists with
+    /// another configuration and the service answers `conflict`, the feature code does not
+    /// see that answer: `pubsub::on_answer` reads the node configuration, submits the
+    /// wanted one, and sends the publish again once.
+    pub fn request_publish(&mut self, iq: Iq, then: Pending) -> String {
+        let retry = pubsub::Retry::of(&iq).map(Box::new);
+        let id = self.request(iq, then);
+        if let Some(pending) = self.pending.get_mut(&id) {
+            pending.retry = retry;
+        }
         id
     }
 
@@ -436,7 +454,14 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::OwnerForm(p) => owner_form::on_response(ctx, p, response),
         Pending::Mds(p) => mds::on_response(ctx, p, response),
         Pending::Profile(p) => profile::on_response(ctx, p, response),
+        Pending::Pubsub(p) => pubsub::on_response(ctx, p, response),
     }
+}
+
+/// The answer to one of our IQs, with its request. A publish that has a retry goes
+/// through `pubsub::on_answer` first.
+pub(crate) fn on_answer(ctx: &mut Ctx<'_>, pending: PendingIq, response: IqResponse) {
+    pubsub::on_answer(ctx, pending, response);
 }
 
 /// A command for one feature. A command that needs a server service waits until

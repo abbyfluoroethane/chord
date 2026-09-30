@@ -159,7 +159,7 @@ fn send_publish(ctx: &mut Ctx<'_>, peer: &str, stanza_id: &str, by: &BareJid, op
         id: String::new(),
         payload: pubsub.build(),
     };
-    ctx.request(
+    ctx.request_publish(
         iq,
         FeaturePending::Mds(Pending::Publish {
             peer: peer.to_owned(),

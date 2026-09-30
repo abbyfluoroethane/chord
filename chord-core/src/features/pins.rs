@@ -272,7 +272,7 @@ fn pin(ctx: &mut Ctx<'_>, item_id: &str, reply: Reply<()>) {
             }),
         },
     );
-    ctx.request(iq, FeaturePending::Pins(Pending::Publish { pin, reply }));
+    ctx.request_publish(iq, FeaturePending::Pins(Pending::Publish { pin, reply }));
 }
 
 /// The pin for a stored message.

@@ -7,7 +7,7 @@ use xmpp_parsers::iq::Iq;
 use xmpp_parsers::minidom::Element;
 use xmpp_parsers::stanza::Stanza;
 
-use super::{Ctx, Effect, FeatureState, IqResponse, Pending, PendingIq, on_iq_response};
+use super::{Ctx, Effect, FeatureState, IqResponse, Pending, PendingIq, on_answer};
 use crate::store::{Store, queries};
 use crate::views::ViewKey;
 
@@ -91,8 +91,8 @@ impl Harness {
             .find(|(_, p)| which(&p.then))
             .map(|(id, _)| id.clone())
             .expect("no matching pending IQ");
-        let pending = self.pending.remove(&id).unwrap().then;
-        self.with_ctx(|ctx| on_iq_response(ctx, pending, response));
+        let pending = self.pending.remove(&id).unwrap();
+        self.with_ctx(|ctx| on_answer(ctx, pending, response));
     }
 
     /// Take the views marked as changed.

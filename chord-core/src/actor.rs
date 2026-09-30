@@ -860,7 +860,7 @@ impl<S: Session> Actor<S> {
             Iq::Error { error, .. } => IqResponse::Error(error),
             Iq::Get { .. } | Iq::Set { .. } => unreachable!("only answers come here"),
         };
-        self.with_ctx(|ctx| features::on_iq_response(ctx, pending.then, response));
+        self.with_ctx(|ctx| features::on_answer(ctx, pending, response));
     }
 }
 

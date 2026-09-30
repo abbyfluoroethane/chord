@@ -249,7 +249,7 @@ pub(crate) fn add(
             }),
         },
     );
-    ctx.request(
+    ctx.request_publish(
         iq,
         FeaturePending::Bookmarks(Pending::Publish { bookmark, reply }),
     );
