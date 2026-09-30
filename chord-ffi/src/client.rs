@@ -181,7 +181,7 @@ pub(crate) fn parse_server(s: &str) -> Result<ServerAddr, ChordError> {
 #[derive(uniffi::Object)]
 pub struct ChordClient {
     handle: ClientHandle,
-    rt: Handle,
+    pub(crate) rt: Handle,
     events: broadcast::Sender<ClientEvent>,
     account: String,
     // Last: the runtime stops after the other fields are gone.

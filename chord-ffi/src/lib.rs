@@ -12,11 +12,13 @@
 mod calls;
 mod client;
 mod error;
+mod forms;
 mod types;
 
 pub use calls::*;
 pub use client::*;
 pub use error::ChordError;
+pub use forms::*;
 pub use types::*;
 
 pub use chord_core;
