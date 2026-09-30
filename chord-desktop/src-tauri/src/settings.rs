@@ -90,6 +90,21 @@ pub async fn set_settings(app: AppHandle, notice: State<'_, NoticePrefs>, value:
     Ok(())
 }
 
+/// The `shareInfo` switch of the `prefs` object: may Chord answer version and time queries?
+/// On when the switch is not there.
+pub fn share_info_from(settings: &Value) -> bool {
+    settings
+        .get("prefs")
+        .and_then(|p| p.get("shareInfo"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// The saved `shareInfo` switch, on when there is no file.
+pub fn share_info(app: &AppHandle) -> bool {
+    config_dir(app).map_or(true, |dir| share_info_from(&read_from(&dir)))
+}
+
 /// At start: the notice switches come from the file, before the UI is up.
 pub fn init_notice_prefs(app: &AppHandle) {
     if let Ok(dir) = config_dir(app) {
@@ -108,6 +123,14 @@ mod tests {
             std::env::temp_dir().join(format!("chord-settings-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn share_info_is_on_unless_the_file_says_off() {
+        assert!(share_info_from(&json!({})));
+        assert!(share_info_from(&json!({"prefs": {"shareInfo": "no"}})));
+        assert!(share_info_from(&json!({"prefs": {"shareInfo": true}})));
+        assert!(!share_info_from(&json!({"prefs": {"shareInfo": false}})));
     }
 
     #[test]

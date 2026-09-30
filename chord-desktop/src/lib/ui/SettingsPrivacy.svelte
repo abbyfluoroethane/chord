@@ -4,10 +4,17 @@
   import Toggle from './Toggle.svelte';
   import { contactsStore } from './contacts.svelte';
   import { linkPreviews } from './linkpreviews.svelte';
+  import { api, live } from './bridge';
   import { prefs } from './prefs.svelte';
 
   let address = $state('');
   let result = $state<{ ok: boolean; text: string } | null>(null);
+
+  /** Save the choice, then tell the running client. Rust reads the file at the next open. */
+  function setShareInfo(v: boolean) {
+    prefs.set('shareInfo', v);
+    if (live) void api().then((b) => b.setShareInfo(v)).catch(() => {});
+  }
 
   function preapprove(e: SubmitEvent) {
     e.preventDefault();
@@ -50,6 +57,18 @@
     checked={prefs.gifPicker}
     label="Show the GIF picker"
     onchange={(v) => prefs.set('gifPicker', v)}
+  />
+</SettingRow>
+
+<h2 class="section">Software information</h2>
+<SettingRow
+  title="Answer version and time requests"
+  hint="On by default. Other clients can ask for the name of this app, its version and your local time. Chord sends no operating system. Off, Chord answers neither request."
+>
+  <Toggle
+    checked={prefs.shareInfo}
+    label="Answer version and time requests"
+    onchange={setShareInfo}
   />
 </SettingRow>
 

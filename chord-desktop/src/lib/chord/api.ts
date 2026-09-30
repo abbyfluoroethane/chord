@@ -275,6 +275,8 @@ export const ownPresence = () => invoke<OwnPresence>('own_presence');
 export const invisibleMethod = () => invoke<InvisibleMethod | null>('invisible_method');
 /** XEP-0319. `since` is Unix seconds, or null when the user is active again. Fails offline. */
 export const setIdle = (since: number | null) => invoke<void>('set_idle', { since });
+/** Answer version (XEP-0092) and time (XEP-0202) queries, or not. A new presence follows. */
+export const setShareInfo = (share: boolean) => invoke<void>('set_share_info', { share });
 /** The room service of the server (for example conference.example.org), or null. */
 export const roomService = () => invoke<string | null>('room_service');
 export const sendPrivate = (room: string, nick: string, body: string) =>

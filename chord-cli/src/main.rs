@@ -77,6 +77,8 @@
 //!                    the fingerprint that it saw.
 //!   SSL_CERT_FILE    optional PEM file of trusted CAs. It replaces the system trust store.
 //!   CHORD_DB         account database (default: ~/.local/share/chord/<jid>.sqlite3)
+//!   CHORD_SHARE_INFO "off" stops the answers to version (XEP-0092) and time (XEP-0202)
+//!                    queries, and leaves both out of the caps. Default: on.
 //!   CHORD_LOG        log level on stderr: error, warn, info, debug, or trace (default: no log)
 //!
 //! Exit codes:
@@ -558,6 +560,32 @@ fn db_path(jid: &BareJid) -> Result<PathBuf, CliError> {
     Ok(dir.join(format!("{jid}.sqlite3")))
 }
 
+/// `CHORD_SHARE_INFO`: false when the user turned off the version and time answers.
+fn share_info() -> Result<bool, String> {
+    match std::env::var("CHORD_SHARE_INFO")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("") => Ok(true),
+        Some(v)
+            if ["on", "1", "yes", "true"]
+                .iter()
+                .any(|t| v.eq_ignore_ascii_case(t)) =>
+        {
+            Ok(true)
+        }
+        Some(v)
+            if ["off", "0", "no", "false"]
+                .iter()
+                .any(|t| v.eq_ignore_ascii_case(t)) =>
+        {
+            Ok(false)
+        }
+        Some(v) => Err(format!("CHORD_SHARE_INFO must be on or off: {v}")),
+    }
+}
+
 /// Start the actor. With `login`, log in and wait for `Connected`.
 async fn start_client(login: bool) -> Result<Client, CliError> {
     let jid = std::env::var("CHORD_JID").map_err(|_| "set CHORD_JID".to_owned())?;
@@ -567,6 +595,12 @@ async fn start_client(login: bool) -> Result<Client, CliError> {
     let (handle, mut events, actor) = actor::new::<NativeSession>(store, account.clone())
         .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     let task = tokio::spawn(actor.run());
+    if !share_info()? {
+        handle
+            .set_share_info(false)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     if !login {
         return Ok(Client {
             handle,

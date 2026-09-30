@@ -177,6 +177,10 @@ pub async fn open(app: AppHandle, state: State<'_, AppState>, account: String) -
 
     let (handle, events, actor) = actor::new::<NativeSession>(store, jid.clone())?;
     drop(tauri::async_runtime::spawn(actor.run()));
+    // The saved choice is in place before the first login, so the first presence has it.
+    if !crate::settings::share_info(&app) {
+        handle.set_share_info(false).await?;
+    }
     let events_task =
         tauri::async_runtime::spawn(notify::pump(app.clone(), events, state.events.clone()));
     let client = Client::new(handle, jid.clone(), (avatar_store, account_id), events_task);
@@ -564,6 +568,13 @@ pub async fn invisible_method(
 #[tauri::command]
 pub async fn set_idle(state: State<'_, AppState>, since: Option<i64>) -> Res<()> {
     Ok(state.handle()?.set_idle(since).await?)
+}
+
+/// Turn the answers to version and time queries on or off (XEP-0092, XEP-0202). The
+/// change goes to the contacts in a new presence when the client is online.
+#[tauri::command]
+pub async fn set_share_info(state: State<'_, AppState>, share: bool) -> Res<()> {
+    Ok(state.handle()?.set_share_info(share).await?)
 }
 
 /// Our stored availability and status text.

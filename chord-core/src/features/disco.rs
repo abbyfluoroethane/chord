@@ -1,6 +1,7 @@
 //! Service discovery (XEP-0030) and entity capabilities (XEP-0115).
 //!
-//! - Answers disco#info queries to our JID.
+//! - Answers disco#info queries to our JID: with no node, or with our caps node. Any other
+//!   node gets item-not-found (XEP-0030, 3.2). A disco#items query gets an empty list.
 //! - Puts our caps into our presence, so PEP sends us `+notify` events.
 //! - Finds the services of our server at each new session: `State::services` lists each
 //!   item of the server with its disco#info. Other features use `find_feature`.
@@ -14,7 +15,9 @@ use xmpp_parsers::hashes::Algo;
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::ns;
 
-use super::{Ctx, IqResponse, Pending as FeaturePending, result_reply};
+use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
+
+use super::{Ctx, IqResponse, Pending as FeaturePending, error_reply, result_reply};
 
 /// The caps node: a URI for the Chord client.
 pub const CAPS_NODE: &str = "https://github.com/abbyfluoroethane/chord";
@@ -64,21 +67,48 @@ pub const FEATURES: &[&str] = &[
     "urn:xmpp:sfs:0",
 ];
 
-/// Our disco#info answer.
+/// The features that belong to the entity info that Chord shares: the software version
+/// (XEP-0092) and the time (XEP-0202). The user can turn them off (`set_share_info`). Then
+/// Chord answers neither query and does not list them.
+pub const INFO_FEATURES: &[&str] = &["jabber:iq:version", "urn:xmpp:time"];
+
+/// Our disco#info answer, with the entity info features.
 pub fn info(node: Option<String>) -> DiscoInfoResult {
+    info_with(node, true)
+}
+
+/// Our disco#info answer. `share_info` tells if the answer lists `INFO_FEATURES`.
+pub fn info_with(node: Option<String>, share_info: bool) -> DiscoInfoResult {
+    let extra = if share_info { INFO_FEATURES } else { &[] };
     DiscoInfoResult {
         node,
         identities: vec![Identity::new("client", "pc", "en", "Chord")],
-        features: FEATURES.iter().map(|f| (*f).to_owned()).collect(),
+        features: FEATURES
+            .iter()
+            .chain(extra)
+            .map(|f| (*f).to_owned())
+            .collect(),
         extensions: vec![],
     }
 }
 
 /// Our caps element (XEP-0115, SHA-1 as the XEP requires for interoperability).
 pub fn caps() -> Caps {
-    let hash = caps::hash_caps(&caps::compute_disco(&info(None)), Algo::Sha_1)
-        .expect("SHA-1 is supported");
+    caps_with(true)
+}
+
+/// Our caps element. `share_info` is the same flag as in `info_with`.
+pub fn caps_with(share_info: bool) -> Caps {
+    let info = info_with(None, share_info);
+    let hash =
+        caps::hash_caps(&caps::compute_disco(&info), Algo::Sha_1).expect("SHA-1 is supported");
     Caps::new(CAPS_NODE, hash)
+}
+
+/// The disco node of our caps: the caps node, then `#`, then the verification string.
+fn caps_node(share_info: bool) -> String {
+    let element = xmpp_parsers::minidom::Element::from(caps_with(share_info));
+    format!("{CAPS_NODE}#{}", element.attr("ver").unwrap_or_default())
 }
 
 /// What the server offers.
@@ -93,6 +123,8 @@ pub(crate) struct State {
     pub services: Vec<(Jid, DiscoInfoResult)>,
     /// True when all queries have an answer.
     pub complete: bool,
+    /// The user turned off the version and time answers. It stays across sessions.
+    pub hide_info: bool,
     /// Service queries that wait for an answer.
     outstanding: usize,
     /// disco#info queries of the domain and the account that wait for an answer.
@@ -225,16 +257,60 @@ fn mark_complete(ctx: &mut Ctx<'_>) {
     super::on_services_ready(ctx);
 }
 
-/// Answer a disco#info query to us. Returns true if `iq` is one.
+/// Answer a disco#info or disco#items query to us. Returns true if `iq` is one.
+///
+/// The node is empty or our caps node (`CAPS_NODE#ver`, XEP-0115, 6.2). Any other node
+/// does not exist: item-not-found. We have no items: disco#items gets an empty list.
 pub(crate) fn on_iq(ctx: &mut Ctx<'_>, iq: &Iq) -> bool {
     let Iq::Get { payload, .. } = iq else {
         return false;
     };
-    let Ok(query) = DiscoInfoQuery::try_from(payload.clone()) else {
-        return false;
-    };
-    ctx.send(result_reply(iq, Some(info(query.node).into())));
-    true
+    let share = !ctx.state.disco.hide_info;
+    if let Ok(query) = DiscoInfoQuery::try_from(payload.clone()) {
+        let answer = match known_node(query.node, share) {
+            Some(node) => result_reply(iq, Some(info_with(node, share).into())),
+            None => not_found(iq),
+        };
+        ctx.send(answer);
+        return true;
+    }
+    if let Ok(query) = DiscoItemsQuery::try_from(payload.clone()) {
+        let answer = match known_node(query.node, share) {
+            Some(node) => {
+                let items = DiscoItemsResult {
+                    node,
+                    items: vec![],
+                    rsm: None,
+                };
+                result_reply(iq, Some(items.into()))
+            }
+            None => not_found(iq),
+        };
+        ctx.send(answer);
+        return true;
+    }
+    false
+}
+
+/// The node of a query: `Some(None)` for no node or an empty one, `Some(Some(node))` for
+/// our caps node, and `None` for any other node.
+fn known_node(node: Option<String>, share_info: bool) -> Option<Option<String>> {
+    match node.filter(|n| !n.is_empty()) {
+        None => Some(None),
+        Some(node) if node == caps_node(share_info) => Some(Some(node)),
+        Some(_) => None,
+    }
+}
+
+/// The answer for a node that does not exist (XEP-0030, 3.2).
+fn not_found(iq: &Iq) -> Iq {
+    let error = StanzaError::new(
+        ErrorType::Cancel,
+        DefinedCondition::ItemNotFound,
+        "en",
+        "no such node",
+    );
+    error_reply(iq, error)
 }
 
 /// The domain of a bare JID, as a JID.
@@ -281,16 +357,147 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), FEATURES.len(), "a namespace twice");
         let info = info(None);
-        assert_eq!(info.features.len(), FEATURES.len());
+        assert_eq!(info.features.len(), FEATURES.len() + INFO_FEATURES.len());
+        assert!(INFO_FEATURES.iter().all(|f| !FEATURES.contains(f)));
+        // Sharing off: the list has neither the version nor the time.
+        let hidden = info_with(None, false);
+        assert_eq!(hidden.features.len(), FEATURES.len());
+        assert!(!hidden.features.contains("jabber:iq:version"));
+        assert!(!hidden.features.contains("urn:xmpp:time"));
+        assert_ne!(caps_with(false).ver, caps().ver);
     }
 
     #[test]
     fn caps_hash_is_the_xep_0115_hash_of_the_list() {
         // The verification string of XEP-0115, 5.1: the identity, then the sorted features.
         // The hash is SHA-1 (`ver` holds the raw bytes). This value comes from a script that follows the XEP,
-        // not from the code under test. Update it when `FEATURES` changes.
-        let hex: String = caps().ver.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "35236609ea3174a720ae8660d541b8401f2c16f6");
+        // not from the code under test. Update it when `FEATURES` or `INFO_FEATURES` changes.
+        let hex = |caps: Caps| -> String { caps.ver.iter().map(|b| format!("{b:02x}")).collect() };
+        // With the version and time features (the default).
+        assert_eq!(hex(caps()), "2f1b1eb2201f6961b3f431ee785fc6bdb093e0dd");
+        // With sharing off: `FEATURES` alone.
+        assert_eq!(
+            hex(caps_with(false)),
+            "35236609ea3174a720ae8660d541b8401f2c16f6"
+        );
+    }
+
+    /// Ask `query` of a new session and return its answer.
+    fn ask(h: &mut Harness, payload: xmpp_parsers::minidom::Element) -> Iq {
+        let mut query = Iq::Get {
+            from: Some(Jid::new("bob@chord.localhost/x").unwrap()),
+            to: None,
+            id: "q1".into(),
+            payload,
+        };
+        *query.id_mut() = "q1".into();
+        assert!(h.with_ctx(|ctx| on_iq(ctx, &query)));
+        h.sent_iqs().remove(0)
+    }
+
+    fn is_item_not_found(iq: &Iq) -> bool {
+        matches!(iq, Iq::Error { error, .. } if error.defined_condition == DefinedCondition::ItemNotFound)
+    }
+
+    #[test]
+    fn an_unknown_node_is_item_not_found_and_our_caps_node_is_known() {
+        let mut h = Harness::new();
+        let own = caps_node(true);
+        assert!(own.starts_with(&format!("{CAPS_NODE}#")));
+        // disco#info
+        for node in [
+            "urn:unknown",
+            "http://jabber.org/protocol/commands",
+            &format!("{CAPS_NODE}#wrong"),
+        ] {
+            let answer = ask(
+                &mut h,
+                DiscoInfoQuery {
+                    node: Some(node.into()),
+                }
+                .into(),
+            );
+            assert!(is_item_not_found(&answer), "{node}: {answer:?}");
+        }
+        let answer = ask(
+            &mut h,
+            DiscoInfoQuery {
+                node: Some(own.clone()),
+            }
+            .into(),
+        );
+        let Iq::Result {
+            payload: Some(p), ..
+        } = answer
+        else {
+            panic!()
+        };
+        let info = DiscoInfoResult::try_from(p).unwrap();
+        assert_eq!(info.node.as_deref(), Some(own.as_str()));
+        assert!(info.features.contains("urn:xmpp:ping"));
+        // An empty node is no node.
+        let answer = ask(
+            &mut h,
+            DiscoInfoQuery {
+                node: Some(String::new()),
+            }
+            .into(),
+        );
+        assert!(matches!(answer, Iq::Result { .. }));
+    }
+
+    #[test]
+    fn disco_items_gets_an_empty_list() {
+        let mut h = Harness::new();
+        let answer = ask(
+            &mut h,
+            DiscoItemsQuery {
+                node: None,
+                rsm: None,
+            }
+            .into(),
+        );
+        let Iq::Result {
+            payload: Some(p), ..
+        } = answer
+        else {
+            panic!("{answer:?}")
+        };
+        let items = DiscoItemsResult::try_from(p).unwrap();
+        assert!(items.items.is_empty());
+        assert_eq!(items.node, None);
+        // Our caps node has no items. Any other node does not exist.
+        let node = Some(caps_node(true));
+        let answer = ask(&mut h, DiscoItemsQuery { node, rsm: None }.into());
+        assert!(matches!(answer, Iq::Result { .. }));
+        let node = Some("urn:unknown".to_owned());
+        let answer = ask(&mut h, DiscoItemsQuery { node, rsm: None }.into());
+        assert!(is_item_not_found(&answer));
+    }
+
+    #[test]
+    fn with_sharing_off_the_caps_node_follows_the_new_hash() {
+        let mut h = Harness::new();
+        h.state.disco.hide_info = true;
+        let hidden = caps_node(false);
+        assert_ne!(hidden, caps_node(true));
+        let answer = ask(&mut h, DiscoInfoQuery { node: Some(hidden) }.into());
+        let Iq::Result {
+            payload: Some(p), ..
+        } = answer
+        else {
+            panic!()
+        };
+        let info = DiscoInfoResult::try_from(p).unwrap();
+        assert!(!info.features.contains("urn:xmpp:time"));
+        let answer = ask(
+            &mut h,
+            DiscoInfoQuery {
+                node: Some(caps_node(true)),
+            }
+            .into(),
+        );
+        assert!(is_item_not_found(&answer));
     }
 
     #[test]

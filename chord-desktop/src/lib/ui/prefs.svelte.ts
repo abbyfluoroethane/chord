@@ -19,6 +19,8 @@ class Prefs {
   fontSize = $state(15);
   /** The GIF picker sends the search text to KLIPY. On by default, off in Privacy. */
   gifPicker = $state(true);
+  /** Chord answers version and time queries. On by default, off in Privacy. Rust reads it at open. */
+  shareInfo = $state(true);
   /** The images for emoji. Twemoji ships with the app. */
   emojiPack = $state<EmojiPackId>('twemoji');
 
@@ -52,6 +54,7 @@ class Prefs {
       display: this.display,
       fontSize: this.fontSize,
       gifPicker: this.gifPicker,
+      shareInfo: this.shareInfo,
       emojiPack: this.emojiPack
     };
   }

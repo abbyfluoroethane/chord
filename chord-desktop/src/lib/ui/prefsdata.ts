@@ -11,6 +11,7 @@ export interface Saved {
   display: DisplayMode;
   fontSize: number;
   gifPicker: boolean;
+  shareInfo: boolean;
   emojiPack: EmojiPackId;
 }
 
@@ -29,6 +30,7 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (typeof o.autoApprove === 'boolean') out.autoApprove = o.autoApprove;
   if (o.display === 'cozy' || o.display === 'compact') out.display = o.display;
   if (typeof o.gifPicker === 'boolean') out.gifPicker = o.gifPicker;
+  if (typeof o.shareInfo === 'boolean') out.shareInfo = o.shareInfo;
   if (typeof o.emojiPack === 'string' && (EMOJI_PACK_IDS as readonly string[]).includes(o.emojiPack))
     out.emojiPack = o.emojiPack as EmojiPackId;
   if (typeof o.fontSize === 'number' && Number.isFinite(o.fontSize))

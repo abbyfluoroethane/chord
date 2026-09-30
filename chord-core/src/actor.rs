@@ -19,6 +19,7 @@ use futures_core::Stream;
 use jid::{BareJid, Jid};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::ping::Ping;
+use xmpp_parsers::presence::{Presence, Type as PresenceType};
 use xmpp_parsers::stanza::Stanza;
 use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
 
@@ -641,6 +642,14 @@ impl<S: Session> Actor<S> {
             Command::Feature(FeatureCommand::Csi(command)) if self.online.is_none() => {
                 features::csi::offline(&mut self.state.csi, command);
             }
+            // The flag of the version and time answers lives in the state, so that the
+            // first presence of the next session has it.
+            Command::Feature(FeatureCommand::Presence(
+                features::presence::Command::SetShareInfo { share, reply },
+            )) if self.online.is_none() => {
+                self.state.disco.hide_info = !share;
+                let _ = reply.send(Ok(()));
+            }
             Command::Feature(command) => {
                 if self.online.is_some() {
                     self.with_ctx(|ctx| features::on_command(ctx, command));
@@ -697,6 +706,14 @@ impl<S: Session> Actor<S> {
             // For example a room message that waits for its join. `flush` calls this
             // again when the queue is empty.
             online.logout_waiting = Some(reply);
+            return;
+        }
+        // Say that we go (RFC 6121, 4.5.1). The server tells the contacts and the rooms.
+        // The ping after it shows that the server handled it.
+        let gone = Presence::new(PresenceType::Unavailable);
+        if online.session.send(gone.into()).await.is_err() {
+            self.close_session().await;
+            let _ = reply.send(());
             return;
         }
         let id = format!("logout-{}", features::new_id());
@@ -1077,6 +1094,12 @@ mod tests {
             matches!(sent.last(), Some(Stanza::Iq(Iq::Get { payload, .. })) if payload.is("ping", xmpp_parsers::ns::PING)),
             "logout sends a ping last: {sent:?}"
         );
+        // RFC 6121, 4.5.1: an unavailable presence with no `to`, right before the ping.
+        let gone = &sent[sent.len() - 2];
+        assert!(
+            matches!(gone, Stanza::Presence(p) if p.type_ == PresenceType::Unavailable && p.to.is_none()),
+            "logout sends unavailable presence before the ping: {sent:?}"
+        );
 
         let stored = stored_with_bob(&path);
         assert_eq!(stored.len(), 1);
@@ -1084,6 +1107,37 @@ mod tests {
         assert_eq!(stored[0].key, origin_id);
         assert_eq!(stored[0].direction, Direction::Out);
         assert_eq!(stored[0].body, "hello bob");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn share_info_off_before_login_changes_the_caps_of_the_first_presence() {
+        let path = temp_db();
+        let sent: Rc<RefCell<Vec<Stanza>>> = FakeSession::prepare_connect(vec![connected()]);
+        let (handle, _events, actor) =
+            new::<FakeSession>(Store::open(&path).unwrap(), BareJid::new(ALICE).unwrap()).unwrap();
+        run_with(actor.run(), async {
+            handle.set_share_info(false).await.unwrap();
+            handle.login(config()).await.unwrap();
+            // Online, the change goes out at once.
+            handle.set_share_info(true).await.unwrap();
+            handle.logout().await;
+        });
+        let ver = |s: &Stanza| match s {
+            Stanza::Presence(p) => p
+                .payloads
+                .iter()
+                .find(|e| e.is("c", xmpp_parsers::ns::CAPS))
+                .map(|e| e.attr("ver").unwrap().to_owned()),
+            _ => None,
+        };
+        let sent = sent.borrow();
+        let vers: Vec<String> = sent.iter().filter_map(ver).collect();
+        let ver_of = |on| {
+            let c = xmpp_parsers::minidom::Element::from(crate::features::disco::caps_with(on));
+            c.attr("ver").unwrap().to_owned()
+        };
+        assert_eq!(vers, [ver_of(false), ver_of(true)], "{sent:?}");
         let _ = std::fs::remove_file(&path);
     }
 

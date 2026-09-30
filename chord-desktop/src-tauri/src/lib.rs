@@ -94,6 +94,7 @@ pub fn run() {
             commands::own_presence,
             commands::invisible_method,
             commands::set_idle,
+            commands::set_share_info,
             commands::set_avatar,
             commands::remove_avatar,
             commands::set_room_affiliation,

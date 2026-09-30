@@ -7,6 +7,10 @@ describe('parsePrefs', () => {
       parsePrefs({ sound: false, muteDms: 'yes', display: 'compact', emojiPack: 'nope', fontSize: 99 })
     ).toEqual({ sound: false, display: 'compact', fontSize: 20 });
   });
+  it('reads the shareInfo switch as a boolean only', () => {
+    expect(parsePrefs({ shareInfo: false })).toEqual({ shareInfo: false });
+    expect(parsePrefs({ shareInfo: 'off' })).toEqual({});
+  });
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});

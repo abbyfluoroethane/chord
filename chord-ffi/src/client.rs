@@ -737,6 +737,13 @@ impl ChordClient {
             .await
     }
 
+    /// Answer version (XEP-0092) and time (XEP-0202) queries, or not. On by default. Call it
+    /// before `login` to have the choice in the first presence. Works offline.
+    pub async fn set_share_info(&self, share: bool) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.set_share_info(share).await })
+            .await
+    }
+
     /// Our stored availability and status text. Works offline.
     pub async fn own_presence(&self) -> Result<OwnPresence, ChordError> {
         let presence = self.call(|h| async move { h.own_presence().await }).await?;

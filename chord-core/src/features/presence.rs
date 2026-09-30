@@ -177,6 +177,12 @@ pub(crate) enum Command {
         since: Option<i64>,
         reply: Reply<()>,
     },
+    /// Turn the version and time answers on or off (version_time.rs). The actor handles it
+    /// offline.
+    SetShareInfo {
+        share: bool,
+        reply: Reply<()>,
+    },
 }
 
 impl ClientHandle {
@@ -213,6 +219,19 @@ impl ClientHandle {
     pub async fn set_idle(&self, since: Option<i64>) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Presence(Command::SetIdle { since, reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Turn the answers to version (XEP-0092) and time (XEP-0202) queries on or off. They
+    /// are on by default. Off, Chord answers neither query and leaves both out of its caps
+    /// (an online session sends the new presence at once). The choice stays for this
+    /// client until the next call: set it before `login` to have it from the first presence.
+    pub async fn set_share_info(&self, share: bool) -> Result<(), ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Presence(Command::SetShareInfo {
+            share,
+            reply,
+        }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
@@ -449,6 +468,14 @@ pub(crate) fn current(ctx: &mut Ctx<'_>) -> Presence {
             initial()
         }
     };
+    if ctx.state.disco.hide_info {
+        // The caps list no version and time: replace the caps element that `initial` made.
+        let caps = disco::caps_with(false);
+        presence
+            .payloads
+            .retain(|p| !p.is("c", xmpp_parsers::ns::CAPS));
+        presence.payloads.push(caps.into());
+    }
     if let Some(since) = &ctx.state.presence.idle_since {
         // `since` is our own xs:dateTime, so it needs no escape.
         let idle = format!("<idle xmlns='{NS_IDLE}' since='{since}'/>");
@@ -513,11 +540,17 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             broadcast(ctx);
             let _ = reply.send(Ok(()));
         }
+        Command::SetShareInfo { share, reply } => {
+            ctx.state.disco.hide_info = !share;
+            // The caps changed, so the contacts need a new presence.
+            broadcast(ctx);
+            let _ = reply.send(Ok(()));
+        }
     }
 }
 
 /// Unix seconds as an xs:dateTime in UTC (XEP-0082).
-fn iso_utc(secs: i64) -> String {
+pub(crate) fn iso_utc(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rest = secs.rem_euclid(86_400);
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -557,6 +590,10 @@ pub(crate) fn offline(store: &Store, account_id: i64, command: Command) {
         }
         Command::SetIdle { reply, .. } => {
             let _ = reply.send(Err(ClientError::NotConnected));
+        }
+        // The actor keeps the flag offline, so it never gets here.
+        Command::SetShareInfo { reply, .. } => {
+            let _ = reply.send(Ok(()));
         }
     }
 }

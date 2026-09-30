@@ -45,6 +45,7 @@ pub mod search;
 pub mod spaces;
 pub mod tune;
 pub mod upload;
+pub mod version_time;
 
 #[cfg(test)]
 pub(crate) mod testing;
@@ -280,7 +281,9 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     let deferred = std::mem::take(&mut ctx.state.deferred);
     let inactive = ctx.state.csi.inactive;
     let idle_since = ctx.state.presence.idle_since.take();
+    let hide_info = ctx.state.disco.hide_info;
     *ctx.state = FeatureState::default();
+    ctx.state.disco.hide_info = hide_info;
     ctx.state.muc = muc_state;
     ctx.state.csi.inactive = inactive;
     ctx.state.presence.idle_since = idle_since;
@@ -352,6 +355,7 @@ fn on_iq_request(ctx: &mut Ctx<'_>, iq: Iq) {
                 || roster::on_iq(ctx, &iq)
                 || blocking::on_iq(ctx, &iq)
                 || extdisco::on_iq(ctx, &iq)
+                || version_time::on_iq(ctx, &iq)
                 || ping_reply(ctx, &iq)
         }
         // Results and errors without a pending entry: late answers. Ignore them.
