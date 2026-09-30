@@ -280,6 +280,7 @@ class AppState {
     this.editingId = null;
     // Leaving a channel reads it.
     this.newFrom[this.selectedJid] = null;
+    delete this.barGone[this.selectedJid];
   }
 
   private enterChannel() {
@@ -462,6 +463,26 @@ class AppState {
         this.selectChannel(c.jid);
         return;
       }
+    }
+  }
+
+  /** The chats whose "new messages" bar is gone: the reader saw the "new" line. */
+  barGone = $state<Record<string, boolean>>({});
+
+  /**
+   * The newest message of the open chat is on screen in a window that has focus: read the
+   * chat, as Discord does. The "new" line stays until the chat closes. Maps to
+   * api.markRead(peer) or api.markReadPrivate(room, nick).
+   */
+  readAtBottom() {
+    const jid = this.selectedJid;
+    const c = this.channels.find((x) => x.jid === jid);
+    if (!c || (c.unread === 0 && c.mentions === 0)) return;
+    c.unread = 0;
+    c.mentions = 0;
+    if (live) {
+      this.mentions[jid] = 0;
+      void this.readOnBridge({ jid, pm: splitPrivate(jid) }).catch((e) => ui.say(plainError(e), true));
     }
   }
 

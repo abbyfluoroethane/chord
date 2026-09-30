@@ -7,6 +7,7 @@
   import { app } from './app.svelte';
   import { live } from './bridge';
   import { clock, dayLabel, sameDay } from './format';
+  import { newLineSeen, shouldReadAtBottom } from './readstate';
   import { jumpToMessage } from './search';
   import { isGroup, type TimelineItem } from './types';
 
@@ -61,9 +62,33 @@
   let loadingOlder = false;
   let keep: { height: number; first: string | undefined } | null = null;
 
+  // Discord reads a chat when its newest message is on screen in a window that has focus.
+  function readIfSeen() {
+    const c = app.channel;
+    if (!c) return;
+    const view = {
+      atBottom,
+      visible: document.visibilityState === 'visible',
+      focused: document.hasFocus(),
+      unread: c.unread,
+      mentions: c.mentions
+    };
+    if (shouldReadAtBottom(view)) app.readAtBottom();
+  }
+
+  // The bar above the list goes once the "new" line was on screen.
+  function noteNewLine() {
+    if (!scroller || !app.dividerId || app.barGone[app.selectedJid]) return;
+    const line = scroller.querySelector('.divider.new');
+    const top = line ? line.getBoundingClientRect().top : null;
+    if (newLineSeen(top, scroller.getBoundingClientRect().top)) app.barGone[app.selectedJid] = true;
+  }
+
   function onscroll() {
     if (!scroller) return;
     atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    readIfSeen();
+    noteNewLine();
     const scrolls = scroller.scrollHeight > scroller.clientHeight;
     if (live && scrolls && scroller.scrollTop < 60 && !loadingOlder && app.items.length > 0) {
       loadingOlder = true;
@@ -114,13 +139,32 @@
     if (follow) queueMicrotask(() => toBottom(!first));
   });
 
+  // A message that arrives while the reader sits at the bottom is read at once. The count
+  // can come after the message, so this watches the count of the open chat.
+  $effect(() => {
+    const c = app.channel;
+    if (!c || (c.unread === 0 && c.mentions === 0)) return;
+    queueMicrotask(readIfSeen);
+  });
+
+  // Coming back to the window reads what is on screen.
+  $effect(() => {
+    const again = () => queueMicrotask(readIfSeen);
+    window.addEventListener('focus', again);
+    document.addEventListener('visibilitychange', again);
+    return () => {
+      window.removeEventListener('focus', again);
+      document.removeEventListener('visibilitychange', again);
+    };
+  });
+
   function jump(id: string) {
     jumpToMessage(id);
   }
 </script>
 
 <div class="wrap">
-  {#if app.dividerId}
+  {#if app.dividerId && !app.barGone[app.selectedJid]}
     <div class="topbar" role="status">
       <span>{newCount} new {newCount === 1 ? 'message' : 'messages'} since {clock(newSince)}</span>
       <button onclick={() => app.markRead()}>Mark as read</button>
