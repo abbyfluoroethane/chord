@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -79,9 +79,11 @@ fn open_error(e: &std::io::Error, what: &str) -> ChordError {
     ChordError::io(what, e)
 }
 
-/// Read the file that the user picked. One open, no symlink, a regular file, and the size
-/// cap on the handle.
-fn read_picked(path: &Path) -> Res<Vec<u8>> {
+/// Open the file that the user picked. One open, no symlink, a regular file, and the size
+/// cap on the handle. The core streams the upload from this handle and never sees the path,
+/// so a swap of the path after the check has no effect. The core sends as many bytes as the
+/// handle had at the check: a file that grows is cut there, and one that shrinks fails.
+fn open_picked(path: &Path) -> Res<File> {
     let file = open_no_follow(path, OpenOptions::new().read(true))
         .map_err(|e| open_error(&e, "cannot read the file"))?;
     let meta = file
@@ -96,15 +98,7 @@ fn read_picked(path: &Path) -> Res<Vec<u8>> {
             meta.len()
         )));
     }
-    // The file can still grow after the check: read at most one byte more than the cap.
-    let mut data = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
-    file.take(MAX_UPLOAD_BYTES + 1)
-        .read_to_end(&mut data)
-        .map_err(|e| ChordError::io("cannot read the file", e))?;
-    if data.len() as u64 > MAX_UPLOAD_BYTES {
-        return Err(ChordError::invalid("the file is larger than the limit"));
-    }
-    Ok(data)
+    Ok(file)
 }
 
 /// Write the image that the user chose a place for. Only an image extension, and never
@@ -163,11 +157,15 @@ pub async fn upload_files(
             .into_path()
             .map_err(|e| ChordError::io("cannot use the file", e))?;
         let name = file_name(&path)?;
-        let data = tauri::async_runtime::spawn_blocking(move || read_picked(&path))
+        let file = tauri::async_runtime::spawn_blocking(move || open_picked(&path))
             .await
             .map_err(|e| ChordError::io("the read task failed", e))??;
         let content_type = guess_content_type(&name).to_owned();
-        urls.push(handle.upload(to.clone(), name, content_type, data).await?);
+        urls.push(
+            handle
+                .upload_file(to.clone(), name, content_type, file)
+                .await?,
+        );
     }
     Ok(urls)
 }
@@ -188,11 +186,118 @@ pub async fn upload_dropped(
     let path = PathBuf::from(path);
     dropped.take(&path)?;
     let name = file_name(&path)?;
-    let data = tauri::async_runtime::spawn_blocking(move || read_picked(&path))
+    let file = tauri::async_runtime::spawn_blocking(move || open_picked(&path))
         .await
         .map_err(|e| ChordError::io("the read task failed", e))??;
     let content_type = guess_content_type(&name).to_owned();
-    Ok(handle.upload(to, name, content_type, data).await?)
+    Ok(handle.upload_file(to, name, content_type, file).await?)
+}
+
+/// The biggest pasted file: 25 MB. The page sends the bytes through the IPC channel in one
+/// piece, so the cap is lower than the one of a file from the disk.
+pub const MAX_PASTE_BYTES: usize = 25 * 1024 * 1024;
+
+/// The file extension that we give a pasted file of this media type. `None` for a type that
+/// we do not know: the file is then a plain binary.
+fn paste_extension(media_type: &str) -> Option<&'static str> {
+    Some(match media_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/avif" => "avif",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "audio/mpeg" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/wav" => "wav",
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        _ => return None,
+    })
+}
+
+/// The name and the media type of a pasted file. The page has no say in the name: Rust
+/// makes it from the media type and the time. An unknown type becomes a plain binary.
+fn pasted_identity(media_type: &str, unix_secs: u64) -> (String, &'static str) {
+    let media_type = media_type.trim().to_ascii_lowercase();
+    let known = paste_extension(&media_type);
+    let ext = known.unwrap_or("bin");
+    let content_type = if known.is_some() {
+        guess_content_type(&format!("x.{ext}"))
+    } else {
+        "application/octet-stream"
+    };
+    (format!("pasted-{unix_secs}.{ext}"), content_type)
+}
+
+/// Decode a percent-encoded header value (the page uses `encodeURIComponent`). A bad
+/// escape stays as it is, and a byte sequence that is no UTF-8 gets replacement characters.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(hi), Some(lo)) = (
+                bytes.get(i + 1).and_then(|b| hex(*b)),
+                bytes.get(i + 2).and_then(|b| hex(*b)),
+            )
+        {
+            out.push((hi * 16 + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Upload a file that the user pasted into the composer: the page has the bytes and no
+/// path. The body of the request is the raw bytes, and the headers have `to` and `type`
+/// (percent-encoded). Returns the URL.
+#[tauri::command]
+pub async fn upload_pasted(
+    state: State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Res<String> {
+    let handle = state.handle()?;
+    let header = |name: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(percent_decode)
+            .ok_or_else(|| ChordError::invalid(format!("the request has no {name} header")))
+    };
+    let to = header("to")?;
+    let to: chord_core::jid::Jid = to
+        .parse()
+        .map_err(|e| ChordError::invalid(format!("not a JID ({to:?}): {e}")))?;
+    let media_type = header("type").unwrap_or_default();
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err(ChordError::invalid("the pasted file must be raw bytes"));
+    };
+    if bytes.is_empty() {
+        return Err(ChordError::invalid("the pasted file is empty"));
+    }
+    if bytes.len() > MAX_PASTE_BYTES {
+        return Err(ChordError::invalid(format!(
+            "the pasted file is {} bytes, the limit is {MAX_PASTE_BYTES}",
+            bytes.len()
+        )));
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (name, content_type) = pasted_identity(&media_type, secs);
+    Ok(handle
+        .upload(to, name, content_type.to_owned(), bytes.clone())
+        .await?)
 }
 
 /// Download the image at `url`, ask the user where to save it, and write it there. Returns
@@ -250,11 +355,45 @@ mod tests {
     }
 
     #[test]
-    fn a_picked_file_is_read() {
+    fn a_picked_file_is_opened_as_a_handle() {
+        use std::io::Read;
         let dir = Scratch::new("read");
         let file = dir.0.join("a.txt");
         std::fs::write(&file, b"hello").unwrap();
-        assert_eq!(read_picked(&file).unwrap(), b"hello");
+        let mut text = String::new();
+        open_picked(&file)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn a_header_value_is_percent_decoded() {
+        assert_eq!(
+            percent_decode("amy%40chat.example%2Fweb"),
+            "amy@chat.example/web"
+        );
+        assert_eq!(percent_decode("image%2Fpng"), "image/png");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
+        assert_eq!(percent_decode("%C3%A9"), "\u{e9}");
+    }
+
+    #[test]
+    fn a_pasted_file_gets_a_generated_name_and_a_known_type() {
+        assert_eq!(
+            pasted_identity("image/png", 1700000000),
+            ("pasted-1700000000.png".to_owned(), "image/png")
+        );
+        assert_eq!(pasted_identity(" IMAGE/JPEG ", 5).0, "pasted-5.jpg");
+        // The page cannot smuggle a path or a script type through the media type.
+        let (name, kind) = pasted_identity("../../x; text/html", 7);
+        assert_eq!(
+            (name.as_str(), kind),
+            ("pasted-7.bin", "application/octet-stream")
+        );
+        assert_eq!(pasted_identity("", 7).0, "pasted-7.bin");
     }
 
     #[test]
@@ -282,10 +421,10 @@ mod tests {
 
     #[test]
     fn a_missing_file_or_a_directory_is_refused() {
-        let error = read_picked(Path::new("/definitely/not/here")).unwrap_err();
+        let error = open_picked(Path::new("/definitely/not/here")).unwrap_err();
         assert_eq!(error.code, "io");
         let dir = Scratch::new("dir");
-        assert_eq!(read_picked(&dir.0).unwrap_err().code, "invalid");
+        assert_eq!(open_picked(&dir.0).unwrap_err().code, "invalid");
     }
 
     #[cfg(unix)]
@@ -296,7 +435,7 @@ mod tests {
         std::fs::write(&secret, b"key").unwrap();
         let link = dir.0.join("link");
         std::os::unix::fs::symlink(&secret, &link).unwrap();
-        assert_eq!(read_picked(&link).unwrap_err().code, "invalid");
+        assert_eq!(open_picked(&link).unwrap_err().code, "invalid");
     }
 
     #[test]
