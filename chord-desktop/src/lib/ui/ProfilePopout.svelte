@@ -2,6 +2,7 @@
   // Profile card, 300px. Opens from member rows, message avatars and names, and contact rows.
   import { onMount } from 'svelte';
   import Avatar from './Avatar.svelte';
+  import EmojiText from './EmojiText.svelte';
   import CopyAddress from './CopyAddress.svelte';
   import Popover from './Popover.svelte';
   import { app } from './app.svelte';
@@ -68,7 +69,7 @@
     <div class="body">
       <h3 class="title" class:me={p.isMe}>{p.name}</h3>
       <CopyAddress address={p.address} />
-      <p class="status">{p.status ?? presenceLabel[kind]}</p>
+      <p class="status">{#if p.status}<EmojiText text={p.status} />{:else}{presenceLabel[kind]}{/if}</p>
       {#if chip}<span class="chip">{chip}</span>{/if}
 
       <hr />

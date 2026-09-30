@@ -2,6 +2,7 @@
   // 52px panel at the bottom of the sidebar. The avatar opens the status menu. The gear opens settings.
   import Settings from 'lucide-svelte/icons/settings';
   import Avatar from './Avatar.svelte';
+  import EmojiText from './EmojiText.svelte';
   import Icon from './Icon.svelte';
   import StatusMenu from './StatusMenu.svelte';
   import { app } from './app.svelte';
@@ -28,7 +29,7 @@
     <span class="text">
       <span class="name">{app.me.name}</span>
       {#if app.me.status}
-        <span class="addr" title={app.me.status}>{app.me.status}</span>
+        <span class="addr" title={app.me.status}><EmojiText text={app.me.status} /></span>
       {:else}
         <span class="addr mono" title={ownLabel(app.me.show)}>{app.me.address}</span>
       {/if}

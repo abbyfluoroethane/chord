@@ -6,6 +6,7 @@
   import UserMinus from 'lucide-svelte/icons/user-minus';
   import UserPlus from 'lucide-svelte/icons/user-plus';
   import Avatar from './Avatar.svelte';
+  import EmojiText from './EmojiText.svelte';
   import CircleIcon from './CircleIcon.svelte';
   import CopyAddress from './CopyAddress.svelte';
   import Icon from './Icon.svelte';
@@ -117,7 +118,7 @@
     {#if tab === 'info'}
       <dl>
         <dt class="field-label">Status</dt>
-        <dd>{p.status ?? presenceLabel[kind]}</dd>
+        <dd>{#if p.status}<EmojiText text={p.status} />{:else}{presenceLabel[kind]}{/if}</dd>
         <dt class="field-label">Address</dt>
         <dd class="mono">{p.address}</dd>
         {#if p.since}

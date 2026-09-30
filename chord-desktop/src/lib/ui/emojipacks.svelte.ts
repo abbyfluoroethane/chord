@@ -109,40 +109,4 @@ class EmojiPacks {
 
 export const emojiPacks = new EmojiPacks();
 
-/** A text run or one emoji. */
-export type EmojiPart = { emoji: false; text: string } | { emoji: true; text: string };
-
-let pattern: RegExp | null | undefined;
-/** Unicode emoji sequences (RGI). Engines without the `v` flag get a close match. */
-function emojiPattern(): RegExp | null {
-  if (pattern !== undefined) return pattern;
-  try {
-    pattern = new RegExp('\\p{RGI_Emoji}', 'gv');
-  } catch {
-    try {
-      pattern = new RegExp(
-        '(?:\\p{Regional_Indicator}{2})|(?:[#*0-9]\\uFE0F?\\u20E3)|(?:\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})?(?:\\u200D\\p{Extended_Pictographic}(?:\\uFE0F|\\p{Emoji_Modifier})?)*)',
-        'gu'
-      );
-    } catch {
-      pattern = null;
-    }
-  }
-  return pattern;
-}
-
-/** Split text into text runs and emoji. */
-export function splitEmoji(text: string): EmojiPart[] {
-  const re = emojiPattern();
-  if (!re || !text) return [{ emoji: false, text }];
-  const out: EmojiPart[] = [];
-  let last = 0;
-  for (const m of text.matchAll(re)) {
-    const i = m.index ?? 0;
-    if (i > last) out.push({ emoji: false, text: text.slice(last, i) });
-    out.push({ emoji: true, text: m[0] });
-    last = i + m[0].length;
-  }
-  if (last < text.length) out.push({ emoji: false, text: text.slice(last) });
-  return out;
-}
+export { splitEmoji, type EmojiPart } from './emojisplit';
