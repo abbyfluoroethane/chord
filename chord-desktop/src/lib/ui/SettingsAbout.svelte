@@ -27,6 +27,9 @@
   <li>PhotoSwipe image viewer, MIT License.</li>
   <li>Video.js media player, Apache License 2.0.</li>
   <li>Emojibase emoji data, MIT License.</li>
+  <li>Twemoji graphics by Twitter and contributors, CC BY 4.0.</li>
+  <li>Noto Emoji by Google, Apache License 2.0. Fluent Emoji by Microsoft, MIT License. Both from the Iconify sets.</li>
+  <li>highlight.js code highlighting, BSD 3-Clause License.</li>
   <li>GIF search powered by KLIPY.</li>
 </ul>
 

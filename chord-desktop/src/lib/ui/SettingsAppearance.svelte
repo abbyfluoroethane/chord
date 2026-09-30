@@ -1,5 +1,9 @@
 <script lang="ts">
+  import Check from 'lucide-svelte/icons/check';
+  import Emoji from './Emoji.svelte';
+  import Icon from './Icon.svelte';
   import Segmented from './Segmented.svelte';
+  import { EMOJI_PACKS, emojiPacks } from './emojipacks.svelte';
   import SettingRow from './SettingRow.svelte';
   import { prefs } from './prefs.svelte';
   import { theme, type ThemeChoice } from '$lib/theme/theme.svelte';
@@ -10,6 +14,8 @@
     { value: 'light', label: 'Light' },
     { value: 'system', label: 'System' }
   ];
+  const SAMPLE = ['😀', '👋🏽', '❤️', '🎉', '🚀'];
+
   const modes: { value: DisplayMode; label: string }[] = [
     { value: 'cozy', label: 'Cozy' },
     { value: 'compact', label: 'Compact' }
@@ -42,6 +48,37 @@
   </div>
 </SettingRow>
 
+<h2 class="section">Emoji</h2>
+<div class="packs" role="radiogroup" aria-label="Emoji style">
+  {#each EMOJI_PACKS as p (p.id)}
+    {@const on = prefs.emojiPack === p.id}
+    {@const ready = emojiPacks.installed[p.id]}
+    <button
+      class="pack"
+      class:on
+      role="radio"
+      aria-checked={on}
+      disabled={emojiPacks.installing !== null}
+      onclick={() => emojiPacks.choose(p.id)}
+    >
+      <span class="pack-head">
+        <span class="pack-name">{p.name}</span>
+        {#if on}<span class="check"><Icon icon={Check} size={16} /></span>{/if}
+      </span>
+      <span class="sample" aria-hidden="true">
+        {#if emojiPacks.installing === p.id}
+          <span class="ring"></span><span class="meta">Downloading</span>
+        {:else if ready}
+          {#each SAMPLE as e (e)}<Emoji emoji={e} pack={p.id} />{/each}
+        {:else}
+          <span class="meta">Downloads {p.download} when you pick it</span>
+        {/if}
+      </span>
+      <span class="meta credit">{p.credit}</span>
+    </button>
+  {/each}
+</div>
+
 <h2 class="section">Preview</h2>
 <div class="preview" class:compact={prefs.display === 'compact'}>
   <span class="time meta">12:40</span>
@@ -73,6 +110,79 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--ink-muted);
+  }
+  .packs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+  .pack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    text-align: left;
+    background: var(--surface-200);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    transition:
+      border-color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+  }
+  .pack:hover:not(:disabled) {
+    border-color: var(--ink-muted);
+  }
+  .pack.on {
+    background: var(--selected);
+    border-color: var(--ink-muted);
+  }
+  .pack:disabled {
+    cursor: progress;
+  }
+  .pack-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pack-name {
+    font-weight: 600;
+  }
+  .check {
+    display: grid;
+    color: var(--brand);
+  }
+  .sample {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: 32px;
+    font-size: 20px;
+  }
+  .meta {
+    color: var(--ink-muted);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+  }
+  .ring {
+    width: 16px;
+    height: 16px;
+    box-sizing: border-box;
+    border: 2px solid var(--line);
+    border-top-color: var(--brand);
+    border-radius: 50%;
+    animation: spin 840ms linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ring {
+      animation: none;
+    }
   }
   .preview {
     display: flex;

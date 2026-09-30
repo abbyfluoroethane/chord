@@ -6,6 +6,7 @@
   import Smile from 'lucide-svelte/icons/smile';
   import X from 'lucide-svelte/icons/x';
   import type { Gif } from '$lib/chord';
+  import Emoji from './Emoji.svelte';
   import ExpressionPicker from './ExpressionPicker.svelte';
   import Icon from './Icon.svelte';
   import { prefs } from './prefs.svelte';
@@ -276,7 +277,7 @@
               pickShortcode(i);
             }}
           >
-            <span class="glyph" aria-hidden="true">{s.emoji}</span>
+            <span class="glyph" aria-hidden="true"><Emoji emoji={s.emoji} /></span>
             <span class="name">:{s.name}:</span>
           </li>
         {/each}
@@ -373,9 +374,11 @@
   .codes li.on {
     background: var(--hover);
   }
+  /* The emoji image is 1.375em: 22px in a 24px box. */
   .codes .glyph {
+    flex: none;
     width: 24px;
-    font-size: 20px;
+    font-size: 16px;
     line-height: 24px;
     text-align: center;
   }

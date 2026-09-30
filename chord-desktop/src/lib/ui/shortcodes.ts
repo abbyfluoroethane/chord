@@ -80,6 +80,13 @@ export function suggestShortcodes(
     seen.add(emoji);
     found.push({ name, emoji });
   }
-  found.sort((a, b) => a.name.length - b.name.length || (a.name < b.name ? -1 : 1));
+  // A skin tone version comes after the base emoji, then shorter names first.
+  const tone = (n: string) => (/_tone\d|skin_tone|-tone/.test(n) ? 1 : 0);
+  found.sort(
+    (a, b) =>
+      tone(a.name) - tone(b.name) ||
+      a.name.length - b.name.length ||
+      (a.name < b.name ? -1 : 1)
+  );
   return found.slice(0, max);
 }

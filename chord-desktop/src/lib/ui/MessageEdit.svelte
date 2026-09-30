@@ -2,6 +2,7 @@
   // Inline edit. Esc cancels, Enter saves, Shift+Enter adds a line.
   import { untrack } from 'svelte';
   import { app } from './app.svelte';
+  import { loadShortcodes, mayHaveShortcode, replaceShortcodesOutsideCode } from './shortcodes';
   import type { TimelineItem } from './types';
 
   let { item }: { item: TimelineItem } = $props();
@@ -22,13 +23,21 @@
     fit();
   });
 
+  // As in the composer: other clients do not know :shortcodes:, so the edit saves real emoji.
+  async function save() {
+    const out = mayHaveShortcode(value)
+      ? replaceShortcodesOutsideCode(value, await loadShortcodes())
+      : value;
+    app.edit(item.id, out);
+  }
+
   function keydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault();
       app.editingId = null;
     } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      app.edit(item.id, value);
+      void save();
     }
   }
 </script>
@@ -44,7 +53,7 @@
   ></textarea>
   <p class="hint">
     escape to <button onclick={() => (app.editingId = null)}>cancel</button> · enter to
-    <button onclick={() => app.edit(item.id, value)}>save</button>
+    <button onclick={save}>save</button>
   </p>
 </div>
 

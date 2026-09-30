@@ -3,17 +3,21 @@
   // then to the system font. The alt text keeps copy, search and screen readers right.
   import { emojiPacks } from './emojipacks.svelte';
 
-  let { emoji }: { emoji: string } = $props();
+  import type { EmojiPackId } from './emojipackids';
+
+  /** `pack` draws in one pack, for example a sample in the settings. */
+  let { emoji, pack }: { emoji: string; pack?: EmojiPackId } = $props();
 
   // 0: the chosen pack, 1: Twemoji, 2: the system font.
   let step = $state(0);
   $effect(() => {
     void emoji;
     void emojiPacks.active;
+    void pack;
     step = 0;
   });
   const src = $derived(
-    step === 0 ? emojiPacks.url(emoji) : step === 1 ? emojiPacks.url(emoji, 'twemoji') : null
+    step === 0 ? emojiPacks.url(emoji, pack ?? emojiPacks.active) : step === 1 ? emojiPacks.url(emoji, 'twemoji') : null
   );
 </script>
 

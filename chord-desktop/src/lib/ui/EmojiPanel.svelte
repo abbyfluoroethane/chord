@@ -367,7 +367,8 @@
     width: 40px;
     height: 40px;
     border-radius: var(--radius-md);
-    font-size: 26px;
+    /* The emoji image is 1.375em: 30px in a 40px cell. */
+    font-size: 22px;
     line-height: 40px;
     text-align: center;
     transition: background var(--dur-fast) var(--ease-out);
