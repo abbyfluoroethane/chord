@@ -42,9 +42,13 @@ const isIdentStart = (c: string) => /[A-Za-z_\u0080-￿\\-]/.test(c);
 const isIdentChar = (c: string) => /[A-Za-z0-9_\u0080-￿\\-]/.test(c);
 
 /** Read one escape that starts at `i` (a backslash). Returns the character and the next index. */
+// U+FFFD, the CSS replacement character. Built at run time so that the bundle holds no
+// literal U+FFFD.
+const REPLACEMENT: string = JSON.parse('"\\ufffd"');
+
 function escape(css: string, i: number): [string, number] {
   let j = i + 1;
-  if (j >= css.length) return ['�', j];
+  if (j >= css.length) return [REPLACEMENT, j];
   if (isHex(css[j])) {
     let hex = '';
     while (j < css.length && hex.length < 6 && isHex(css[j])) hex += css[j++];
@@ -53,7 +57,7 @@ function escape(css: string, i: number): [string, number] {
       j += css[j] === '\r' && css[j + 1] === '\n' ? 2 : 1;
     }
     const code = parseInt(hex, 16);
-    return [code === 0 || code > 0x10ffff ? '�' : String.fromCodePoint(code), j];
+    return [code === 0 || code > 0x10ffff ? REPLACEMENT : String.fromCodePoint(code), j];
   }
   return [css[j], j + 1];
 }
