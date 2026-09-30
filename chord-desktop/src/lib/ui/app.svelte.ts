@@ -1001,6 +1001,28 @@ class AppState {
     return r.ok;
   }
 
+  /**
+   * Invite people to a space: make each one a member, then send a message with the join
+   * link. Maps to api.addSpaceMember(service, node, jid) and api.sendChat(jid, body).
+   * The member step needs owner rights, and a refusal does not stop the message.
+   * Returns how many messages went out.
+   */
+  async sendSpaceInvites(space: string, addresses: string[], link: string): Promise<number> {
+    const s = this.spaceOf(space);
+    const text = `Join ${s?.name ?? 'my space'} on Chord: ${link}`;
+    if (!live) return addresses.length;
+    const { service, node } = splitSpaceKey(space);
+    let sent = 0;
+    for (const address of addresses) {
+      const r = await this.call(async (b) => {
+        await b.addSpaceMember(service, node, address).catch(() => undefined);
+        await b.sendChat(address, text);
+      });
+      if (r.ok) sent += 1;
+    }
+    return sent;
+  }
+
   /** Change the role of a person in the open room. Maps to api.setRoomAffiliation(room, jid, affiliation). */
   async setAffiliation(
     address: string,

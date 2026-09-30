@@ -13,8 +13,10 @@
   // of the space), changeNick, spaceJoinRequests, approveSpaceJoin, denySpaceJoin,
   // createChannel, and leaveSpace.
   import { splitSpaceKey } from './adapt';
+  import InviteList from './InviteList.svelte';
   import Modal from './Modal.svelte';
   import { app } from './app.svelte';
+  import { ui } from './ui.svelte';
   import { live } from './bridge';
   import type { NotificationLevel } from './types';
 
@@ -74,7 +76,20 @@
     leave: 'Leave this space'
   };
 
+  let picked = $state<string[]>([]);
+  let sending = $state(false);
+
+  async function sendInvites() {
+    if (!picked.length || sending) return;
+    sending = true;
+    const n = await app.sendSpaceInvites(space, picked, link);
+    sending = false;
+    ui.say(n === 1 ? 'Sent 1 invite.' : `Sent ${n} invites.`);
+    onclose();
+  }
+
   function save() {
+    if (kind === 'invite') return void sendInvites();
     if (kind === 'create-channel') app.createChannel(space, text);
     else if (kind === 'nickname' && text.trim()) void app.changeNick(space, text.trim());
     else if (kind === 'notifications') void app.setCircleLevel(space, mute ? 'nothing' : level);
@@ -109,7 +124,9 @@
     }}
   >
     {#if kind === 'invite'}
-      <p class="hint">Send this address to anyone. They can use it to join {circle?.name}.</p>
+      <p class="hint">Pick people to invite to {circle?.name}. Each one gets a message with the join link.</p>
+      <InviteList bind:picked />
+      <p class="hint or">Or copy the link and send it yourself.</p>
       <div class="copy">
         <code class="mono">{link}</code>
         <button type="button" class="btn" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
@@ -159,8 +176,12 @@
   </form>
 
   {#snippet footer()}
-    <button class="btn btn-ghost" onclick={onclose}>{kind === 'invite' ? 'Close' : 'Cancel'}</button>
-    {#if kind !== 'invite'}
+    <button class="btn btn-ghost" onclick={onclose}>Cancel</button>
+    {#if kind === 'invite'}
+      <button class="btn btn-primary" type="submit" form="circle-dialog" disabled={!picked.length || sending}>
+        {picked.length > 1 ? `Send ${picked.length} invites` : 'Send invite'}
+      </button>
+    {:else}
       <button
         class="btn"
         class:btn-danger={kind === 'leave'}
@@ -194,6 +215,9 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .or {
+    margin-top: var(--space-4);
   }
   .copy {
     display: flex;
