@@ -3,6 +3,7 @@ dev/prosody/.env
 dev/prosody/certs/
 .claude/worktrees/
 dev/foid/.env
+dev/klipy/.env
 chord-desktop/node_modules/
 chord-desktop/build/
 chord-desktop/.svelte-kit/

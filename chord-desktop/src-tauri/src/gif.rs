@@ -297,6 +297,22 @@ mod tests {
         assert!(parse_page(b"not json").is_err());
     }
 
+    /// The real KLIPY API. It needs a key: run it with dev/klipy/.env loaded and
+    /// `cargo test -p chord-desktop klipy_live -- --ignored`.
+    #[test]
+    #[ignore = "needs CHORD_KLIPY_KEY and the network"]
+    fn klipy_live() {
+        for query in ["", "wave"] {
+            let page = tauri::async_runtime::block_on(get_page(query, 1)).unwrap();
+            assert!(!page.items.is_empty(), "no GIFs for {query:?}");
+            for gif in &page.items {
+                assert!(gif.full.url.starts_with("https://"));
+                assert!(gif.full.url.ends_with(".gif"), "{}", gif.full.url);
+                assert!(gif.preview.width > 0 && gif.preview.height > 0);
+            }
+        }
+    }
+
     #[test]
     fn the_key_is_a_path_segment() {
         let url = endpoint("a/b c", "search");
