@@ -19,11 +19,7 @@
   import type { Attachment } from './types';
   import { ui } from './ui.svelte';
 
-  let {
-    file,
-    trusted = true,
-    onload: reveal
-  }: { file: Attachment; trusted?: boolean; onload?: () => void } = $props();
+  let { file }: { file: Attachment } = $props();
 
   const host = $derived(hostOf(file.url));
   // A private or local address never loads by itself, for anyone.
@@ -75,18 +71,7 @@
   });
 </script>
 
-{#if kind !== 'file' && !trusted}
-  <div class="card">
-    <span class="ico"><Icon icon={File} size={24} /></span>
-    <span class="info">
-      <span class="name">{file.name}</span>
-      <span class="mono size" title={file.url}>{host}</span>
-    </span>
-    <button class="btn" onclick={reveal} title="The site sees your IP address">
-      Load {kind}
-    </button>
-  </div>
-{:else if kind === 'image'}
+{#if kind === 'image'}
   <button
     class="image"
     class:natural={!box}

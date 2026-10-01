@@ -12,8 +12,6 @@
   import ReactionPills from './ReactionPills.svelte';
   import ReplyPreview from './ReplyPreview.svelte';
   import { actionText } from './action';
-  import { contactsStore } from './contacts.svelte';
-  import { mayAutoLoad } from './mediatrust';
   import { app } from './app.svelte';
   import { allowsNativeMenu, contextMenu, isMenuKey } from './contextmenu.svelte';
   import { messageMenu, type MessageTarget } from './menus';
@@ -39,27 +37,12 @@
   const action = $derived(actionText(item.body));
   const full = $derived(new Date(item.timestamp).toLocaleString());
 
-  // Remote files load on their own only for me and for contacts. For anyone else the user
-  // clicks once for this message. Until then the app makes no request to any address that
-  // the sender chose (BRIDGESECURITY-03, 04).
-  let revealed = $state(false);
-  const trusted = $derived(
-    revealed ||
-      mayAutoLoad(
-        item.sender,
-        app.me.address,
-        (a) => contactsStore.isContact(a),
-        linkPreviews.strangers
-      )
-  );
-
   // Up to three different links of the body. Code is not a link. The attachment has its own view.
   const candidates = $derived.by(() => {
     if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
     const urls = previewUrls(item.body).filter((u) => u !== item.attachment?.url);
     return [...new Set(urls)].slice(0, 3);
   });
-  const wanted = $derived(trusted ? candidates : []);
 
   // Up to three different xmpp: links get a card. The card asks the server that the link
   // names, so the switch for link previews turns the cards off too.
@@ -85,7 +68,7 @@
     return { destroy: () => io.disconnect() };
   }
   $effect(() => {
-    if (seen) for (const url of wanted) linkPreviews.request(url);
+    if (seen) for (const url of candidates) linkPreviews.request(url);
   });
 
   // The menu of the message: right-click, the "more" button, or the menu key on a focused
@@ -205,23 +188,16 @@
         </div>
       {/if}
       {#if item.attachment}
-        <AttachmentView file={item.attachment} {trusted} onload={() => (revealed = true)} />
+        <AttachmentView file={item.attachment} />
       {/if}
       {#if cards.length}
         <div class="previews">
-          {#each cards as uri (uri)}<XmppLinkCard {uri} {trusted} />{/each}
+          {#each cards as uri (uri)}<XmppLinkCard {uri} />{/each}
         </div>
       {/if}
-      {#if candidates.length && !trusted}
-        <div class="previews">
-          <button class="btn" onclick={() => (revealed = true)} title="The site sees your IP address">
-            Load link preview
-          </button>
-        </div>
-      {/if}
-      {#if wanted.length}
+      {#if candidates.length}
         <div class="previews" use:watch>
-          {#each wanted as url (url)}
+          {#each candidates as url (url)}
             {@const p = linkPreviews.get(url)}
             {#if p}<LinkPreviewCard preview={p} />{/if}
           {/each}

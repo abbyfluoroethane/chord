@@ -5,10 +5,7 @@
   // shows "This invite is not valid", with no button.
   //
   // The question goes to the server in the link, which learns the IP address and the time.
-  // So for a sender who is no contact (`trusted` is false) the card asks only after a click
-  // on "Show details" (BRIDGESECURITY-14, and the option "ask only after a click" of the
-  // decision about invite cards). Links of contacts, and spaces or rooms that you know, load
-  // at once.
+  // The "Show link previews" switch in the privacy settings turns the cards off.
   import Hash from 'lucide-svelte/icons/hash';
   import Avatar from './Avatar.svelte';
   import CircleIcon from './CircleIcon.svelte';
@@ -18,7 +15,7 @@
   import { xmppLinks } from './xmpplinks.svelte';
   import { parseXmppUri } from './xmppuri';
 
-  let { uri, trusted = true }: { uri: string; trusted?: boolean } = $props();
+  let { uri }: { uri: string } = $props();
 
   const link = $derived(parseXmppUri(uri));
   const info = $derived(link.kind === 'space' || link.kind === 'room' ? xmppLinks.get(link) : undefined);
@@ -28,16 +25,13 @@
       : null
   );
   const joined = $derived(link.kind !== 'unknown' && xmppLinks.joined(link));
-  let asked = $state(false);
   const remote = $derived(link.kind === 'space' || link.kind === 'room');
-  // No request for an unknown target of a stranger until the click.
-  const waiting = $derived(remote && info === undefined && !trusted && !asked && !joined);
-  const loading = $derived(remote && info === undefined && !waiting);
+  const loading = $derived(remote && info === undefined);
   const invalid = $derived(link.kind === 'unknown' || info === null);
   let busy = $state(false);
 
   $effect(() => {
-    if ((link.kind === 'space' || link.kind === 'room') && (trusted || asked || joined)) xmppLinks.request(link);
+    if (link.kind === 'space' || link.kind === 'room') xmppLinks.request(link);
   });
 
   const label = $derived(
@@ -91,15 +85,6 @@
   <span class="label">{label}</span>
   {#if invalid}
     <p class="invalid">This invite is not valid</p>
-  {:else if waiting}
-    <div class="row">
-      <span class="text">
-        <span class="name">{link.kind === 'room' ? `#${link.jid.split('@')[0]}` : name}</span>
-        <span class="meta addr">{link.kind === 'room' ? link.jid : link.kind === 'space' ? link.service : ''}</span>
-        <span class="meta">The server in the link is asked only after you click.</span>
-      </span>
-      <button class="btn" onclick={() => (asked = true)}>Show details</button>
-    </div>
   {:else if loading}
     <div class="row" aria-hidden="true">
       <span class="tile skeleton"></span>
