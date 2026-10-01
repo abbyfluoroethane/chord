@@ -38,6 +38,17 @@
 </SettingRow>
 
 
+<SettingRow
+  title="Load files from people who are not contacts"
+  hint="On by default. When it is off, a photo, a video or a link preview from someone who is not a contact does not load: the message shows the plain link. Loading it shows the sender your IP address and the time you read the message."
+>
+  <Toggle
+    checked={linkPreviews.strangers}
+    label="Load files from people who are not contacts"
+    onchange={(v) => linkPreviews.setStrangers(v)}
+  />
+</SettingRow>
+
 <h2 class="section">GIFs</h2>
 <SettingRow
   title="Show the GIF picker"

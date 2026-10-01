@@ -384,6 +384,22 @@ const opsGeneral = build([
       width: null,
       height: null
     } },
+  // A person who is not a contact. With "Load files from people who are not contacts" off,
+  // the photo shows as a plain file link and the link preview does not show.
+  {
+    id: 'g8s',
+    who: 'noor',
+    ts: at(0, 10, 4),
+    body: 'Hi all, I found your launch log here: https://example.org/launch-log',
+    attachment: {
+      url: pic(480, 320, '#5b4bb7', '#16131f'),
+      name: 'noor-pad.jpg',
+      mime: 'image/jpeg',
+      size: 96_000,
+      width: 480,
+      height: 320
+    }
+  },
   {
     id: 'g9',
     who: 'jo',

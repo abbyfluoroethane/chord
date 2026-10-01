@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { hostOf, isLocalHost, webUrl } from './mediatrust';
+import { hostOf, isLocalHost, mayAutoLoad, webUrl } from './mediatrust';
 
+const contacts = new Set(['ann@chat.example']);
+const isContact = (a: string) => contacts.has(a);
+
+describe('mayAutoLoad', () => {
+  it('loads for me and for contacts', () => {
+    expect(mayAutoLoad('me@chat.example', 'me@chat.example', isContact, false)).toBe(true);
+    expect(mayAutoLoad('ann@chat.example/phone', 'me@chat.example', isContact, false)).toBe(true);
+  });
+  it('waits for a click for a stranger', () => {
+    expect(mayAutoLoad('bob@other.example', 'me@chat.example', isContact, false)).toBe(false);
+  });
+  it('treats a room nick as a stranger', () => {
+    expect(mayAutoLoad('room@muc.example/ann', 'me@chat.example', isContact, false)).toBe(false);
+  });
+  it('loads for everyone when the user allows it', () => {
+    expect(mayAutoLoad('room@muc.example/bob', 'me@chat.example', isContact, true)).toBe(true);
+  });
+});
 
 describe('webUrl and hostOf', () => {
   it('takes http and https only', () => {

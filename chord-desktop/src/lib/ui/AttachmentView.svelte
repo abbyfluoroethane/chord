@@ -19,7 +19,9 @@
   import type { Attachment } from './types';
   import { ui } from './ui.svelte';
 
-  let { file }: { file: Attachment } = $props();
+  // `embed` is false for a stranger when "Load files from people who are not contacts" is
+  // off: the file then shows as a plain file link, as for a local address.
+  let { file, embed = true }: { file: Attachment; embed?: boolean } = $props();
 
   const host = $derived(hostOf(file.url));
   // A private or local address never loads by itself, for anyone.
@@ -39,7 +41,7 @@
   let broken = $state(false);
 
   const kind = $derived.by(() => {
-    if (broken || local) return 'file';
+    if (broken || local || !embed) return 'file';
     if (file.mime.startsWith('image/')) return 'image';
     if (file.mime.startsWith('video/')) return 'video';
     if (file.mime.startsWith('audio/')) return 'audio';

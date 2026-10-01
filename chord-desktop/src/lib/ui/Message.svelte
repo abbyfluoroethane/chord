@@ -16,7 +16,9 @@
   import { allowsNativeMenu, contextMenu, isMenuKey } from './contextmenu.svelte';
   import { messageMenu, type MessageTarget } from './menus';
   import { clock, domainOf, stamp } from './format';
+  import { contactsStore } from './contacts.svelte';
   import { linkPreviews } from './linkpreviews.svelte';
+  import { mayAutoLoad } from './mediatrust';
   import { prefs } from './prefs.svelte';
   import { previewUrls, xmppUrls } from './markdown';
   import type { TimelineItem } from './types';
@@ -37,9 +39,15 @@
   const action = $derived(actionText(item.body));
   const full = $derived(new Date(item.timestamp).toLocaleString());
 
+  // Embeds load for me, for contacts, and for anyone when "Load files from people who are
+  // not contacts" is on. Otherwise the message shows no embeds: the file is a plain link.
+  const embeds = $derived(
+    mayAutoLoad(item.sender, app.me.address, (a) => contactsStore.isContact(a), linkPreviews.strangers)
+  );
+
   // Up to three different links of the body. Code is not a link. The attachment has its own view.
   const candidates = $derived.by(() => {
-    if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
+    if (!linkPreviews.enabled || !embeds || item.retracted || editing || !item.body) return [];
     const urls = previewUrls(item.body).filter((u) => u !== item.attachment?.url);
     return [...new Set(urls)].slice(0, 3);
   });
@@ -47,7 +55,7 @@
   // Up to three different xmpp: links get a card. The card asks the server that the link
   // names, so the switch for link previews turns the cards off too.
   const cards = $derived.by(() => {
-    if (!linkPreviews.enabled || item.retracted || editing || !item.body) return [];
+    if (!linkPreviews.enabled || !embeds || item.retracted || editing || !item.body) return [];
     return [...new Set(xmppUrls(item.body))].slice(0, 3);
   });
 
@@ -188,7 +196,7 @@
         </div>
       {/if}
       {#if item.attachment}
-        <AttachmentView file={item.attachment} />
+        <AttachmentView file={item.attachment} embed={embeds} />
       {/if}
       {#if cards.length}
         <div class="previews">

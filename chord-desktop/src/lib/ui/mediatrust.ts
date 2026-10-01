@@ -1,6 +1,31 @@
-// Checks on the remote URLs of messages: only http and https, the real host to show, and
-// no request by itself to a private or local address. The "Show link previews" switch in
-// the privacy settings turns embeds off.
+// Who may make this computer load a remote file on its own. A photo, a video or a link
+// preview from a stranger is a request from the IP address of the user, at the time of
+// reading. The sender learns both. The setting "Load files from people who are not
+// contacts" (on by default) decides it for strangers. When it is off, a message from a
+// stranger shows no embeds: a photo or a video is a plain file link, and the link previews
+// and the xmpp: cards do not show (BRIDGESECURITY-03, 04).
+
+/** The bare part of an address: `room@muc.example/nick` gives `room@muc.example`. */
+function bare(address: string): string {
+  const slash = address.indexOf('/');
+  return slash < 0 ? address : address.slice(0, slash);
+}
+
+/**
+ * True if the app may load the remote files of a message from `sender` and show its embeds.
+ * `sender` is the real address of the sender, or `room/nick` when the room hides it. A
+ * `room/nick` has the bare address of the room, which is no contact.
+ */
+export function mayAutoLoad(
+  sender: string,
+  me: string,
+  isContact: (address: string) => boolean,
+  allowStrangers: boolean
+): boolean {
+  if (allowStrangers) return true;
+  const address = bare(sender);
+  return address === bare(me) || isContact(address);
+}
 
 /** The URL of a remote file if it is a plain http or https URL, else null. */
 export function webUrl(url: string): URL | null {
