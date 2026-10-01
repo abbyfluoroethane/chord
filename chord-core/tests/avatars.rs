@@ -50,9 +50,10 @@ async fn alice_publishes_and_bob_fetches_the_avatar() {
     let alice = login("alice", "ALICE_PASSWORD").await;
     let bob = login("bob", "BOB_PASSWORD").await;
 
-    // Not a real PNG, but the server does not look at the bytes.
+    // Not a real PNG. The PNG signature is enough for the type sniff of `refresh_avatar`.
     let suffix = uuid_suffix();
-    let image = format!("chord avatar test {suffix}").into_bytes();
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.extend_from_slice(format!("chord avatar test {suffix}").as_bytes());
     alice
         .set_avatar("image/png".into(), image.clone(), 8, 8)
         .await
