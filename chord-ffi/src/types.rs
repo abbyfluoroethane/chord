@@ -123,6 +123,7 @@ pub struct MemberItem {
     pub role: String,
     pub affiliation: String,
     pub show: Option<String>,
+    pub status: Option<String>,
     pub online: bool,
     pub avatar: Option<String>,
 }
@@ -238,6 +239,7 @@ impl From<core_views::MemberItem> for MemberItem {
             role: i.role,
             affiliation: i.affiliation,
             show: i.show,
+            status: i.status,
             online: i.online,
             avatar: i.avatar,
         }

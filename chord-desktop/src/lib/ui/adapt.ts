@@ -130,6 +130,7 @@ export function toMember(m: BMember, room: string): MemberItem {
     role: m.role === 'moderator' ? 'Moderator' : m.role === 'visitor' ? 'Visitor' : null,
     affiliation,
     show: toShow(m.show),
+    status: m.status?.trim() || null,
     online: m.online,
     avatar: avatar(m.avatar),
     jid: m.jid,

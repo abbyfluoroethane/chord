@@ -113,6 +113,8 @@ export interface MemberItem {
   affiliation: string;
   /** "away", "chat", "dnd" or "xa". null means available or offline. */
   show: string | null;
+  /** The presence status text, if the person set one. */
+  status: string | null;
   online: boolean;
   avatar: string | null;
 }

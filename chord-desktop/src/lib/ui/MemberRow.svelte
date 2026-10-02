@@ -1,6 +1,10 @@
 <script lang="ts">
+  // A row of the member list: the name, a shield for a moderator, and the status text.
+  import Shield from 'lucide-svelte/icons/shield';
   import Avatar from './Avatar.svelte';
+  import Icon from './Icon.svelte';
   import { app } from './app.svelte';
+  import { tooltip } from './tooltip';
   import { presenceKind, type MemberItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -9,6 +13,7 @@
   let btn = $state<HTMLButtonElement>();
   const open = $derived(!!btn && ui.popout?.anchor === btn);
   const isMe = $derived(member.id === app.me.address);
+  const moderator = $derived(member.role === 'Moderator');
 </script>
 
 <button
@@ -28,8 +33,20 @@
     cut="var(--surface-200)"
   />
   <span class="text">
-    <span class="name" class:me={isMe}>{member.name}</span>
-    {#if member.role}<span class="role meta">{member.role}</span>{/if}
+    <span class="line">
+      <span class="name" class:me={isMe}>{member.name}</span>
+      {#if moderator}
+        <span
+          class="mod"
+          role="img"
+          aria-label="Moderator"
+          use:tooltip={{ text: 'Moderator', side: 'top' }}
+        >
+          <Icon icon={Shield} size={13} />
+        </span>
+      {/if}
+    </span>
+    {#if member.status}<span class="status meta">{member.status}</span>{/if}
   </span>
 </button>
 
@@ -61,7 +78,14 @@
     flex-direction: column;
     min-width: 0;
   }
+  .line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+  }
   .name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -71,7 +95,12 @@
   .name.me {
     color: var(--brand-ink);
   }
-  .role {
+  .mod {
+    display: inline-flex;
+    flex: none;
+    color: var(--ink-muted);
+  }
+  .status {
     line-height: 14px;
     overflow: hidden;
     text-overflow: ellipsis;

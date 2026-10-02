@@ -242,6 +242,7 @@ impl Show for MemberItem {
             .str("role", &self.role)
             .str("affiliation", &self.affiliation)
             .opt_str("show", self.show.as_deref())
+            .opt_str("status", self.status.as_deref())
             .bool("online", self.online)
             .opt_str("avatar", self.avatar.as_deref())
             .finish()

@@ -24,6 +24,8 @@ pub struct MemberItem {
     pub affiliation: String,
     /// Presence show: away, chat, dnd, xa. `None` means available or offline.
     pub show: Option<String>,
+    /// Presence status text, if the person set one.
+    pub status: Option<String>,
     pub online: bool,
     pub avatar: Option<String>,
 }
@@ -50,13 +52,20 @@ pub(crate) fn query(q: &QueryCtx<'_>, room: &BareJid) -> rusqlite::Result<Vec<Me
     }
 }
 
-/// nick, real JID, role, affiliation, show.
-type OccupantRow = (String, Option<String>, String, String, Option<String>);
+/// nick, real JID, role, affiliation, show, status.
+type OccupantRow = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 /// Room occupants: moderators first, then participants, then visitors, by name.
 fn occupants(q: &QueryCtx<'_>, room: &BareJid) -> rusqlite::Result<Vec<MemberItem>> {
     let mut stmt = q.store.conn().prepare_cached(
-        "SELECT nick, real_jid, role, affiliation, show FROM occupants
+        "SELECT nick, real_jid, role, affiliation, show, status FROM occupants
          WHERE account_id = ?1 AND room = ?2
          ORDER BY CASE role WHEN 'moderator' THEN 0 WHEN 'participant' THEN 1 ELSE 2 END,
                   nick COLLATE NOCASE",
@@ -69,11 +78,12 @@ fn occupants(q: &QueryCtx<'_>, room: &BareJid) -> rusqlite::Result<Vec<MemberIte
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     let mut out = Vec::with_capacity(rows.len());
-    for (nick, jid, role, affiliation, show) in rows {
+    for (nick, jid, role, affiliation, show, status) in rows {
         let avatar = occupant_avatar_hash(q, room.as_str(), &nick)?;
         out.push(MemberItem {
             id: nick.clone(),
@@ -82,6 +92,7 @@ fn occupants(q: &QueryCtx<'_>, room: &BareJid) -> rusqlite::Result<Vec<MemberIte
             role,
             affiliation,
             show,
+            status,
             online: true,
             avatar,
         });
@@ -92,14 +103,16 @@ fn occupants(q: &QueryCtx<'_>, room: &BareJid) -> rusqlite::Result<Vec<MemberIte
 /// A 1:1 chat: the account, then the peer.
 fn direct(q: &QueryCtx<'_>, peer: &BareJid) -> rusqlite::Result<Vec<MemberItem>> {
     let me = q.account.as_str();
-    let presence: Option<Option<String>> = q
+    let presence: Option<(Option<String>, Option<String>)> = q
         .store
         .conn()
         .prepare_cached(
-            "SELECT show FROM presences WHERE account_id = ?1 AND bare = ?2
+            "SELECT show, status FROM presences WHERE account_id = ?1 AND bare = ?2
              ORDER BY priority DESC LIMIT 1",
         )?
-        .query_row(params![q.account_id, peer.as_str()], |row| row.get(0))
+        .query_row(params![q.account_id, peer.as_str()], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
         .optional()?;
     Ok(vec![
         MemberItem {
@@ -109,6 +122,7 @@ fn direct(q: &QueryCtx<'_>, peer: &BareJid) -> rusqlite::Result<Vec<MemberItem>>
             role: "participant".into(),
             affiliation: "none".into(),
             show: None,
+            status: None,
             online: true,
             avatar: avatar_hash(q, me)?,
         },
@@ -119,7 +133,8 @@ fn direct(q: &QueryCtx<'_>, peer: &BareJid) -> rusqlite::Result<Vec<MemberItem>>
             role: "participant".into(),
             affiliation: "none".into(),
             online: presence.is_some(),
-            show: presence.flatten(),
+            show: presence.as_ref().and_then(|p| p.0.clone()),
+            status: presence.and_then(|p| p.1),
             avatar: avatar_hash(q, peer.as_str())?,
         },
     ])

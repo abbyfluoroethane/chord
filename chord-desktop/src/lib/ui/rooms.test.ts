@@ -9,6 +9,7 @@ function member(id: string, over: Partial<MemberItem> = {}): MemberItem {
     role: null,
     affiliation: 'none' as Affiliation,
     show: null,
+    status: null,
     online: true,
     avatar: null,
     ...over

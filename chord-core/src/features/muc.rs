@@ -2693,6 +2693,12 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
         .and_then(|i| i.jid.as_ref())
         .map(|jid| jid.to_bare().to_string());
     let show = presence.show.as_ref().map(show_str);
+    let status = presence
+        .statuses
+        .values()
+        .next()
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
     // XEP-0421: the id of the occupant outlives a nick change, and a nick that another
     // person takes later has another id.
     let occupant = occupant_id(&presence.payloads);
@@ -2701,11 +2707,11 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
         "store an occupant",
         ctx.store.conn().execute(
             "INSERT INTO occupants
-                (account_id, room, nick, real_jid, affiliation, role, show, occupant_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                (account_id, room, nick, real_jid, affiliation, role, show, occupant_id, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT (account_id, room, nick) DO UPDATE SET
                 real_jid = excluded.real_jid, affiliation = excluded.affiliation,
-                role = excluded.role, show = excluded.show,
+                role = excluded.role, show = excluded.show, status = excluded.status,
                 occupant_id = COALESCE(excluded.occupant_id, occupant_id)",
             params![
                 ctx.account_id,
@@ -2715,7 +2721,8 @@ fn on_available(ctx: &mut Ctx<'_>, room: &BareJid, nick: &str, presence: &Presen
                 affiliation,
                 role,
                 show,
-                occupant
+                occupant,
+                status
             ],
         ),
     );
@@ -3277,18 +3284,30 @@ mod tests {
     fn occupants_join_change_status_and_leave() {
         let mut h = Harness::new();
         joined(&mut h, "alice");
-        let carol = occupant_presence("carol", vec![], Item::new(Affiliation::None, Role::Visitor))
-            .with_show(Show::Away);
+        let mut carol =
+            occupant_presence("carol", vec![], Item::new(Affiliation::None, Role::Visitor))
+                .with_show(Show::Away);
+        carol.set_status("", "At lunch");
         h.with_ctx(|ctx| on_presence(ctx, &carol));
         assert_eq!(occupant_nicks(&h), ["alice", "carol"]);
-        let show: Option<String> = h
-            .store
-            .conn()
-            .query_row("SELECT show FROM occupants WHERE nick = 'carol'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(show.as_deref(), Some("away"));
+        let show_status = |h: &Harness, nick: &str| -> (Option<String>, Option<String>) {
+            h.store
+                .conn()
+                .query_row(
+                    "SELECT show, status FROM occupants WHERE nick = ?1",
+                    [nick],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            show_status(&h, "carol"),
+            (Some("away".into()), Some("At lunch".into()))
+        );
+        // A new presence without a status text clears it.
+        let back = occupant_presence("carol", vec![], Item::new(Affiliation::None, Role::Visitor));
+        h.with_ctx(|ctx| on_presence(ctx, &back));
+        assert_eq!(show_status(&h, "carol"), (None, None));
 
         // Carol changes her nick to karol (303), then the new presence follows.
         let rename = Presence::unavailable()

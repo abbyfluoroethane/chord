@@ -183,16 +183,18 @@ function mem(
   affiliation: MemberItem['affiliation'],
   show: Show,
   online: boolean,
-  role: string | null = null
+  status: string | null = null
 ): MemberItem {
-  return { id, name, role, affiliation, show, online, avatar: null };
+  // A room gives the moderator role to its owners and admins.
+  const role = affiliation === 'owner' || affiliation === 'admin' ? 'Moderator' : null;
+  return { id, name, role, affiliation, show, status, online, avatar: null };
 }
 
 const cast: MemberItem[] = [
-  mem('abby@foid.space', 'Abby', 'owner', 'chat', true, 'Founder'),
-  mem('rin@foid.space', 'Rin', 'admin', 'chat', true, 'Range safety'),
-  mem('jo@foid.space', 'Jo', 'admin', 'dnd', true),
-  mem('sam@other.example', 'Sam', 'member', 'away', true),
+  mem('abby@foid.space', 'Abby', 'owner', 'chat', true, 'Building the space'),
+  mem('rin@foid.space', 'Rin', 'admin', 'chat', true, 'Range safety today'),
+  mem('jo@foid.space', 'Jo', 'admin', 'dnd', true, 'Heads down'),
+  mem('sam@other.example', 'Sam', 'member', 'away', true, 'At lunch'),
   mem('bay@foid.space', 'Bay', 'member', 'chat', true),
   mem('kit@foid.space', 'Kit', 'member', null, false),
   mem('mo@foid.space', 'Mo', 'member', null, false),

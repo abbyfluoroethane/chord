@@ -335,4 +335,8 @@ pub const MIGRATIONS: &[&str] = &[
     ALTER TABLE occupants ADD COLUMN occupant_id TEXT;
     ALTER TABLE messages ADD COLUMN occupant_id TEXT;
     "#,
+    // 16: the status text of an occupant, for the member list.
+    r#"
+    ALTER TABLE occupants ADD COLUMN status TEXT;
+    "#,
 ];

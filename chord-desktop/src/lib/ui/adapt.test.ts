@@ -167,6 +167,7 @@ describe('members', () => {
     role: 'moderator',
     affiliation: 'admin',
     show: 'dnd',
+    status: null,
     online: true,
     avatar: null
   };
@@ -178,6 +179,11 @@ describe('members', () => {
       affiliation: 'admin',
       show: 'dnd'
     });
+  });
+
+  it('keeps the status text, and drops a blank one', () => {
+    expect(toMember({ ...base, status: ' At lunch ' }, 'g@x').status).toBe('At lunch');
+    expect(toMember({ ...base, status: '  ' }, 'g@x').status).toBeNull();
   });
 
   it('shows a visitor, and a participant as no role', () => {

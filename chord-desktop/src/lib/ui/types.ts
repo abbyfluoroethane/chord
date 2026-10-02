@@ -53,6 +53,8 @@ export interface MemberItem {
   role: string | null;
   affiliation: Affiliation;
   show: Show;
+  /** The presence status text, if the person set one. */
+  status: string | null;
   online: boolean;
   avatar: string | null;
   /** Live data: the real JID, if the room shows it. */
