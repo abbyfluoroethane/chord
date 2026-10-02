@@ -15,7 +15,8 @@
 //! has been quiet for `SELF_PING_QUIET_TICKS` ticks. Any stanza from the room, and any
 //! answer to a ping, ends the quiet time. A busy room proves itself.
 //!
-//! A join that gets no answer for `JOIN_TIMEOUT_TICKS` ticks fails.
+//! A join that gets no answer for `JOIN_TIMEOUT_TICKS` ticks fails. So does a subject
+//! change that gets no echo and no error for `SUBJECT_TIMEOUT_TICKS` ticks.
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,6 +35,9 @@ pub(super) const SELF_PING_QUIET_TICKS: u32 = 20;
 
 /// Ticks that a join waits for the self-presence. 4 ticks are 1 min.
 pub(super) const JOIN_TIMEOUT_TICKS: u8 = 4;
+
+/// Ticks that a subject change waits for the echo of the room. 4 ticks are 1 min.
+pub(super) const SUBJECT_TIMEOUT_TICKS: u8 = 4;
 
 #[derive(Debug, Default)]
 pub(crate) struct PingState {
@@ -77,6 +81,12 @@ pub(crate) fn on_resumed(ctx: &mut Ctx<'_>) {
 
 /// One tick: ping the quiet rooms, and end the joins that wait too long.
 pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
+    // A room that we left keeps no quiet time.
+    let muc = &mut ctx.state.muc;
+    muc.ping
+        .quiet
+        .retain(|room, _| muc.nicks.contains_key(room));
+    expire_subjects(ctx);
     let rooms: Vec<BareJid> = ctx.state.muc.nicks.keys().cloned().collect();
     for room in rooms {
         let quiet = ctx.state.muc.ping.quiet.entry(room.clone()).or_insert(0);
@@ -96,6 +106,26 @@ pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
         join_timed_out(ctx, &room);
     }
     super::rejoin::on_tick(ctx);
+}
+
+/// Fail the subject changes that got no echo and no error for too long. Without this, the
+/// entry and its reply stay in memory when the room never answers.
+fn expire_subjects(ctx: &mut Ctx<'_>) {
+    let mut expired = Vec::new();
+    for (id, (_, _, ticks)) in &mut ctx.state.muc.subjects {
+        *ticks = ticks.saturating_add(1);
+        if *ticks >= SUBJECT_TIMEOUT_TICKS {
+            expired.push(id.clone());
+        }
+    }
+    for id in expired {
+        if let Some((room, reply, _)) = ctx.state.muc.subjects.remove(&id) {
+            log::warn!("the subject change in {room} got no answer in time");
+            let _ = reply.send(Err(ClientError::Server(
+                "the room did not answer in time".into(),
+            )));
+        }
+    }
 }
 
 /// The room did not answer a join in time. Fail the join, as a join error does. If the
@@ -250,6 +280,27 @@ mod tests {
         for _ in 0..n {
             h.with_ctx(on_tick);
         }
+    }
+
+    #[test]
+    fn a_room_that_we_left_keeps_no_quiet_time() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        tick(&mut h, 2);
+        assert_eq!(h.state.muc.ping.quiet.len(), 1);
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::Leave {
+                    room: room(),
+                    reply,
+                },
+            )
+        });
+        assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
+        tick(&mut h, 1);
+        assert!(h.state.muc.ping.quiet.is_empty());
     }
 
     #[test]

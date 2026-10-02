@@ -198,9 +198,10 @@ pub(crate) struct State {
     iq_outbox: HashMap<BareJid, Vec<(Iq, super::Pending)>>,
     /// A nick change that arrived while the join ran. It runs when the join completes.
     pending_nick: HashMap<BareJid, (String, Reply)>,
-    /// Subject changes that wait for the room: the message id, the room, and the reply.
-    /// The echo of the subject or an error message answers them.
-    subjects: HashMap<String, (BareJid, Reply)>,
+    /// Subject changes that wait for the room: the message id, the room, the reply, and the
+    /// ticks since the send. The echo of the subject or an error message answers them.
+    /// `health::on_tick` fails one that gets no answer for `SUBJECT_TIMEOUT_TICKS` ticks.
+    subjects: HashMap<String, (BareJid, Reply, u8)>,
     /// Joins that wait for the reserved nick of the room (XEP-0045, 7.12).
     reserving: HashMap<BareJid, Reserving>,
     /// The self-ping of the rooms (XEP-0410).
@@ -729,7 +730,7 @@ pub(crate) fn next_session(ctx: &mut Ctx<'_>) -> State {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
     }
-    for (_, (_, reply)) in ctx.state.muc.subjects.drain() {
+    for (_, (_, reply, _)) in ctx.state.muc.subjects.drain() {
         let _ = reply.send(Err(ClientError::NotConnected));
     }
     for (_, waiting) in ctx.state.muc.reserving.drain() {
@@ -1133,7 +1134,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 .subjects
                 .insert(xmpp_parsers::message::Lang(String::new()), subject);
             ctx.send(message);
-            ctx.state.muc.subjects.insert(id, (room, reply));
+            ctx.state.muc.subjects.insert(id, (room, reply, 0));
         }
         Command::SetRole {
             room,
@@ -1840,6 +1841,9 @@ fn leave(ctx: &mut Ctx<'_>, room: &BareJid) -> Result<(), ClientError> {
             let _ = reply.send(Err(ClientError::Invalid("left the room".into())));
         }
     }
+    // Nothing that waits for this room may stay: a later join would send it.
+    drop_outbox(ctx, room);
+    fail_subjects(ctx, room);
     if let Some(nick) = nick
         && let Ok(full) = room.with_resource_str(&nick)
     {
@@ -2256,11 +2260,11 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
                         .muc
                         .subjects
                         .iter()
-                        .filter(|(_, (r, _))| *r == room)
+                        .filter(|(_, (r, _, _))| *r == room)
                         .map(|(id, _)| id.clone())
                         .collect();
                     for id in ids {
-                        if let Some((_, reply)) = ctx.state.muc.subjects.remove(&id) {
+                        if let Some((_, reply, _)) = ctx.state.muc.subjects.remove(&id) {
                             let _ = reply.send(Ok(()));
                         }
                     }
@@ -2274,7 +2278,7 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) -> bool {
                 .id
                 .as_ref()
                 .and_then(|id| ctx.state.muc.subjects.remove(&id.0));
-            if let Some((_, reply)) = waiting {
+            if let Some((_, reply, _)) = waiting {
                 let error = message
                     .payloads
                     .iter()
@@ -2805,6 +2809,23 @@ pub(crate) fn request_in_room(ctx: &mut Ctx<'_>, room: &BareJid, iq: Iq, then: s
         .push((iq, then));
 }
 
+/// Fail the subject changes that wait for `room`. The room will not echo them.
+fn fail_subjects(ctx: &mut Ctx<'_>, room: &BareJid) {
+    let ids: Vec<String> = ctx
+        .state
+        .muc
+        .subjects
+        .iter()
+        .filter(|(_, (r, _, _))| r == room)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in ids {
+        if let Some((_, reply, _)) = ctx.state.muc.subjects.remove(&id) {
+            let _ = reply.send(Err(ClientError::Invalid("left the room".into())));
+        }
+    }
+}
+
 fn drop_outbox(ctx: &mut Ctx<'_>, room: &BareJid) {
     if let Some((_, reply)) = ctx.state.muc.pending_nick.remove(room) {
         let _ = reply.send(Err(ClientError::Invalid(
@@ -2823,7 +2844,7 @@ fn drop_outbox(ctx: &mut Ctx<'_>, room: &BareJid) {
     }
     if let Some(messages) = ctx.state.muc.outbox.remove(room) {
         ctx.emit(ClientEvent::Notice(format!(
-            "{} message(s) to {room} were not sent: the join failed",
+            "{} message(s) to {room} were not sent: the room is not joined",
             messages.len()
         )));
     }
@@ -4726,6 +4747,74 @@ mod tests {
         h.with_ctx(|ctx| on_message(ctx, &echo));
         assert_eq!(answer.try_recv().unwrap(), Some(Ok(())));
         assert!(h.state.muc.subjects.is_empty());
+    }
+
+    #[test]
+    fn leaving_a_room_fails_its_subject_changes() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let (mut subject, _) = subject_command(&mut h, "Never echoed");
+        assert_eq!(h.state.muc.subjects.len(), 1);
+        let mut left = command(&mut h, |reply| Command::Leave {
+            room: room(),
+            reply,
+        });
+        assert_eq!(left.try_recv().unwrap(), Some(Ok(())));
+        assert!(h.state.muc.subjects.is_empty());
+        assert!(matches!(
+            subject.try_recv().unwrap(),
+            Some(Err(ClientError::Invalid(_)))
+        ));
+    }
+
+    #[test]
+    fn leaving_a_room_during_the_join_drops_its_queued_messages() {
+        let mut h = Harness::new();
+        let mut answer = join(&mut h, "alice");
+        h.with_ctx(|ctx| {
+            send_to_room(ctx, &room(), Message::groupchat(Jid::from(room()))).unwrap()
+        });
+        assert!(has_outbox(&h.state.muc));
+        let mut left = command(&mut h, |reply| Command::Leave {
+            room: room(),
+            reply,
+        });
+        assert_eq!(left.try_recv().unwrap(), Some(Ok(())));
+        assert!(answer.try_recv().unwrap().is_some());
+        assert!(!has_outbox(&h.state.muc));
+        assert!(h.state.muc.outbox.is_empty());
+        // A later join sends nothing from the old queue.
+        h.take_sent();
+        let mut again = join(&mut h, "alice");
+        h.with_ctx(|ctx| {
+            on_presence(
+                ctx,
+                &occupant_presence(
+                    "alice",
+                    vec![Status::SelfPresence],
+                    Item::new(Affiliation::Member, Role::Participant),
+                ),
+            )
+        });
+        assert_eq!(again.try_recv().unwrap(), Some(Ok(())));
+        assert!(sent_messages(&mut h).is_empty());
+    }
+
+    #[test]
+    fn a_subject_change_that_gets_no_echo_fails_after_a_timeout() {
+        let mut h = Harness::new();
+        joined(&mut h, "alice");
+        let (mut answer, _) = subject_command(&mut h, "Never echoed");
+        for _ in 0..health::SUBJECT_TIMEOUT_TICKS - 1 {
+            h.with_ctx(health::on_tick);
+        }
+        assert!(answer.try_recv().unwrap().is_none());
+        h.with_ctx(health::on_tick);
+        assert!(h.state.muc.subjects.is_empty());
+        assert!(matches!(
+            answer.try_recv().unwrap(),
+            Some(Err(ClientError::Server(_)))
+        ));
     }
 
     #[test]

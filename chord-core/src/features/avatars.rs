@@ -112,6 +112,19 @@ pub(crate) struct State {
 
 /// The most occupant requests that run at one time.
 const MAX_IN_FLIGHT: usize = 3;
+/// The most entries in each set that remembers an owner for the whole session. A big
+/// room can show many occupants in a session that lasts for days. A full set starts again
+/// from empty: the cost is one more request for an owner that we saw before.
+const MAX_REMEMBERED: usize = 4096;
+
+/// Add `item` to `set`. A full set starts again from empty. Returns true if `item` is new.
+fn remember<T: std::hash::Hash + Eq>(set: &mut HashSet<T>, item: T) -> bool {
+    if set.len() >= MAX_REMEMBERED && !set.contains(&item) {
+        set.clear();
+    }
+    set.insert(item)
+}
+
 /// The most occupant requests that wait. A larger room gets no more avatars in a session.
 const MAX_QUEUED: usize = 256;
 
@@ -656,7 +669,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
             if let Err(e) = result {
                 log::debug!("vCard photo of {owner}: {e}");
                 if !matches!(e, ClientError::NotConnected) {
-                    ctx.state.avatars.occupant_failed.insert(key);
+                    remember(&mut ctx.state.avatars.occupant_failed, key);
                 }
             }
         }
@@ -722,7 +735,7 @@ pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRespo
                 log::debug!("vCard photo of {owner}: {e}");
                 // After a lost session the next presence can start the fetch again.
                 if let (Some(hash), false) = (hash, matches!(e, ClientError::NotConnected)) {
-                    ctx.state.avatars.vcard_failed.insert((owner, hash));
+                    remember(&mut ctx.state.avatars.vcard_failed, (owner, hash));
                 }
             }
             done(reply, result);
@@ -1223,7 +1236,7 @@ pub(crate) fn on_occupant(ctx: &mut Ctx<'_>, presence: &Presence, real: Option<B
     if let Some(real) = real {
         if real == *ctx.account
             || ctx.state.avatars.pep.contains(&real)
-            || !ctx.state.avatars.occupant_asked.insert(real.clone())
+            || !remember(&mut ctx.state.avatars.occupant_asked, real.clone())
         {
             return;
         }
@@ -3054,5 +3067,18 @@ mod tests {
                 .fetching
                 .contains(&(last_jid, hash.clone()))
         }));
+    }
+
+    #[test]
+    fn a_set_that_remembers_owners_stays_under_its_limit() {
+        let mut set = HashSet::new();
+        for i in 0..MAX_REMEMBERED * 3 {
+            assert!(remember(&mut set, i));
+            assert!(set.len() <= MAX_REMEMBERED);
+        }
+        // An entry that is in the set is not new, and a full set keeps it.
+        let last = MAX_REMEMBERED * 3 - 1;
+        assert!(!remember(&mut set, last));
+        assert!(set.contains(&last));
     }
 }
