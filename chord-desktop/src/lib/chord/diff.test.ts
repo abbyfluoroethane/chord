@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyDiff, applyDiffs } from './diff';
+import { applyDiff, applyDiffs, reuseRows, sameData } from './diff';
 import type { ListDiff } from './types';
 
 const reset = (items: string[]): ListDiff<string> => ({ type: 'reset', items });
@@ -44,5 +44,42 @@ describe('applyDiff', () => {
       { type: 'insert', index: 1, item: 'a' },
     ];
     expect(applyDiffs(['a', 'b'], diffs)).toEqual(['b', 'a']);
+  });
+});
+
+describe('sameData', () => {
+  it('compares nested data by value', () => {
+    expect(sameData({ a: 1, b: [{ c: 'x' }] }, { a: 1, b: [{ c: 'x' }] })).toBe(true);
+    expect(sameData({ a: 1, b: [{ c: 'x' }] }, { a: 1, b: [{ c: 'y' }] })).toBe(false);
+    expect(sameData({ a: 1 }, { a: 1, b: 2 })).toBe(false);
+    expect(sameData([1, 2], [1, 2, 3])).toBe(false);
+    expect(sameData(null, {})).toBe(false);
+    expect(sameData([], {})).toBe(false);
+  });
+});
+
+describe('reuseRows', () => {
+  const key = (r: { id: string; n?: number[] }) => r.id;
+
+  it('keeps the old object of a row that did not change', () => {
+    const a = { id: 'a', n: [1] };
+    const b = { id: 'b', n: [2] };
+    const next = reuseRows([a, b], [{ id: 'a', n: [1] }, { id: 'b', n: [3] }], key);
+    expect(next[0]).toBe(a);
+    expect(next[1]).not.toBe(b);
+    expect(next[1].n).toEqual([3]);
+  });
+
+  it('takes the new rows when the old list is empty', () => {
+    const fresh = [{ id: 'a' }];
+    const next = reuseRows([], fresh, key);
+    expect(next).toEqual(fresh);
+    expect(next).not.toBe(fresh);
+  });
+
+  it('does not change its input', () => {
+    const fresh = [{ id: 'a' }];
+    reuseRows([{ id: 'a' }], fresh, key);
+    expect(fresh).toEqual([{ id: 'a' }]);
   });
 });

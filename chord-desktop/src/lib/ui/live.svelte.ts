@@ -11,6 +11,7 @@ import { untrack } from 'svelte';
 import {
   applyDiff,
   listenEvents,
+  reuseRows,
   subscribeChannelList,
   subscribeMemberList,
   subscribePrivateTimeline,
@@ -24,6 +25,7 @@ import { prefs } from './prefs.svelte';
 import type {
   ChannelItem as BChannel,
   ClientEvent,
+  NotificationSetting,
   ListDiff,
   MemberItem as BMember,
   SpaceItem as BSpace,
@@ -51,7 +53,7 @@ import { rail, type RailEntry } from './rail.svelte';
 import { roomAlerts } from './roomalerts.svelte';
 import { session } from './session.svelte';
 import { settings } from './local';
-import { spaceKey, type ChannelItem } from './types';
+import { spaceKey, type ChannelItem, type TimelineItem } from './types';
 import { ui } from './ui.svelte';
 import { tray } from './tray.svelte';
 import { emojiPacks } from './emojipacks.svelte';
@@ -64,6 +66,46 @@ function quiet(sub: ViewSubscription | null | undefined): void {
 
 /** Wait in ms before a burst of member diffs shows in the list. */
 const MEMBER_FLUSH_MS = 50;
+/** Wait in ms before a burst of channel list diffs shows in the list. */
+const CHANNEL_FLUSH_MS = 16;
+/** Wait in ms before a burst of notification levels shows in the list. */
+const LEVEL_FLUSH_MS = 25;
+
+/** The fields of a channel row, in the order that the rows compare. */
+const ROW_KEYS: (keyof ChannelItem)[] = [
+  'name',
+  'kind',
+  'unread',
+  'joined',
+  'mentions',
+  'muted',
+  'topic',
+  'space',
+  'avatar',
+  'show',
+  'online',
+  'unknownPresence',
+  'members',
+  'category'
+];
+
+/** What `buildChannels` knows about a row: the inputs, and the row that they gave. */
+interface RowMemo {
+  raw: BChannel;
+  space: string | null;
+  level: unknown;
+  mentions: number;
+  presence: unknown;
+  row: ChannelItem;
+}
+
+/** True when two channel rows show the same. */
+function sameRow(a: ChannelItem, b: ChannelItem): boolean {
+  for (const k of ROW_KEYS) if (a[k] !== b[k]) return false;
+  const x = a.pm ?? null;
+  const y = b.pm ?? null;
+  return x === y || (!!x && !!y && x.room === y.room && x.nick === y.nick);
+}
 
 class LiveController {
   rawSpaces = $state.raw<BSpace[]>([]);
@@ -73,6 +115,15 @@ class LiveController {
   private root: (() => void) | null = null;
   private eventsAttached = false;
   private contactsTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The channel lists as the bridge diffs left them. The raw lists above copy them in a burst. */
+  private nextHome: BChannel[] = [];
+  private nextBySpace = new Map<string, BChannel[]>();
+  private listTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Notification levels that came in and wait for one write. */
+  private levelsNext: Record<string, NotificationSetting> = {};
+  private levelsTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The inputs and the result of the last row of each channel. */
+  private rowMemo = new Map<string, RowMemo>();
   private subs = new Set<ViewSubscription>();
   private spaceSubs = new Map<string, ViewSubscription | null>();
   private wanted = new Set<string>();
@@ -130,7 +181,7 @@ class LiveController {
     await track(
       subscribeChannelList({ type: 'home' }, (d) => {
         if (gen !== this.generation) return;
-        this.rawHome = this.diff(this.rawHome, d);
+        this.onHomeDiff(d);
       })
     );
     void contactsStore.refresh();
@@ -150,6 +201,14 @@ class LiveController {
     this.unlistenDrop?.();
     this.unlistenDrop = null;
     await Promise.all(subs.map((s) => s.unsubscribe().catch(() => undefined)));
+    clearTimeout(this.listTimer);
+    clearTimeout(this.levelsTimer);
+    this.listTimer = undefined;
+    this.levelsTimer = undefined;
+    this.levelsNext = {};
+    this.nextHome = [];
+    this.nextBySpace.clear();
+    this.rowMemo = new Map();
     this.rawSpaces = [];
     this.rawHome = [];
     this.rawBySpace = {};
@@ -175,6 +234,29 @@ class LiveController {
     app.selectedJid = '';
     app.showContacts = true;
     contactsStore.reset();
+  }
+
+  /** A diff of the Home channel list. A burst of diffs shows in the UI as one change. */
+  private onHomeDiff(d: ListDiff<BChannel>) {
+    this.nextHome = this.diff(this.nextHome, d);
+    this.scheduleLists();
+  }
+
+  /** A diff of the channel list of a space. A burst of diffs shows in the UI as one change. */
+  private onSpaceDiff(key: string, d: ListDiff<BChannel>) {
+    this.nextBySpace.set(key, this.diff(this.nextBySpace.get(key) ?? [], d));
+    this.scheduleLists();
+  }
+
+  private scheduleLists() {
+    this.listTimer ??= setTimeout(() => this.publishLists(), CHANNEL_FLUSH_MS);
+  }
+
+  /** Copy the channel lists to the reactive state. One copy for each burst, not for each diff. */
+  private publishLists() {
+    this.listTimer = undefined;
+    this.rawHome = this.nextHome;
+    this.rawBySpace = Object.fromEntries(this.nextBySpace);
   }
 
   private diff<T>(list: readonly T[], d: ListDiff<T>): T[] {
@@ -205,24 +287,31 @@ class LiveController {
 
     // The notification level and the avatar of each channel.
     $effect(() => {
-      const raw = [...this.rawHome, ...Object.values(this.rawBySpace).flat()];
+      const home = this.rawHome;
+      const bySpace = this.rawBySpace;
       untrack(() => {
-        for (const c of raw) {
-          if (!this.levelsAsked.has(c.jid)) {
-            this.levelsAsked.add(c.jid);
-            void api().then(async (b) => {
-              try {
-                app.levels[c.jid] = await b.notificationLevel(c.jid);
-              } catch {
-                /* the default stays */
-              }
-            });
+        const ask = (list: readonly BChannel[]) => {
+          for (const c of list) {
+            if (!this.levelsAsked.has(c.jid)) {
+              this.levelsAsked.add(c.jid);
+              void api().then(async (b) => {
+                try {
+                  this.levelsNext[c.jid] = await b.notificationLevel(c.jid);
+                  // The answers come one by one. One write for a burst of them is one rebuild.
+                  this.levelsTimer ??= setTimeout(() => this.flushLevels(), LEVEL_FLUSH_MS);
+                } catch {
+                  /* the default stays */
+                }
+              });
+            }
+            if (c.kind.type === 'direct' && !this.avatarsAsked.has(c.jid)) {
+              this.avatarsAsked.add(c.jid);
+              void api().then((b) => b.refreshAvatar(c.jid).catch((e) => console.warn('chord: avatar refresh failed', c.jid, e)));
+            }
           }
-          if (c.kind.type === 'direct' && !this.avatarsAsked.has(c.jid)) {
-            this.avatarsAsked.add(c.jid);
-            void api().then((b) => b.refreshAvatar(c.jid).catch((e) => console.warn('chord: avatar refresh failed', c.jid, e)));
-          }
-        }
+        };
+        ask(home);
+        for (const list of Object.values(bySpace)) ask(list);
       });
     });
 
@@ -244,15 +333,21 @@ class LiveController {
     });
   }
 
+  private flushLevels() {
+    this.levelsTimer = undefined;
+    const next = this.levelsNext;
+    this.levelsNext = {};
+    for (const [jid, level] of Object.entries(next)) app.levels[jid] = level;
+  }
+
   private reconcileSpaces(keys: string[]) {
     this.wanted = new Set(keys);
     for (const [key, sub] of [...this.spaceSubs]) {
       if (!this.wanted.has(key)) {
         this.spaceSubs.delete(key);
         quiet(sub);
-        const rest = { ...this.rawBySpace };
-        delete rest[key];
-        this.rawBySpace = rest;
+        this.nextBySpace.delete(key);
+        this.scheduleLists();
       }
     }
     const gen = this.generation;
@@ -261,7 +356,7 @@ class LiveController {
       this.spaceSubs.set(key, null);
       subscribeChannelList(scopeOf(key), (d) => {
         if (gen !== this.generation) return;
-        this.rawBySpace = { ...this.rawBySpace, [key]: this.diff(this.rawBySpace[key] ?? [], d) };
+        this.onSpaceDiff(key, d);
       })
         .then((sub) => {
           if (gen !== this.generation || !this.wanted.has(key)) quiet(sub);
@@ -271,30 +366,69 @@ class LiveController {
     }
   }
 
+  /**
+   * The channel rows of the UI. A row that shows the same as before keeps its old object,
+   * so a change of one level or one mention does not redraw the other rows. When no row
+   * changed, the old list stays.
+   */
   private buildChannels(): ChannelItem[] {
+    const before = untrack(() => app.channels);
+    const old = new Map<string, ChannelItem>();
+    for (const c of before) old.set(c.jid, c);
     const out: ChannelItem[] = [];
     const seen = new Set<string>();
+    const keep = (row: ChannelItem) => {
+      const was = old.get(row.jid);
+      out.push(was && sameRow(was, row) ? was : row);
+    };
+    const memo = new Map<string, RowMemo>();
     const push = (c: BChannel, space: string | null) => {
       if (seen.has(c.jid)) return;
       seen.add(c.jid);
-      out.push(
-        toChannel(c, {
-          space,
-          muted: isMuted(app.levels[c.jid]),
-          mentions: app.mentions[c.jid] ?? 0,
-          presence: app.dmPresence[c.jid] ?? null
-        })
-      );
+      const level = app.levels[c.jid];
+      const mentions = app.mentions[c.jid] ?? 0;
+      const presence = app.dmPresence[c.jid] ?? null;
+      const m = this.rowMemo.get(c.jid);
+      // The same inputs give the same row: skip the work.
+      if (m && m.raw === c && m.space === space && m.level === level && m.mentions === mentions && m.presence === presence) {
+        memo.set(c.jid, m);
+        if (old.get(c.jid) === m.row) out.push(m.row);
+        else keep(m.row);
+        return;
+      }
+      const row = toChannel(c, { space, muted: isMuted(level), mentions, presence });
+      memo.set(c.jid, { raw: c, space, level, mentions, presence, row });
+      keep(row);
     };
     for (const c of this.rawHome) push(c, null);
     for (const [key, list] of Object.entries(this.rawBySpace)) for (const c of list) push(c, key);
     for (const l of app.localChannels) {
       if (!seen.has(l.jid)) {
         seen.add(l.jid);
-        out.push({ ...l, muted: isMuted(app.levels[l.jid]) });
+        keep({ ...l, muted: isMuted(app.levels[l.jid]) });
       }
     }
-    return out;
+    this.rowMemo = memo;
+    const same = out.length === before.length && out.every((row, i) => row === before[i]);
+    return same ? before : out;
+  }
+
+  /**
+   * Apply a diff to the timeline of a chat. The timeline is a raw list: the rows are never
+   * changed in place. A row that did not change keeps its object, so its row does not redraw.
+   * Returns false when the diff was bad.
+   */
+  private applyTimelineDiff(jid: string, d: ListDiff<TimelineItem>): boolean {
+    const list = app.timelines[jid] ?? [];
+    try {
+      let next = applyDiff(list, d);
+      if (d.type === 'reset') next = reuseRows(list, next, (m) => m.id);
+      app.setTimeline(jid, next);
+      return true;
+    } catch (e) {
+      console.warn('chord: bad timeline diff', e);
+      return false;
+    }
   }
 
   private watchTimeline(jid: string, isRoom: boolean): () => void {
@@ -304,7 +438,7 @@ class LiveController {
     // A long session must not keep the messages of every chat that it ever showed.
     const { recent, dropped } = touchRecent(this.recent, jid);
     this.recent = recent;
-    for (const old of dropped) delete app.timelines[old];
+    app.dropTimelines(dropped);
     const pm = splitPrivate(jid);
     const onDiff = (d: ListDiff<BTimeline>) => {
       if (cancelled) return;
@@ -315,12 +449,7 @@ class LiveController {
           resolve: (nick) => this.nickJids[pm?.room ?? jid]?.[nick] ?? null
         })
       );
-      try {
-        app.timelines[jid] = applyDiff(app.timelines[jid] ?? [], mapped);
-      } catch (e) {
-        console.warn('chord: bad timeline diff', e);
-        return;
-      }
+      if (!this.applyTimelineDiff(jid, mapped)) return;
       if (first && d.type === 'reset') {
         first = false;
         app.markDivider(jid, app.timelines[jid]);
@@ -355,7 +484,7 @@ class LiveController {
       flushTimer = undefined;
       if (cancelled) return;
       if (room) {
-        app.members[space] = raw.map((m) => toMember(m, jid));
+        app.setMembers(space, raw.map((m) => toMember(m, jid)));
         this.nickJids[jid] = Object.fromEntries(raw.filter((m) => m.jid).map((m) => [m.id, m.jid!]));
       } else {
         const peer = raw.find((m) => m.jid === jid || m.id === jid);
@@ -396,7 +525,7 @@ class LiveController {
         const looking = n.peer === app.selectedJid && document.hasFocus();
         if (shouldChime(prefs, { room: n.room }, looking)) beep();
         if (!n.mention) break;
-        app.mentionIds[n.itemId] = true;
+        app.addMentionId(n.itemId);
         if (!looking) app.mentions[n.peer] = (app.mentions[n.peer] ?? 0) + 1;
         break;
       }

@@ -11,6 +11,7 @@ import type {
   SpaceAccess,
   TimelineSubscription
 } from '$lib/chord';
+import { reuseRows } from '$lib/chord/diff';
 import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle } from './adapt';
 import { api, live } from './bridge';
 import { pasteProblem } from './filetransfer';
@@ -63,9 +64,11 @@ class AppState {
       : clone(fx.me)
   );
   spaces = $state<SpaceItem[]>(live ? [] : clone(fx.spaces));
-  channels = $state<ChannelItem[]>(live ? [] : clone(fx.channels));
-  timelines = $state<Record<string, TimelineItem[]>>(live ? {} : clone(fx.timelines));
-  members = $state<Record<string, MemberItem[]>>(live ? {} : clone(fx.members));
+  // The big lists are raw: Svelte does not wrap each row in a proxy. A change builds a new
+  // row or a new list. Never change a row in place. Use patchChannel and patchItem.
+  channels = $state.raw<ChannelItem[]>(live ? [] : clone(fx.channels));
+  timelines = $state.raw<Record<string, TimelineItem[]>>(live ? {} : clone(fx.timelines));
+  members = $state.raw<Record<string, MemberItem[]>>(live ? {} : clone(fx.members));
   typing = $state<Record<string, string[]>>(live ? {} : clone(fx.typing));
   publicCircles = $state<PublicCircle[]>(live ? [] : fx.publicCircles);
   /** Spaces that wait for the owner to approve us (live). */
@@ -85,11 +88,11 @@ class AppState {
   /** Mentions since the channel was last read, from Notification events. */
   mentions = $state<Record<string, number>>({});
   /** Ids of the messages that mention us. */
-  mentionIds = $state<Record<string, true>>({});
+  mentionIds = $state.raw<Record<string, true>>({});
   /** Presence of the person in the open direct chat. */
   dmPresence = $state<Record<string, { show: Show; online: boolean }>>({});
   /** Chats that exist only here, until the first message. */
-  localChannels = $state<ChannelItem[]>([]);
+  localChannels = $state.raw<ChannelItem[]>([]);
   /** The running timeline subscription of the open channel (live). */
   timelineSub: TimelineSubscription | null = null;
   private pending: Pending | null = null;
@@ -133,8 +136,11 @@ class AppState {
   items = $derived.by(() => {
     const list = this.timelines[this.selectedJid] ?? [];
     if (!live) return list;
+    // No mention here: the list itself is the answer, with no copy.
+    const ids = this.mentionIds;
+    if (!list.some((m) => ids[m.id])) return list;
     return list.map((m) => {
-      if (!this.mentionIds[m.id]) return m;
+      if (!ids[m.id]) return m;
       let copy = this.mentionCopies.get(m);
       if (!copy) {
         copy = { ...m, mention: true };
@@ -320,10 +326,7 @@ class AppState {
       void this.openLive(c);
       return;
     }
-    if (c) {
-      c.unread = 0;
-      c.mentions = 0;
-    }
+    if (c) this.patchChannel(c.jid, { unread: 0, mentions: 0 });
   }
 
   /** Join the room if needed and mark the channel read. */
@@ -505,8 +508,7 @@ class AppState {
     const jid = this.selectedJid;
     const c = this.channels.find((x) => x.jid === jid);
     if (!c || (c.unread === 0 && c.mentions === 0)) return;
-    c.unread = 0;
-    c.mentions = 0;
+    this.patchChannel(jid, { unread: 0, mentions: 0 });
     if (live) {
       this.mentions[jid] = 0;
       void this.readOnBridge({ jid, pm: splitPrivate(jid) }).catch((e) => ui.say(plainError(e), true));
@@ -515,11 +517,7 @@ class AppState {
 
   /** Maps to api.markRead(peer) or api.markReadPrivate(room, nick). */
   markRead(jid: string = this.selectedJid) {
-    const c = this.channels.find((x) => x.jid === jid);
-    if (c) {
-      c.unread = 0;
-      c.mentions = 0;
-    }
+    this.patchChannel(jid, { unread: 0, mentions: 0 });
     this.newFrom[jid] = null;
     if (live && jid) {
       this.mentions[jid] = 0;
@@ -544,8 +542,7 @@ class AppState {
       return;
     }
     this.newFrom[jid] = unread[0].id;
-    const c = this.channels.find((x) => x.jid === jid);
-    if (c) c.unread = unread.length;
+    this.patchChannel(jid, { unread: unread.length });
     if (live) void this.call((b) => b.markUnread(m.id));
   }
 
@@ -613,9 +610,56 @@ class AppState {
 
   // --- messages ----------------------------------------------------
 
-  private list(jid: string): TimelineItem[] {
-    if (!this.timelines[jid]) this.timelines[jid] = [];
-    return this.timelines[jid];
+  /** Put a new list in place of the timeline of a chat. The rows stay as they are. */
+  setTimeline(jid: string, list: TimelineItem[]) {
+    this.timelines = { ...this.timelines, [jid]: list };
+  }
+
+  /** Forget the timelines of chats that are not open now. */
+  dropTimelines(jids: readonly string[]) {
+    if (!jids.some((j) => j in this.timelines)) return;
+    const next = { ...this.timelines };
+    for (const j of jids) delete next[j];
+    this.timelines = next;
+  }
+
+  /** Change one message. The row is a new object, so that only this row redraws. */
+  patchItem(jid: string, id: string, patch: Partial<TimelineItem>) {
+    const list = this.timelines[jid];
+    const at = list ? list.findIndex((x) => x.id === id) : -1;
+    if (!list || at < 0) return;
+    const next = list.slice();
+    next[at] = { ...list[at], ...patch };
+    this.setTimeline(jid, next);
+  }
+
+  /** Change one channel row. The row is a new object. Nothing changes when the values are equal. */
+  patchChannel(jid: string, patch: Partial<ChannelItem>) {
+    const at = this.channels.findIndex((c) => c.jid === jid);
+    if (at < 0) return;
+    const old = this.channels[at];
+    const keys = Object.keys(patch) as (keyof ChannelItem)[];
+    if (keys.every((k) => old[k] === patch[k])) return;
+    const next = this.channels.slice();
+    next[at] = { ...old, ...patch };
+    this.channels = next;
+  }
+
+  /** Put a new member list in a space. A member who did not change keeps the old object. */
+  setMembers(space: string, list: MemberItem[]) {
+    const next = reuseRows(this.members[space] ?? [], list, (m) => m.id);
+    this.members = { ...this.members, [space]: next };
+  }
+
+  /** Add one channel row. */
+  addChannel(c: ChannelItem) {
+    this.channels = [...this.channels, c];
+  }
+
+  /** Remember that a message mentions us. */
+  addMentionId(id: string) {
+    if (this.mentionIds[id]) return;
+    this.mentionIds = { ...this.mentionIds, [id]: true };
   }
 
   /**
@@ -639,8 +683,9 @@ class AppState {
   async retry(m: TimelineItem) {
     if (m.status !== 'failed' || !m.body.trim()) return;
     if (!live) {
-      m.status = 'sending';
-      setTimeout(() => (m.status = 'sent'), 500);
+      const at = this.selectedJid;
+      this.patchItem(at, m.id, { status: 'sending' });
+      setTimeout(() => this.patchItem(at, m.id, { status: 'sent' }), 500);
       return;
     }
     // The text goes out as it is. A reply quote is not kept.
@@ -654,11 +699,11 @@ class AppState {
 
   /** Sample data: add an outgoing message to a chat. The server confirms a moment later. */
   private pushLocal(jid: string, text: string, reply: TimelineItem | null = null) {
-    const list = this.list(jid);
+    const list = this.timelines[jid] ?? [];
     const prev = list[list.length - 1];
     const now = Date.now();
     const id = `local-${now}-${list.length}`;
-    list.push({
+    const row: TimelineItem = {
       id,
       sender: this.me.address,
       senderName: this.me.name,
@@ -677,11 +722,9 @@ class AppState {
       attachment: null,
       status: 'sending',
       mention: false
-    });
-    setTimeout(() => {
-      const m = this.timelines[jid]?.find((x) => x.id === id);
-      if (m) m.status = 'sent';
-    }, 500);
+    };
+    this.setTimeline(jid, [...list, row]);
+    setTimeout(() => this.patchItem(jid, id, { status: 'sent' }), 500);
   }
 
   /**
@@ -730,15 +773,17 @@ class AppState {
     if (!jid) return false;
     if (!live) {
       this.pushLocal(jid, '');
-      const list = this.list(jid);
-      list[list.length - 1].attachment = {
-        url: gif.full.url,
-        name: gif.title || 'GIF',
-        mime: 'image/gif',
-        size: 0,
-        width: gif.full.width || null,
-        height: gif.full.height || null
-      };
+      const list = this.timelines[jid] ?? [];
+      this.patchItem(jid, list[list.length - 1].id, {
+        attachment: {
+          url: gif.full.url,
+          name: gif.title || 'GIF',
+          mime: 'image/gif',
+          size: 0,
+          width: gif.full.width || null,
+          height: gif.full.height || null
+        }
+      });
       return true;
     }
     const r = await this.call((b) => b.sendLink(jid, gif.full.url));
@@ -751,11 +796,11 @@ class AppState {
    * Rust reads the file. Do not use this for a new feature that needs a real upload.
    */
   sendFile(file: File) {
-    const list = this.list(this.selectedJid);
+    const list = this.timelines[this.selectedJid] ?? [];
     const now = Date.now();
     const prev = list[list.length - 1];
     const isImage = file.type.startsWith('image/');
-    list.push({
+    const row: TimelineItem = {
       id: `local-${now}-file`,
       sender: this.me.address,
       senderName: this.me.name,
@@ -778,7 +823,8 @@ class AppState {
       },
       status: 'sent',
       mention: false
-    });
+    };
+    this.setTimeline(this.selectedJid, [...list, row]);
   }
 
   /** Let the user pick files and upload them to the open chat. Maps to api.uploadFiles(to). */
@@ -827,11 +873,7 @@ class AppState {
       if (live) {
         void this.call(async (b) => b.editMessage(id, text));
       } else {
-        const own = this.timelines[this.selectedJid]?.find((x) => x.id === id);
-        if (own) {
-          own.body = text;
-          own.edited = true;
-        }
+        this.patchItem(this.selectedJid, id, { body: text, edited: true });
       }
     }
     this.editingId = null;
@@ -843,12 +885,7 @@ class AppState {
       void this.call(async (b) => b.retractMessage(id));
       return;
     }
-    const m = this.timelines[this.selectedJid]?.find((x) => x.id === id);
-    if (m) {
-      m.retracted = true;
-      m.attachment = null;
-      m.reactions = [];
-    }
+    this.patchItem(this.selectedJid, id, { retracted: true, attachment: null, reactions: [] });
   }
 
   /** Delete my message, or as a moderator the message of another. Maps to api.moderateMessage. */
@@ -872,16 +909,15 @@ class AppState {
     const m = this.timelines[this.selectedJid]?.find((x) => x.id === id);
     if (!m || m.retracted) return;
     const r = m.reactions.find((x) => x.emoji === emoji);
-    if (!r) {
-      m.reactions.push({ emoji, count: 1, mine: true });
-    } else if (r.mine) {
-      r.count -= 1;
-      r.mine = false;
-      if (r.count <= 0) m.reactions = m.reactions.filter((x) => x.emoji !== emoji);
-    } else {
-      r.count += 1;
-      r.mine = true;
-    }
+    let reactions: TimelineItem['reactions'];
+    if (!r) reactions = [...m.reactions, { emoji, count: 1, mine: true }];
+    else if (r.mine) {
+      reactions =
+        r.count <= 1
+          ? m.reactions.filter((x) => x.emoji !== emoji)
+          : m.reactions.map((x) => (x === r ? { ...x, count: x.count - 1, mine: false } : x));
+    } else reactions = m.reactions.map((x) => (x === r ? { ...x, count: x.count + 1, mine: true } : x));
+    this.patchItem(this.selectedJid, id, { reactions });
   }
 
   /** Count one use of an emoji, for the quick reactions and "Frequently used". */
@@ -943,8 +979,7 @@ class AppState {
   async setLevel(jid: string, level: NotificationLevel) {
     this.notifyLevel[jid] = level;
     if (!live) {
-      const c = this.channels.find((x) => x.jid === jid);
-      if (c) c.muted = level === 'nothing';
+      this.patchChannel(jid, { muted: level === 'nothing' });
       return;
     }
     const bridgeLevel = levelToBridge(level);
@@ -963,12 +998,10 @@ class AppState {
     }
     const until = Date.now() + ms;
     if (!live) {
-      const c = this.channels.find((x) => x.jid === jid);
-      if (c) c.muted = true;
+      this.patchChannel(jid, { muted: true });
       this.notifyLevel[jid] = 'all';
       setTimeout(() => {
-        const row = this.channels.find((x) => x.jid === jid);
-        if (row && this.levelOf(jid) !== 'nothing') row.muted = false;
+        if (this.levelOf(jid) !== 'nothing') this.patchChannel(jid, { muted: false });
       }, ms);
       return;
     }
@@ -986,8 +1019,7 @@ class AppState {
   /** Turn a mute off. */
   async unmute(jid: string) {
     if (!live) {
-      const c = this.channels.find((x) => x.jid === jid);
-      if (c) c.muted = false;
+      this.patchChannel(jid, { muted: false });
       this.notifyLevel[jid] = 'all';
       return;
     }
@@ -1120,7 +1152,7 @@ class AppState {
     }
     if (!live) {
       const info = fx.xmppRooms[jid];
-      this.channels.push({
+      this.addChannel({
         jid,
         name: info?.name ?? jid.split('@')[0],
         kind: 'channel',
@@ -1186,8 +1218,7 @@ class AppState {
 
   /** The room is gone: it is not joined any more. The rows go when the bookmark is gone. */
   markRoomGone(jid: string) {
-    const c = this.channels.find((x) => x.jid === jid);
-    if (c) c.joined = false;
+    this.patchChannel(jid, { joined: false });
   }
 
   /** Set the topic of a room that we are in. Maps to api.setRoomSubject(room, subject). */
@@ -1240,8 +1271,8 @@ class AppState {
     const key = spaceKey(s);
     if (!this.spaceOf(key)) {
       this.spaces.push(s);
-      this.channels.push(this.newChannel(key, 'general', topic));
-      this.members[key] = clone(fx.members[spaceKey(fx.spaces[0])] ?? []);
+      this.addChannel(this.newChannel(key, 'general', topic));
+      this.members = { ...this.members, [key]: clone(fx.members[spaceKey(fx.spaces[0])] ?? []) };
     }
     this.selectSpace(key);
     return key;
@@ -1300,7 +1331,7 @@ class AppState {
       return;
     }
     const c = this.newChannel(space, clean, null);
-    if (!this.channels.some((x) => x.jid === c.jid)) this.channels.push(c);
+    if (!this.channels.some((x) => x.jid === c.jid)) this.addChannel(c);
     this.selectChannel(c.jid);
   }
 
@@ -1366,8 +1397,7 @@ class AppState {
       void this.call((b) => b.leaveRoom(jid));
       return;
     }
-    const c = this.channels.find((x) => x.jid === jid);
-    if (c) c.joined = false;
+    this.patchChannel(jid, { joined: false });
   }
 
   /** Change my nickname in every room of the space. Maps to api.changeNick(room, nick). */
@@ -1475,8 +1505,8 @@ class AppState {
         unknownPresence: live
       };
       // Live: the controller keeps the row when it rebuilds the list.
-      if (live) this.localChannels.push(row);
-      this.channels.push(row);
+      if (live) this.localChannels = [...this.localChannels, row];
+      this.addChannel(row);
     }
     this.selectChannel(id);
   }
