@@ -1224,8 +1224,7 @@ class AppState {
   /** Set the topic of a room that we are in. Maps to api.setRoomSubject(room, subject). */
   async setTopic(jid: string, text: string): Promise<boolean> {
     if (!live) {
-      const c = this.channels.find((x) => x.jid === jid);
-      if (c) c.topic = text.trim() || null;
+      this.patchChannel(jid, { topic: text.trim() || null });
       return true;
     }
     const r = await this.call((b) => b.setRoomSubject(jid, text.trim()));
