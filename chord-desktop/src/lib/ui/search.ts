@@ -65,6 +65,9 @@ export function senderLabel(hit: SearchHit): string {
 /** The event that a jump sends to the timeline before it scrolls. */
 export const JUMP_EVENT = 'chordjump';
 
+/** The timeline sets `reveal`. It puts the row of a loaded message on the page. */
+export const timelineHook: { reveal: ((id: string) => boolean) | null } = { reveal: null };
+
 /**
  * Scroll to a message in the timeline and flash it. Returns false when the message is not
  * in the page: it is older than the messages that the timeline holds. The scroll is
@@ -72,7 +75,9 @@ export const JUMP_EVENT = 'chordjump';
  * move the target.
  */
 export function jumpToMessage(id: string): boolean {
-  const el = document.getElementById(`msg-${id}`);
+  let el = document.getElementById(`msg-${id}`);
+  // The timeline keeps only the rows near the view on the page. It puts this row back first.
+  if (!el && timelineHook.reveal?.(id)) el = document.getElementById(`msg-${id}`);
   if (!el) return false;
   // The timeline stops following the newest message before the view moves.
   el.dispatchEvent(new CustomEvent(JUMP_EVENT, { bubbles: true }));

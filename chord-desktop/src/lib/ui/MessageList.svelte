@@ -1,6 +1,6 @@
 <script lang="ts">
   // Scrolling timeline: date dividers, the "new" line, grouping, jump-to-present.
-  import { untrack } from 'svelte';
+  import { flushSync, onDestroy, untrack } from 'svelte';
   import ArrowDown from 'lucide-svelte/icons/arrow-down';
   import Message from './Message.svelte';
   import Icon from './Icon.svelte';
@@ -9,8 +9,9 @@
   import { clock, dayLabel, sameDay } from './format';
   import { newLineSeen, shouldReadAtBottom } from './readstate';
   import { messagesBelow, showOlderBar } from './olderbar';
+  import { chooseMounted, newChunkState, splitRows, type Chunk, type Span } from './chunks';
   import { jumping, jumpTo } from './jump';
-  import { JUMP_EVENT } from './search';
+  import { JUMP_EVENT, timelineHook } from './search';
   import { isGroup, type TimelineItem } from './types';
 
   type Row =
@@ -72,6 +73,190 @@
     return out;
   });
 
+  // Only the rows near the view stay on the page. The rows split into chunks. A chunk far
+  // from the view has no rows: its box keeps the height that the chunk had, so the scroll
+  // bar and the scroll position stay the same. A chunk comes back when the view comes near.
+  // A chat with thousands of messages then holds a few hundred rows, not all of them.
+  const CHUNK = 20;
+  const MOUNT_PX = 1200;
+  const KEEP_PX = 2400;
+  const chunkState = newChunkState();
+  let chunkPrev: Chunk<Row>[] = [];
+  const chunks = $derived.by<Chunk<Row>[]>(() => {
+    const list = splitRows(
+      rows,
+      chunkState,
+      chunkPrev,
+      CHUNK,
+      (r) => (r.kind === 'msg' ? 1 : 0),
+      (r) => r.kind !== 'msg'
+    );
+    chunkPrev = list;
+    return list;
+  });
+  let mounted = $state.raw<ReadonlySet<number>>(new Set());
+  const boxes = new Map<number, HTMLElement>();
+  // The last height of each box, to find a change above the view.
+  const lastH = new Map<number, number>();
+  // The height and the row count of the chunks that were on the page. Their mean gives the
+  // height of a chunk that was never on the page.
+  const measured = new Map<number, { h: number; n: number }>();
+  const boxObserver =
+    typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((e) => settle(e));
+  onDestroy(() => boxObserver?.disconnect());
+
+  function box(node: HTMLElement, id: number) {
+    boxes.set(id, node);
+    boxObserver?.observe(node);
+    return {
+      destroy() {
+        boxes.delete(id);
+        lastH.delete(id);
+        measured.delete(id);
+        boxObserver?.unobserve(node);
+      }
+    };
+  }
+
+  function rowHeight(): number {
+    let h = 0;
+    let n = 0;
+    for (const m of measured.values()) {
+      h += m.h;
+      n += m.n;
+    }
+    return n ? h / n : 56;
+  }
+
+  // The chunks that must stay on the page: the newest ones (the list follows them), the one
+  // with the focus or the selection, and the one that the reader edits.
+  function pinned(list: HTMLElement): Set<number> {
+    const out = new Set<number>(chunks.slice(-2).map((c) => c.id));
+    const of = (n: Node | null | undefined) => {
+      const el = n instanceof Element ? n : n?.parentElement;
+      const id = el && list.contains(el) ? (el.closest('[data-chunk]') as HTMLElement | null)?.dataset.chunk : null;
+      if (id) out.add(Number(id));
+    };
+    of(document.activeElement);
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) {
+      of(sel.anchorNode);
+      of(sel.focusNode);
+    }
+    const editing = app.editingId ? chunkState.of.get(app.editingId) : undefined;
+    if (editing !== undefined) out.add(editing);
+    return out;
+  }
+
+  // Put the chunks near the view on the page, and take the others off. A chunk that comes
+  // back can have another height than its box had. When it sits above the view, the scroll
+  // position moves by the difference, so the reader stays on the same message.
+  function applyWindow() {
+    const list = scroller;
+    if (!list || !chunks.length) return;
+    const guess = Math.round(rowHeight());
+    for (const ch of chunks) {
+      const el = boxes.get(ch.id);
+      if (el && !mounted.has(ch.id) && !el.style.height) {
+        el.style.height = `${ch.rows.length * guess}px`;
+      }
+    }
+    const listTop = list.getBoundingClientRect().top;
+    const scrollTop = list.scrollTop;
+    const spans: Span[] = [];
+    for (const ch of chunks) {
+      const el = boxes.get(ch.id);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      spans.push({ id: ch.id, top: r.top - listTop + scrollTop, height: r.height });
+    }
+    // The list at the bottom stays there while the heights change: look at the bottom.
+    const viewTop = atBottom ? Math.max(0, list.scrollHeight - list.clientHeight) : scrollTop;
+    const next = chooseMounted(spans, viewTop, viewTop + list.clientHeight, MOUNT_PX, KEEP_PX, mounted, pinned(list));
+    if (next === mounted) return;
+    for (const id of mounted) {
+      if (next.has(id)) continue;
+      const el = boxes.get(id);
+      const ch = chunks.find((c) => c.id === id);
+      if (!el) continue;
+      const h = el.getBoundingClientRect().height;
+      el.style.height = `${h}px`;
+      if (ch) measured.set(id, { h, n: ch.rows.length });
+    }
+    const entering: { id: number; el: HTMLElement; before: number; above: boolean }[] = [];
+    for (const id of next) {
+      const el = boxes.get(id);
+      if (mounted.has(id) || !el) continue;
+      const r = el.getBoundingClientRect();
+      entering.push({ id, el, before: r.height, above: r.bottom <= listTop });
+    }
+    mounted = next;
+    flushSync();
+    let move = 0;
+    for (const e of entering) {
+      e.el.style.height = '';
+      const h = e.el.getBoundingClientRect().height;
+      lastH.set(e.id, h);
+      const ch = chunks.find((c) => c.id === e.id);
+      if (ch) measured.set(e.id, { h, n: ch.rows.length });
+      if (e.above && !atBottom) move += h - e.before;
+    }
+    if (move) {
+      list.scrollTop += move;
+      lastTop = list.scrollTop;
+    }
+  }
+
+  // A chunk on the page can change its height (an image, an embed). When that happens
+  // above the view, the scroll position moves by the same amount.
+  function settle(entries: ResizeObserverEntry[]) {
+    const list = scroller;
+    if (!list) return;
+    const listTop = list.getBoundingClientRect().top;
+    let move = 0;
+    for (const e of entries) {
+      const el = e.target as HTMLElement;
+      const id = Number(el.dataset.chunk);
+      const h = el.getBoundingClientRect().height;
+      const old = lastH.get(id);
+      lastH.set(id, h);
+      if (old === undefined || Math.abs(old - h) < 0.5 || !mounted.has(id) || atBottom) continue;
+      if (el.getBoundingClientRect().top + old <= listTop) move += h - old;
+    }
+    if (move) {
+      list.scrollTop += move;
+      lastTop = list.scrollTop;
+    }
+  }
+
+  // A jump needs the row of the message on the page. This puts its chunk there.
+  function reveal(id: string): boolean {
+    const cid = chunkState.of.get(id);
+    const el = cid === undefined ? undefined : boxes.get(cid);
+    if (cid === undefined || !el) return false;
+    if (mounted.has(cid)) return true;
+    mounted = new Set([...mounted, cid]);
+    flushSync();
+    el.style.height = '';
+    lastH.set(cid, el.getBoundingClientRect().height);
+    return true;
+  }
+
+  // The chunks change when messages arrive. The boxes of new chunks get a height, and the
+  // chunks near the view come onto the page. This runs before the effects below that
+  // scroll, so they see the right heights.
+  $effect(() => {
+    void chunks;
+    queueMicrotask(applyWindow);
+  });
+
+  $effect(() => {
+    timelineHook.reveal = reveal;
+    return () => {
+      if (timelineHook.reveal === reveal) timelineHook.reveal = null;
+    };
+  });
+
   // Only the last own message can change. One value for all rows: a row does not scan the
   // list by itself.
   const editableId = $derived(app.lastOwn()?.id ?? null);
@@ -109,9 +294,21 @@
         farFromPresent = false;
         return;
       }
-      const els = list.querySelectorAll('.msg');
       const edge = list.getBoundingClientRect().bottom;
-      const below = messagesBelow(els.length, (i) => els[i].getBoundingClientRect().top, edge);
+      // A chunk that starts below the view counts as a whole. The chunk at the edge is on
+      // the page: its messages give the rest.
+      let below = 0;
+      for (let i = chunks.length - 1; i >= 0 && !showOlderBar(below); i--) {
+        const el = boxes.get(chunks[i].id);
+        if (!el) continue;
+        if (el.getBoundingClientRect().top >= edge) {
+          below += chunks[i].weight;
+          continue;
+        }
+        const els = el.querySelectorAll('.msg');
+        below += messagesBelow(els.length, (j) => els[j].getBoundingClientRect().top, edge);
+        break;
+      }
       farFromPresent = showOlderBar(below);
     });
   }
@@ -147,12 +344,19 @@
   function noteNewLine() {
     if (!scroller || !app.dividerId || app.barGone[app.selectedJid]) return;
     const line = scroller.querySelector('.divider.new');
-    const top = line ? line.getBoundingClientRect().top : null;
+    let top = line ? line.getBoundingClientRect().top : null;
+    if (top === null) {
+      // The line is off the page. Its chunk tells where it is.
+      const cid = chunkState.of.get(`new-${app.dividerId}`);
+      const el = cid === undefined ? undefined : boxes.get(cid);
+      if (el) top = el.getBoundingClientRect().top;
+    }
     if (newLineSeen(top, scroller.getBoundingClientRect().top)) app.barGone[app.selectedJid] = true;
   }
 
   function onscroll() {
     if (!scroller) return;
+    applyWindow();
     const top = scroller.scrollTop;
     if (distanceToBottom(scroller) < NEAR_BOTTOM) atBottom = true;
     // Only a move up stops the follow. A smooth scroll down, or content that grows below
@@ -190,6 +394,7 @@
       keep = null;
       queueMicrotask(() => {
         if (!scroller || atBottom) return;
+        applyWindow();
         scroller.scrollTop += scroller.scrollHeight - before;
         lastTop = scroller.scrollTop;
       });
@@ -301,14 +506,20 @@
         {/if}
       </div>
     {/if}
-    {#each rows as row (row.key)}
-      {#if row.kind === 'day'}
-        <div class="divider"><span>{row.label}</span></div>
-      {:else if row.kind === 'new'}
-        <div class="divider new" role="separator" aria-label="New messages"><span>New</span></div>
-      {:else}
-        <Message item={row.item} grouped={row.grouped} onjump={jump} editable={editableId === row.item.id} />
-      {/if}
+    {#each chunks as chunk (chunk.id)}
+      <div class="chunk" data-chunk={chunk.id} use:box={chunk.id}>
+        {#if mounted.has(chunk.id)}
+          {#each chunk.rows as row (row.key)}
+            {#if row.kind === 'day'}
+              <div class="divider"><span>{row.label}</span></div>
+            {:else if row.kind === 'new'}
+              <div class="divider new" role="separator" aria-label="New messages"><span>New</span></div>
+            {:else}
+              <Message item={row.item} grouped={row.grouped} onjump={jump} editable={editableId === row.item.id} />
+            {/if}
+          {/each}
+        {/if}
+      </div>
     {/each}
     <div class="end"></div>
     </div>
@@ -338,6 +549,10 @@
     overflow-y: auto;
     overflow-x: hidden;
     overflow-anchor: none;
+  }
+  /* A box that holds its own margins, so its height is the same with rows and without. */
+  .chunk {
+    display: flow-root;
   }
   .end {
     height: var(--space-4);
