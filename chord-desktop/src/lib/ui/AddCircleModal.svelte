@@ -26,6 +26,18 @@
     }
   });
 
+  // Arrow keys move between the two tabs, as in any tab list.
+  function tabkey(e: KeyboardEvent) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    tab = e.key === 'ArrowLeft' || e.key === 'Home' ? 'create' : 'join';
+    queueMicrotask(() =>
+      (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus()
+    );
+  }
+  function focusNow(node: HTMLInputElement) {
+    node.focus();
+  }
   const joined = $derived(new Set(app.spaces.map(spaceKey)));
   const shown = $derived(
     app.publicCircles.filter((c) => c.name.toLowerCase().includes(query.trim().toLowerCase()))
@@ -49,11 +61,11 @@
 </script>
 
 <Modal title={tab === 'create' ? 'Create a space' : 'Join a space'} {onclose} size="medium">
-  <div class="tabs" role="tablist" aria-label="Add a space">
-    <button role="tab" aria-selected={tab === 'create'} class:on={tab === 'create'} onclick={() => (tab = 'create')}>
+  <div class="tabs" role="tablist" aria-label="Add a space" tabindex="-1" onkeydown={tabkey}>
+    <button role="tab" tabindex={tab === 'create' ? 0 : -1} aria-selected={tab === 'create'} class:on={tab === 'create'} onclick={() => (tab = 'create')}>
       Create a space
     </button>
-    <button role="tab" aria-selected={tab === 'join'} class:on={tab === 'join'} onclick={() => (tab = 'join')}>
+    <button role="tab" tabindex={tab === 'join' ? 0 : -1} aria-selected={tab === 'join'} class:on={tab === 'join'} onclick={() => (tab = 'join')}>
       Join a space
     </button>
   </div>
@@ -75,7 +87,9 @@
           </select>
         </div>
       {/if}
-      <button class="btn btn-primary" type="submit" disabled={!name.trim() || busy}>Create space</button>
+      <button class="btn btn-primary" type="submit" disabled={!name.trim() || busy}>
+        {busy ? 'Creating…' : 'Create space'}
+      </button>
     </form>
   {:else}
     <div class="form">
@@ -85,6 +99,7 @@
           class="bare"
           aria-label="Search public spaces"
           placeholder="Search public spaces"
+          use:focusNow
           bind:value={query}
         />
       </div>

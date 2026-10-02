@@ -108,7 +108,7 @@
     another host, but import only CSS from people you trust.
   </p>
   {#snippet footer()}
-    <button class="btn" onclick={onclose}>Cancel</button>
+    <button class="btn btn-ghost" onclick={onclose}>Cancel</button>
     {#if tab === 'paste'}
       <button class="btn btn-primary" disabled={!css.trim()} onclick={() => done(theme.import(css))}
         >Add theme</button

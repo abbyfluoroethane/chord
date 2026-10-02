@@ -55,6 +55,7 @@
 
 <Modal title="Prove that you are a person" onclose={cancel}>
   <form
+    id="room-captcha-form"
     onsubmit={(e) => {
       e.preventDefault();
       void send();
@@ -66,7 +67,9 @@
 
   {#snippet footer()}
     <button class="btn btn-ghost" onclick={cancel}>Cancel</button>
-    <button class="btn btn-primary" disabled={busy} onclick={send}>Send</button>
+    <button class="btn btn-primary" type="submit" form="room-captcha-form" disabled={busy}>
+      {busy ? 'Sending…' : 'Send'}
+    </button>
   {/snippet}
 </Modal>
 

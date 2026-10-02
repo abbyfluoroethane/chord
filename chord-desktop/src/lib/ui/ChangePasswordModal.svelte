@@ -34,6 +34,7 @@
 
 <Modal title="Change password" {onclose}>
   <form
+    id="change-password"
     onsubmit={(e) => {
       e.preventDefault();
       void save();
@@ -69,8 +70,8 @@
 
   {#snippet footer()}
     <button class="btn btn-ghost" onclick={onclose}>Cancel</button>
-    <button class="btn btn-primary" disabled={busy || !ready} onclick={() => void save()}>
-      Change password
+    <button class="btn btn-primary" type="submit" form="change-password" disabled={busy || !ready}>
+      {busy ? 'Changing…' : 'Change password'}
     </button>
   {/snippet}
 </Modal>

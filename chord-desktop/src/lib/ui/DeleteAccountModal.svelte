@@ -38,6 +38,7 @@
 
 <Modal title="Delete account" {onclose}>
   <form
+    id="delete-account"
     onsubmit={(e) => {
       e.preventDefault();
       void remove();
@@ -69,8 +70,8 @@
 
   {#snippet footer()}
     <button class="btn btn-ghost" onclick={onclose}>Cancel</button>
-    <button class="btn btn-danger" disabled={busy || !matches} onclick={() => void remove()}>
-      Delete my account
+    <button class="btn btn-danger" type="submit" form="delete-account" disabled={busy || !matches}>
+      {busy ? 'Deleting…' : 'Delete my account'}
     </button>
   {/snippet}
 </Modal>
