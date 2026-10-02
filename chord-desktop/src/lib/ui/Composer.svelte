@@ -98,7 +98,7 @@
     const stops = [
       ui.onRequest('emoji', () => openPicker('emoji')),
       ui.onRequest('gif', () => prefs.gifPicker && openPicker('gif')),
-      ui.onRequest('upload', () => void upload()),
+      ui.onRequest('upload', () => openFileDialog()),
       ui.onRequest('composer', () => box?.focus())
     ];
     return () => stops.forEach((stop) => stop());
