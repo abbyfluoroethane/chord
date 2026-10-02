@@ -53,6 +53,7 @@ import { session } from './session.svelte';
 import { settings } from './local';
 import { spaceKey, type ChannelItem } from './types';
 import { ui } from './ui.svelte';
+import { tray } from './tray.svelte';
 import { emojiPacks } from './emojipacks.svelte';
 
 class LiveController {
@@ -418,7 +419,7 @@ class LiveController {
         const action = dropAction(ev.payload.type, app.showContacts);
         app.dropping = action === 'show';
         if (action === 'upload' && ev.payload.type === 'drop') {
-          for (const p of ev.payload.paths) void app.uploadDropped(p);
+          for (const p of ev.payload.paths) for (const m of tray.addPath(app.selectedJid, p)) ui.say(m, true);
         }
       });
       if (gen !== this.generation) un();

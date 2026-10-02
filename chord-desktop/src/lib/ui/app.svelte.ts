@@ -14,6 +14,7 @@ import type {
 import { levelToBridge, plainError, splitPrivate, splitSpaceKey, toPublicCircle } from './adapt';
 import { api, live } from './bridge';
 import { pasteProblem } from './filetransfer';
+import type { TrayItem } from './traydata';
 import { linkPreviews } from './linkpreviews.svelte';
 import { settings } from './local';
 import { bumpReaction, topReactions, type ReactionUse } from './reactions';
@@ -766,33 +767,28 @@ class AppState {
     }
   }
 
-  /** Upload a file that the user dropped on the window. Maps to api.uploadDropped(to, path). */
-  async uploadDropped(path: string) {
-    const jid = this.selectedJid;
-    if (!live || !jid) return;
-    try {
-      await (await api()).uploadDropped(jid, path);
-      ui.say('File sent.');
-    } catch (e) {
-      ui.say(plainError(e), true);
-    }
-  }
-
-  /** Upload a file that the user pasted: the page has its bytes and no path. Maps to api.uploadPasted(to, type, bytes). */
-  async uploadPasted(file: File) {
-    const jid = this.selectedJid;
-    if (!live || !jid) return;
-    const problem = pasteProblem(file);
-    if (problem) {
-      ui.say(problem);
-      return;
+  /**
+   * Upload one item of the attachment tray to chat `jid`. Nothing calls this before the user
+   * sends. Live: a dropped path goes to api.uploadDropped(to, path), and a file with bytes
+   * goes to api.uploadPasted(to, type, bytes, name). Resolves to null when it went, or to the
+   * error text, which the tray shows on the item.
+   */
+  async uploadTrayItem(jid: string, item: TrayItem): Promise<string | null> {
+    if (!live) {
+      if (item.file) this.sendFile(item.file);
+      return null;
     }
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      await (await api()).uploadPasted(jid, file.type, bytes);
-      ui.say('File sent.');
+      const b = await api();
+      if (item.path) await b.uploadDropped(jid, item.path);
+      else if (item.file) {
+        const problem = pasteProblem(item.file);
+        if (problem) return problem;
+        await b.uploadPasted(jid, item.file.type, new Uint8Array(await item.file.arrayBuffer()), item.name);
+      }
+      return null;
     } catch (e) {
-      ui.say(plainError(e), true);
+      return plainError(e);
     }
   }
 

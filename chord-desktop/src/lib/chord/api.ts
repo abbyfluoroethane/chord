@@ -236,9 +236,13 @@ export const uploadDropped = (to: string, path: string) =>
  * to Rust as the raw body (25 MB at most). Rust makes the file name from the media type.
  * Returns the URL.
  */
-export const uploadPasted = (to: string, type: string, bytes: Uint8Array) =>
+export const uploadPasted = (to: string, type: string, bytes: Uint8Array, name?: string) =>
   invoke<string>('upload_pasted', bytes, {
-    headers: { to: encodeURIComponent(to), type: encodeURIComponent(type) }
+    headers: {
+      to: encodeURIComponent(to),
+      type: encodeURIComponent(type),
+      ...(name ? { name: encodeURIComponent(name) } : {})
+    }
   });
 
 /** Search the stored messages, newest first. Without `peer` it searches every chat. */

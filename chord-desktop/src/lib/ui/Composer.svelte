@@ -18,6 +18,8 @@
   import { ui } from './ui.svelte';
   import { typingText } from './format';
   import { pastedFiles } from './filetransfer';
+  import AttachmentTray from './AttachmentTray.svelte';
+  import { tray } from './tray.svelte';
   import { tooltip } from './tooltip';
   import { isGroup } from './types';
   import {
@@ -110,9 +112,20 @@
   const styled = $derived(highlightDraft(value));
   let scrollTop = $state(0);
 
+  // The files that wait in the tray for this chat.
+  const trayItems = $derived(tray.items(app.selectedJid));
+
+  /** Send the text, then upload the files of the tray in order. Enter and the send button call it. */
   async function send() {
     const text = value;
-    if (!text.trim()) return;
+    const jid = app.selectedJid;
+    const hasText = text.trim().length > 0;
+    const hasFiles = tray.hasSendable(jid);
+    if (!hasText && !hasFiles) return;
+    if (!hasText) {
+      await sendFiles(jid);
+      return;
+    }
     value = '';
     codeMatch = null;
     mention = null;
@@ -123,7 +136,24 @@
       : text;
     const ok = await app.send(out);
     // A message that did not go stays in the box, unless the user typed something new.
-    if (!ok && !value) value = text;
+    // The files stay in the tray then, and they wait for the next send.
+    if (!ok) {
+      if (!value) value = text;
+      return;
+    }
+    if (hasFiles) await sendFiles(jid);
+  }
+
+  /** Upload the files of the tray, or try the failed ones again. The tray shows the progress. */
+  async function sendFiles(jid: string) {
+    if (tray.busy(jid)) return;
+    await tray.sendAll(jid, (item) => app.uploadTrayItem(jid, item));
+  }
+
+  /** Add files to the tray of this chat. A file that cannot join gives a message. */
+  function addFiles(list: File[]) {
+    for (const problem of tray.addFiles(app.selectedJid, list)) ui.say(problem, true);
+    box?.focus();
   }
 
   // Shortcode suggestions: after ":" and two letters, a list shows above the box.
@@ -251,6 +281,9 @@
     } else if (e.key === 'Escape' && app.replyingTo) {
       e.preventDefault();
       app.replyingTo = null;
+    } else if (e.key === 'Escape' && !value && trayItems.length) {
+      e.preventDefault();
+      tray.clear(app.selectedJid);
     } else if (e.key === 'ArrowUp' && !value) {
       const last = app.lastOwn();
       if (last) {
@@ -260,29 +293,33 @@
     }
   }
 
-  // Inside the app, Rust opens the system file dialog and reads the files: the page never
-  // handles a path. In a browser, the file input stays.
-  async function upload() {
-    if (!live) {
-      files?.click();
-      return;
-    }
-    await app.uploadPicked();
+  /**
+   * Open the file dialog. The picked files go to the tray, and nothing uploads until the user
+   * sends. The shortcut for the dialog calls this function.
+   */
+  export function openFileDialog() {
+    files?.click();
   }
 
-  /** A file in the clipboard (a screenshot, for example) goes out as a file. Text pastes as usual. */
+  /** A file in the clipboard (a screenshot, for example) goes to the tray. Text pastes as usual. */
   function paste(e: ClipboardEvent) {
     const list = pastedFiles(e.clipboardData);
     if (!list.length) return;
     e.preventDefault();
-    if (live) for (const f of list) void app.uploadPasted(f);
-    else for (const f of list) app.sendFile(f);
+    addFiles(list);
   }
 
-  // Preview only: a browser has no Rust to upload. Live, `upload` never shows the input.
   function picked() {
-    for (const f of files?.files ?? []) app.sendFile(f);
+    addFiles(Array.from(files?.files ?? []));
     if (files) files.value = '';
+  }
+
+  // A drop in a browser. In the app, the window event gives paths (see live.svelte.ts).
+  function dropped(e: DragEvent) {
+    const list = pastedFiles(e.dataTransfer);
+    if (!list.length) return;
+    e.preventDefault();
+    addFiles(list);
   }
 
   const placeholder = $derived(
@@ -295,7 +332,14 @@
   const actionHint = $derived(!typing && /^\/me( |$)/.test(value));
 </script>
 
-<div class="composer">
+<div
+  class="composer"
+  role="presentation"
+  ondragover={(e) => {
+    if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+  }}
+  ondrop={dropped}
+>
   {#if app.replyingTo}
     <div class="reply">
       <span>Replying to <b>{app.replyingTo.senderName}</b></span>
@@ -304,12 +348,21 @@
       </button>
     </div>
   {/if}
-  <div class="box" class:has-reply={!!app.replyingTo} bind:this={boxWrap}>
+  <AttachmentTray
+    items={trayItems}
+    onremove={(id) => tray.remove(app.selectedJid, id)}
+    onretry={() => void sendFiles(app.selectedJid)}
+  />
+  <div
+    class="box"
+    class:has-reply={!!app.replyingTo || trayItems.length > 0}
+    bind:this={boxWrap}
+  >
     <button
       class="upload"
       aria-label="Upload a file"
       use:tooltip={{ text: 'Upload a file', side: 'top' }}
-      onclick={upload}
+      onclick={openFileDialog}
     >
       <Icon icon={Paperclip} size={20} />
     </button>
