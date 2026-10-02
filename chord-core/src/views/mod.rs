@@ -5,6 +5,8 @@
 //! store and mark the views that changed (`Ctx::changed`). The actor then runs the query
 //! of each subscribed view again and sends the diff.
 
+#[cfg(test)]
+mod bench;
 pub mod channel_list;
 pub mod diff;
 pub mod member_list;

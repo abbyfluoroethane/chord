@@ -339,4 +339,10 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE occupants ADD COLUMN status TEXT;
     "#,
+    // 17: two indexes for the channel list. The first one covers the newest message of
+    // each chat. The second one covers the unread count of a peer.
+    r#"
+    CREATE INDEX messages_by_kind_peer ON messages (account_id, kind, peer, timestamp);
+    CREATE INDEX messages_by_peer_direction ON messages (account_id, peer, direction, id, retracted_at);
+    "#,
 ];

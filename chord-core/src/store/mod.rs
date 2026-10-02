@@ -50,7 +50,15 @@ pub struct Store {
 impl Store {
     /// Open or create the database at `path`, and run the migrations.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        Self::init(Connection::open(path)?)
+        let conn = Connection::open(path)?;
+        // WAL makes a write one sequential append, and a reader does not block it. With
+        // NORMAL, a power loss can drop the last commits but never damages the file. The
+        // server archive gives back lost messages.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Keep the WAL file small after a checkpoint.
+        conn.pragma_update(None, "journal_size_limit", 4 << 20)?;
+        Self::init(conn)
     }
 
     /// A database in memory. For tests.
@@ -60,6 +68,9 @@ impl Store {
 
     fn init(mut conn: Connection) -> Result<Self, StoreError> {
         conn.pragma_update(None, "foreign_keys", true)?;
+        // The code has more than 16 hot statements. A bigger cache stops the repeated
+        // parsing of the evicted ones.
+        conn.set_prepared_statement_cache_capacity(64);
         migrations::migrate(&mut conn)?;
         Ok(Self { conn })
     }

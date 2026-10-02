@@ -114,8 +114,18 @@ fn home(q: &QueryCtx<'_>) -> rusqlite::Result<Vec<ChannelItem>> {
     let conn = q.store.conn();
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT peer, MAX(timestamp) FROM messages WHERE account_id = ?1 AND kind = 'chat'
-         GROUP BY peer ORDER BY MAX(timestamp) DESC",
+        // A loose index scan: each step seeks the next peer in `messages_by_kind_peer`,
+        // so the cost does not grow with the number of messages.
+        "WITH RECURSIVE p(peer) AS (
+             SELECT MIN(peer) FROM messages WHERE account_id = ?1 AND kind = 'chat'
+             UNION ALL
+             SELECT (SELECT MIN(peer) FROM messages
+                     WHERE account_id = ?1 AND kind = 'chat' AND peer > p.peer)
+             FROM p WHERE p.peer IS NOT NULL
+         )
+         SELECT peer, (SELECT MAX(timestamp) FROM messages
+                       WHERE account_id = ?1 AND kind = 'chat' AND peer = p.peer) AS last
+         FROM p WHERE peer IS NOT NULL ORDER BY last DESC",
     )?;
     let dms: Vec<(String, i64)> = stmt
         .query_map(params![q.account_id], |row| Ok((row.get(0)?, row.get(1)?)))?

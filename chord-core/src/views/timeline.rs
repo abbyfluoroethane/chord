@@ -195,11 +195,26 @@ pub(crate) fn query(
 
     let mut items: Vec<TimelineItem> = Vec::with_capacity(rows.len());
     let mut previous_occupant: Option<String> = None;
+    let mut senders: std::collections::HashMap<String, (bool, String, Option<String>)> =
+        std::collections::HashMap::new();
     for row in rows {
-        let (sender_name, avatar_owner) = display_name(q, &row.sender, row.groupchat)?;
-        let avatar = match row.sender.split_once('/') {
-            Some((room, nick)) if row.groupchat => occupant_avatar_hash(q, room, nick)?,
-            _ => avatar_hash(q, &avatar_owner)?,
+        // One sender often writes many messages of the window: look it up once.
+        let (sender_name, avatar) = match senders.get(&row.sender) {
+            Some((groupchat, name, avatar)) if *groupchat == row.groupchat => {
+                (name.clone(), avatar.clone())
+            }
+            _ => {
+                let (name, avatar_owner) = display_name(q, &row.sender, row.groupchat)?;
+                let avatar = match row.sender.split_once('/') {
+                    Some((room, nick)) if row.groupchat => occupant_avatar_hash(q, room, nick)?,
+                    _ => avatar_hash(q, &avatar_owner)?,
+                };
+                senders.insert(
+                    row.sender.clone(),
+                    (row.groupchat, name.clone(), avatar.clone()),
+                );
+                (name, avatar)
+            }
         };
         // The same nick is the same person only if the occupant-id agrees (XEP-0421): a nick
         // that another person took later is not the same sender.
