@@ -316,7 +316,10 @@ async fn download(p: &Pack) -> Res<Vec<u8>> {
             format!("the npm registry answered {}", response.status()),
         ));
     }
-    let mut body = Vec::new();
+    let mut body = Vec::with_capacity(crate::link_preview::initial_capacity(
+        response.content_length(),
+        MAX_DOWNLOAD_BYTES as u64,
+    ));
     while let Some(chunk) = response.chunk().await.map_err(fail)? {
         if body.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
             return Err(ChordError::new("emoji", "the pack is too big"));

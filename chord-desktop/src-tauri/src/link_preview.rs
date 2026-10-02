@@ -398,6 +398,16 @@ fn within_cap(total: u64, chunk: usize, max: u64) -> bool {
     total.checked_add(chunk as u64).is_some_and(|n| n <= max)
 }
 
+/// The first size of a download buffer. A known length gives one exact allocation, so the
+/// buffer never doubles and copies. A wrong or missing length is safe: the buffer then grows
+/// as before. The size never goes over `max`.
+pub(crate) fn initial_capacity(content_length: Option<u64>, max: u64) -> usize {
+    content_length
+        .map_or(0, |n| n.min(max))
+        .try_into()
+        .unwrap_or(0)
+}
+
 /// Download the image at `url` and return its bytes. The download uses the same filters as
 /// the previews: only public addresses, checked redirects. It fails for a file that is not
 /// an image, and for one over 50 MB. The caller decides where the bytes go (files.rs).
@@ -441,7 +451,7 @@ async fn download_capped(url: &str, max: u64) -> Res<(Vec<u8>, String)> {
     if response.content_length().is_some_and(|n| n > max) {
         return Err(too_big());
     }
-    let mut body: Vec<u8> = Vec::new();
+    let mut body: Vec<u8> = Vec::with_capacity(initial_capacity(response.content_length(), max));
     while let Some(chunk) = response.chunk().await.map_err(fetch_error)? {
         if !within_cap(body.len() as u64, chunk.len(), max) {
             return Err(too_big());
@@ -469,15 +479,18 @@ fn is_preview_image_type(mime: &str) -> bool {
     )
 }
 
-/// `bytes` as a `data:` URL, or `None` if the type is not one that the UI shows.
+/// `bytes` as a `data:` URL, or `None` if the type is not one that the UI shows. The text
+/// grows in one allocation of the final size: no second copy of a big string.
 fn data_url(mime: &str, bytes: &[u8]) -> Option<String> {
     use base64::Engine;
-    is_preview_image_type(mime).then(|| {
-        format!(
-            "data:{mime};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        )
-    })
+    if !is_preview_image_type(mime) {
+        return None;
+    }
+    let prefix = format!("data:{mime};base64,");
+    let mut out = String::with_capacity(prefix.len() + bytes.len().div_ceil(3) * 4);
+    out.push_str(&prefix);
+    base64::engine::general_purpose::STANDARD.encode_string(bytes, &mut out);
+    Some(out)
 }
 
 /// The preview image of a link, as a `data:` URL. The webview never loads the address
@@ -506,6 +519,23 @@ mod tests {
 
     fn url(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn a_data_url_uses_one_allocation() {
+        let bytes = vec![7u8; 1000];
+        let url = data_url("image/png", &bytes).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        // The capacity is the exact final size, so the string never grew.
+        assert_eq!(url.capacity(), url.len());
+        assert!(data_url("image/svg+xml", &bytes).is_none());
+    }
+
+    #[test]
+    fn the_buffer_size_follows_the_length_and_the_cap() {
+        assert_eq!(initial_capacity(None, 100), 0);
+        assert_eq!(initial_capacity(Some(40), 100), 40);
+        assert_eq!(initial_capacity(Some(4000), 100), 100);
     }
 
     #[test]

@@ -24,8 +24,32 @@ mod settings;
 mod state;
 mod theme_fetch;
 
+/// The worker threads of the async runtime. The work is network and database waits, so a
+/// few threads are enough. Tokio starts one thread per core by default, and each thread
+/// keeps its own stack and allocator state.
+const WORKER_THREADS: usize = 3;
+
+/// Give Tauri a runtime with a small, fixed worker pool. Blocking tasks (file reads, the
+/// avatar store) run on the separate blocking pool of tokio, which ends idle threads.
+fn set_runtime() {
+    match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKER_THREADS)
+        .thread_name("chord-worker")
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => {
+            tauri::async_runtime::set(runtime.handle().clone());
+            // Tauri holds only the handle. The runtime must live as long as the process.
+            std::mem::forget(runtime);
+        }
+        Err(e) => log::warn!("cannot build the runtime, Tauri keeps its own: {e}"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    set_runtime();
     let builder = tauri::Builder::default();
     // The single-instance plugin must be the first plugin. A second copy of the app sends its
     // arguments (an xmpp: link on Windows and Linux) to the first copy and quits.

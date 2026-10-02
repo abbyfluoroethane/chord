@@ -38,7 +38,7 @@ rusqlite.workspace = true
 # Link previews (src/link_preview.rs): the HTTP fetch, with rustls as in chord-core.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # The DNS lookup of the SSRF filter, and the per-URL lock.
-tokio = { workspace = true, features = ["net", "sync"] }
+tokio = { workspace = true, features = ["net", "sync", "rt-multi-thread"] }
 # Parses the URL, and resolves a relative image URL against the page.
 url = "2"
 # html5ever based HTML parser and selectors, for the Open Graph tags.
