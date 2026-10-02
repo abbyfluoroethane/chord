@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildGroups, searchEmoji, withTone, type Raw } from './emojidata';
+import { buildGroups, decodeEmoji, searchEmoji, withTone, type Raw } from './emojidata';
+import gen from './emojidata.gen';
+import { compactEmoji, escapeWide, fromHex, toHex, unescapeWide } from './emojibuild';
 
 const raw: Raw[] = [
   { emoji: '😀', label: 'grinning face', tags: ['smile', 'happy'], group: 0, order: 2, version: 1 },
@@ -48,8 +50,10 @@ describe('buildGroups', () => {
     expect(groups[0].emoji[0].skins).toBeNull();
   });
 
-  it('writes the search words in lower case', () => {
-    expect(groups[0].emoji[1].words).toBe('grinning face smile happy');
+  it('keeps the tags in lower case, and the label as it is', () => {
+    expect(groups[0].emoji[1].tags).toBe('smile happy');
+    expect(groups[0].emoji[1].label).toBe('grinning face');
+    expect(groups[0].emoji[0].tags).toBe('');
   });
 });
 
@@ -83,5 +87,34 @@ describe('withTone', () => {
     expect(withTone(hand, 0)).toBe('👋');
     expect(withTone(hand, 3)).toBe('👋3');
     expect(withTone(buildGroups(raw)[0].emoji[0], 3)).toBe('🙂');
+  });
+});
+
+describe('compact text', () => {
+  it('turns an emoji into hex and back', () => {
+    expect(toHex('👨‍👩‍👧')).toBe('1f468.200d.1f469.200d.1f467');
+    expect(fromHex(toHex('🏳️‍🌈'))).toBe('🏳️‍🌈');
+  });
+
+  it('keeps the letters above U+00FF in a label', () => {
+    expect(unescapeWide(escapeWide('o’clock 5–0'))).toBe('o’clock 5–0');
+    expect(/[^\u0000-\u00ff]/.test(gen)).toBe(false);
+    const clock = decodeEmoji(gen).flatMap((g) => g.emoji).find((e) => e.label === 'twelve o’clock');
+    expect(clock?.tags).toContain('o’clock');
+  });
+
+  it('is the same data as the Emojibase list', async () => {
+    // A failure here means that emojidata.gen.ts is old: run scripts/gen-emoji.mjs.
+    const { default: data } = await import('emojibase-data/en/data.json');
+    expect(gen).toBe(compactEmoji(data as Raw[]));
+  });
+
+  it('reads the generated text into nine groups with skins', () => {
+    const groups = decodeEmoji(gen);
+    expect(groups.length).toBe(9);
+    expect(groups.every((g) => g.emoji.length > 0)).toBe(true);
+    const wave = groups[1].emoji.find((e) => e.emoji === '👋');
+    expect(wave?.skins?.length).toBe(5);
+    expect(groups[1].emoji.find((e) => e.emoji === '👋')?.tags).toContain('wave');
   });
 });

@@ -1,13 +1,18 @@
-// Emoji data for the picker: Emojibase 17 (MIT), English labels and tags. The file is big,
-// so it has its own chunk. It loads once, in idle time soon after the app starts (see
-// preloadEmoji), and the groups stay in memory. The picker then opens with no wait.
+// Emoji data for the picker: Emojibase 17 (MIT), English labels and tags. The data is a
+// compact text of about 150 KB (emojidata.gen.ts, made by scripts/gen-emoji.mjs). It has
+// its own chunk. It loads once, in idle time soon after the app starts (see preloadEmoji),
+// and the groups stay in memory. The picker then opens with no wait. The search words are
+// not stored: a search builds them for each emoji when it runs.
+import { compactEmoji, fromHex, unescapeWide, type Raw } from './emojibuild';
+
+export type { Raw };
 
 export interface EmojiEntry {
   /** The emoji with the default skin tone. */
   emoji: string;
   label: string;
-  /** Lower-case words to search: the label and the tags. */
-  words: string;
+  /** The tags in lower case, joined with a space. The search reads them with the label. */
+  tags: string;
   /** The emoji in skin tones 1 to 5, if it has them. */
   skins: string[] | null;
 }
@@ -18,69 +23,53 @@ export interface EmojiGroup {
   emoji: EmojiEntry[];
 }
 
-/** The Emojibase groups in picker order. Group 2 holds the skin tone swatches: not shown. */
-const GROUPS: { n: number; id: string; label: string }[] = [
-  { n: 0, id: 'smileys', label: 'Smileys and emotion' },
-  { n: 1, id: 'people', label: 'People and body' },
-  { n: 3, id: 'nature', label: 'Animals and nature' },
-  { n: 4, id: 'food', label: 'Food and drink' },
-  { n: 5, id: 'travel', label: 'Travel and places' },
-  { n: 6, id: 'activities', label: 'Activities' },
-  { n: 7, id: 'objects', label: 'Objects' },
-  { n: 8, id: 'symbols', label: 'Symbols' },
-  { n: 9, id: 'flags', label: 'Flags' }
+/** The groups in picker order, as in GROUP_NUMBERS (emojibuild.ts). */
+const GROUPS: { id: string; label: string }[] = [
+  { id: 'smileys', label: 'Smileys and emotion' },
+  { id: 'people', label: 'People and body' },
+  { id: 'nature', label: 'Animals and nature' },
+  { id: 'food', label: 'Food and drink' },
+  { id: 'travel', label: 'Travel and places' },
+  { id: 'activities', label: 'Activities' },
+  { id: 'objects', label: 'Objects' },
+  { id: 'symbols', label: 'Symbols' },
+  { id: 'flags', label: 'Flags' }
 ];
-
-/**
- * The newest Emoji version to show. The system font must draw the emoji: macOS 26 draws
- * Emoji 16. A newer emoji would show as an empty box.
- */
-const MAX_VERSION = 16;
-
-export interface Raw {
-  emoji: string;
-  label: string;
-  tags?: string[];
-  group?: number;
-  order?: number;
-  version: number;
-  skins?: { emoji: string; tone: number | number[] }[];
-}
 
 let loaded: Promise<EmojiGroup[]> | null = null;
 let ready: EmojiGroup[] | null = null;
 let byChar: Map<string, EmojiEntry> | null = null;
 
-/** Build the picker groups from the Emojibase list. Pure: the tests call it. */
-export function buildGroups(data: Raw[]): EmojiGroup[] {
-  const byGroup = new Map<number, (EmojiEntry & { order: number })[]>();
-  for (const e of data) {
-    if (e.group === undefined || e.group === 2 || e.version > MAX_VERSION) continue;
-    const skins = e.skins
-      ?.filter((s) => typeof s.tone === 'number')
-      .sort((a, b) => (a.tone as number) - (b.tone as number))
-      .map((s) => s.emoji);
-    const list = byGroup.get(e.group) ?? [];
-    list.push({
-      emoji: e.emoji,
-      label: e.label,
-      words: [e.label, ...(e.tags ?? [])].join(' ').toLowerCase(),
-      skins: skins && skins.length === 5 ? skins : null,
-      order: e.order ?? 0
-    });
-    byGroup.set(e.group, list);
-  }
-  return GROUPS.map((g) => ({
+/** Read the compact text (see emojibuild.ts) into the picker groups. */
+export function decodeEmoji(text: string): EmojiGroup[] {
+  const blocks = text.split('\n\n');
+  return GROUPS.map((g, n) => ({
     id: g.id,
     label: g.label,
-    emoji: (byGroup.get(g.n) ?? []).sort((a, b) => a.order - b.order)
+    emoji: (blocks[n] ?? '')
+      .split('\n')
+      .filter(Boolean)
+      .map((line): EmojiEntry => {
+        const [hex, label, tags, skins] = line.split('\t');
+        return {
+          emoji: fromHex(hex),
+          label: unescapeWide(label),
+          tags: unescapeWide(tags),
+          skins: skins ? skins.split(',').map(fromHex) : null
+        };
+      })
   }));
+}
+
+/** Build the picker groups from the Emojibase list. The tests call it. */
+export function buildGroups(data: Raw[]): EmojiGroup[] {
+  return decodeEmoji(compactEmoji(data));
 }
 
 /** The emoji groups. The first call loads the data, later calls reuse it. */
 export function loadEmoji(): Promise<EmojiGroup[]> {
-  loaded ??= import('emojibase-data/en/data.json').then(({ default: data }) => {
-    ready = buildGroups(data as Raw[]);
+  loaded ??= import('./emojidata.gen').then(({ default: text }) => {
+    ready = decodeEmoji(text);
     return ready;
   });
   return loaded;
@@ -115,9 +104,10 @@ export function searchEmoji(groups: EmojiGroup[], text: string, max = 80): Emoji
   const contains: EmojiEntry[] = [];
   for (const g of groups) {
     for (const e of g.emoji) {
-      const at = e.words.indexOf(q);
+      const words = `${e.label.toLowerCase()} ${e.tags}`;
+      const at = words.indexOf(q);
       if (at < 0) continue;
-      if (at === 0 || e.words[at - 1] === ' ') {
+      if (at === 0 || words[at - 1] === ' ') {
         starts.push(e);
         if (starts.length >= max) return starts;
       } else contains.push(e);

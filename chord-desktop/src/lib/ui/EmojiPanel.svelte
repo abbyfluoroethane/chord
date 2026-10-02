@@ -104,7 +104,7 @@
   // "Frequently used": the emoji that the user reacts with and types most.
   const frequent = $derived.by((): EmojiEntry[] =>
     topReactions(app.reactionUse, 16).map(
-      (emoji) => emojiEntry(emoji) ?? { emoji, label: emoji, words: '', skins: null }
+      (emoji) => emojiEntry(emoji) ?? { emoji, label: emoji, tags: '', skins: null }
     )
   );
   // The search text that the list uses. It trails the input by a short time, so that fast
