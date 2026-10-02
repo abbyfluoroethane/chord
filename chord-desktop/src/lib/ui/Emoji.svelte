@@ -1,3 +1,11 @@
+<script lang="ts" module>
+  // The images that failed to load, as "pack:emoji". All emoji share this one set, so an
+  // emoji has no state or effect of its own. A failure is rare, so one counter is enough
+  // to make every emoji check the set again.
+  const failed = new Set<string>();
+  let failures = $state(0);
+</script>
+
 <script lang="ts">
   // One emoji in the chosen pack. An emoji that the pack lacks falls back to Twemoji,
   // then to the system font. The alt text keeps copy, search and screen readers right.
@@ -8,28 +16,35 @@
   /** `pack` draws in one pack, for example a sample in the settings. */
   let { emoji, pack }: { emoji: string; pack?: EmojiPackId } = $props();
 
-  // 0: the chosen pack, 1: Twemoji, 2: the system font.
-  let step = $state(0);
-  $effect(() => {
-    void emoji;
-    void emojiPacks.active;
-    void pack;
-    step = 0;
+  // The pack that draws now, then Twemoji, then null: the system font.
+  const draw = $derived.by((): { src: string; key: string } | null => {
+    void failures;
+    const chosen = pack ?? emojiPacks.active;
+    for (const id of chosen === 'twemoji' ? [chosen] : [chosen, 'twemoji' as const]) {
+      const key = `${id}:${emoji}`;
+      if (failed.has(key)) continue;
+      const src = emojiPacks.url(emoji, id);
+      if (src) return { src, key };
+    }
+    return null;
   });
-  const src = $derived(
-    step === 0 ? emojiPacks.url(emoji, pack ?? emojiPacks.active) : step === 1 ? emojiPacks.url(emoji, 'twemoji') : null
-  );
+
+  function fail() {
+    if (!draw) return;
+    failed.add(draw.key);
+    failures += 1;
+  }
 </script>
 
-{#if src}<img
+{#if draw}<img
     class="emoji"
-    {src}
+    src={draw.src}
     alt={emoji}
     draggable="false"
     decoding="async"
-    onerror={() => (step += 1)}
+    onerror={fail}
     onload={(e) => {
-      if (!(e.currentTarget as HTMLImageElement).naturalWidth) step += 1;
+      if (!(e.currentTarget as HTMLImageElement).naturalWidth) fail();
     }}
   />{:else}{emoji}{/if}
 
