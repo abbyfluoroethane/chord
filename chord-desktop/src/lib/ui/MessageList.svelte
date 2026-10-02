@@ -176,7 +176,7 @@
       <div class="welcome">
         {#if app.channel.kind === 'dm'}
           <h2>{app.channel.name}</h2>
-          <p>This is the start of your direct messages with {app.channel.name}.</p>
+          <p>This is the start of your messages with {app.channel.name}.</p>
         {:else if isGroup(app.channel)}
           <h2>{app.channel.name}</h2>
           <p>Welcome to the beginning of the {app.channel.name} group.</p>

@@ -25,7 +25,7 @@ export function switcherTargets(): Target[] {
     ...app.channels.map((c) => ({
       id: `c:${c.jid}`,
       label: c.name,
-      hint: c.kind === 'dm' ? 'Direct message' : (app.spaceOf(c.space ?? '')?.name ?? ''),
+      hint: c.kind === 'dm' ? 'Message' : (app.spaceOf(c.space ?? '')?.name ?? ''),
       kind: c.kind === 'dm' ? ('dm' as const) : ('channel' as const),
       jid: c.jid
     }))

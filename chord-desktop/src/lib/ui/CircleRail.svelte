@@ -92,7 +92,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <nav class="rail" aria-label="Spaces" ondragover={(e) => dragId && e.preventDefault()} ondrop={dropOnRail}>
   <RailItem
-    name="Home and direct messages"
+    name="Home and messages"
     variant="home"
     selected={app.selectedSpace === HOME}
     unread={home.unread}

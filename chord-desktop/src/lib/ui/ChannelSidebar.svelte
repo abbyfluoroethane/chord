@@ -23,7 +23,7 @@
   );
 </script>
 
-<aside class="sidebar" aria-label={isHome ? 'Direct messages' : 'Channels'}>
+<aside class="sidebar" aria-label={isHome ? 'Messages' : 'Channels'}>
   {#if isHome}
     <button class="header find" onclick={() => (ui.switcherOpen = true)}>
       <Icon icon={Search} size={16} />
@@ -37,7 +37,7 @@
   <div class="scroll">
     {#if isHome}<ContactsRow />{/if}
     <div class="group">
-      <span class="label">{isHome ? 'Direct messages' : 'Channels'}</span>
+      <span class="label">{isHome ? 'Messages' : 'Channels'}</span>
       {#if !isHome}
         <button
           class="add"
