@@ -67,6 +67,6 @@
     line-height: 20px;
     font-weight: 500;
     white-space: nowrap;
-    animation: arrive var(--dur-fast) var(--ease-out);
+    animation: pop var(--dur-fast) var(--ease-out);
   }
 </style>

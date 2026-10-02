@@ -75,9 +75,6 @@
     font-size: 15px;
     overflow: hidden;
     transition:
-      border-width var(--dur-fast) var(--ease-out),
-      width var(--dur-fast) var(--ease-out),
-      height var(--dur-fast) var(--ease-out),
       border-radius var(--dur-fast) var(--ease-out),
       border-color var(--dur-fast),
       background var(--dur-fast),
@@ -126,20 +123,20 @@
     left: 0;
     top: 50%;
     width: 4px;
-    height: 0;
-    transform: translateY(-50%);
+    height: 36px;
+    transform: translateY(-50%) scaleY(0);
     border-radius: 0 2px 2px 0;
     background: var(--ink);
-    transition: height var(--dur-fast) var(--ease-out);
+    transition: transform var(--dur-fast) var(--ease-out);
   }
   .pill.unread {
-    height: 8px;
+    transform: translateY(-50%) scaleY(0.22);
   }
   .slot:hover .pill:not(.selected) {
-    height: 20px;
+    transform: translateY(-50%) scaleY(0.56);
   }
   .pill.selected {
-    height: 36px;
+    transform: translateY(-50%) scaleY(1);
   }
 
   .badge {

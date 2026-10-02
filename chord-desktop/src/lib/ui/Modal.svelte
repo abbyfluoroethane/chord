@@ -72,7 +72,7 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
     max-height: min(660px, calc(100vh - 64px));
-    animation: arrive var(--dur-arrive) var(--ease-out);
+    animation: pop var(--dur-arrive) var(--ease-out);
   }
   dialog[open] {
     display: flex;

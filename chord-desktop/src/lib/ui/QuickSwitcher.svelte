@@ -159,7 +159,7 @@
     background: var(--surface-200);
     border: 1px solid var(--line);
     border-radius: var(--radius-lg);
-    animation: arrive var(--dur-arrive) var(--ease-out);
+    animation: pop var(--dur-arrive) var(--ease-out);
   }
   dialog::backdrop {
     background: var(--scrim);

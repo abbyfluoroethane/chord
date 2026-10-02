@@ -144,9 +144,7 @@
     border-radius: var(--radius-md);
     background: var(--surface-300);
     color: var(--ink-muted);
-    transition:
-      width var(--dur-arrive) var(--ease-out),
-      border-color var(--dur-fast);
+    transition: border-color var(--dur-fast);
   }
   .search:focus-within {
     width: 240px;

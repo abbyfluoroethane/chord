@@ -117,7 +117,7 @@
     background: var(--surface-300);
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
-    animation: arrive var(--dur-arrive) var(--ease-out);
+    animation: pop var(--dur-arrive) var(--ease-out);
   }
   .fill {
     min-width: 0;

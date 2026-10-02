@@ -31,6 +31,6 @@
     border-radius: var(--radius-md);
     font-size: 14px;
     font-weight: 500;
-    animation: arrive var(--dur-arrive) var(--ease-out);
+    animation: pop var(--dur-arrive) var(--ease-out);
   }
 </style>

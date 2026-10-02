@@ -12,5 +12,5 @@
   line-height: 16px;
   font-weight: 500;
   pointer-events: none;
-  animation: arrive var(--dur-fast) var(--ease-out);
+  animation: pop var(--dur-fast) var(--ease-out);
 }

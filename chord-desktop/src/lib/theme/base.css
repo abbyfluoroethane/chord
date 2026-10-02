@@ -190,6 +190,14 @@ textarea:focus-visible {
   }
 }
 
+/* The enter motion of a popover, menu, modal, tooltip and toast. */
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

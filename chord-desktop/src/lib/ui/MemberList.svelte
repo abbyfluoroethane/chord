@@ -26,7 +26,6 @@
     padding-bottom: var(--space-4);
     background: var(--surface-side);
     border-left: 1px solid var(--line-strong);
-    animation: arrive var(--dur-arrive) var(--ease-out);
   }
   .group {
     margin: 0;

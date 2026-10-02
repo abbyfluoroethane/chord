@@ -63,9 +63,7 @@
     background: var(--hover);
     font-size: 20px;
     line-height: 1;
-    transition:
-      background var(--dur-fast),
-      box-shadow var(--dur-fast);
+    transition: background var(--dur-fast);
   }
   .tile:hover,
   .tile:focus-visible {
