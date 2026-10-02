@@ -3,10 +3,12 @@
   // GIF as a link with an embed (XEP-0066). KLIPY asks for "Search KLIPY" in the field
   // and "Powered by KLIPY" on the panel.
   import { onMount } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import type { Gif } from '$lib/chord';
   import * as fx from '$lib/fixtures/data';
   import { plainError } from './adapt';
   import { api, live } from './bridge';
+  import { mergePage, splitColumns } from './gif-layout';
 
   let { onpick }: { onpick: (gif: Gif) => void } = $props();
 
@@ -23,6 +25,14 @@
   // Only the answer to the newest request counts.
   let request = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // The slugs of the tiles that are on screen or near it. Only these tiles hold an image.
+  // A GIF that is far off screen has no image, so it does not decode and does not animate.
+  const near = new SvelteSet<string>();
+  const watching = new Map<Element, string>();
+  let seen: IntersectionObserver | undefined;
+  let far: IntersectionObserver | undefined;
+  let more: IntersectionObserver | undefined;
+  let end = $state<HTMLDivElement>();
 
   /**
    * The preview has no API key. It searches a snapshot of real KLIPY results if the
@@ -57,7 +67,7 @@
     try {
       const result = await fetchPage(query, n);
       if (id !== request) return;
-      items = reset ? result.items : [...items, ...result.items];
+      items = mergePage(reset ? [] : items, result.items);
       page = n;
       hasNext = result.hasNext;
       if (reset && scroller) scroller.scrollTop = 0;
@@ -81,30 +91,83 @@
     timer = setTimeout(() => void load(true), DEBOUNCE_MS);
   }
 
-  // Load the next page when the end of the list comes near.
-  function scrolled() {
-    if (!scroller || loading || !hasNext || error) return;
-    if (scroller.scrollTop + scroller.clientHeight > scroller.scrollHeight - 300) void load(false);
-  }
-
   onMount(() => {
+    // Both observers use the scroll box as the root. They replace a scroll handler, so
+    // a scroll does no work in script.
+    seen = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const slug = watching.get(e.target);
+          if (slug === undefined) continue;
+          if (e.isIntersecting) near.add(slug);
+        }
+      },
+      { root: scroller, rootMargin: '300px 0px' }
+    );
+    // A tile gives up its image only when it is far away. This stops a reload when the
+    // user scrolls back and forth.
+    far = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const slug = watching.get(e.target);
+          if (slug !== undefined && !e.isIntersecting) near.delete(slug);
+        }
+      },
+      { root: scroller, rootMargin: '1500px 0px' }
+    );
+    more = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) nextPage();
+      },
+      { root: scroller, rootMargin: '0px 0px 300px 0px' }
+    );
+    for (const el of watching.keys()) {
+      seen.observe(el);
+      far.observe(el);
+    }
     void load(true);
     search?.focus();
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      seen?.disconnect();
+      far?.disconnect();
+      more?.disconnect();
+    };
   });
 
-  // Two columns of about the same height: each GIF goes to the shorter one.
-  const columns = $derived.by(() => {
-    const cols: Gif[][] = [[], []];
-    const heights = [0, 0];
-    for (const g of items) {
-      const h = g.preview.width > 0 ? g.preview.height / g.preview.width : 1;
-      const i = heights[0] <= heights[1] ? 0 : 1;
-      cols[i].push(g);
-      heights[i] += h;
-    }
-    return cols;
+  // Load the next page when the end of the list comes near.
+  function nextPage() {
+    if (!loading && hasNext && !error) void load(false);
+  }
+
+  // Watch the end marker. The observer reports again when the page state changes, so a
+  // page that leaves the marker on screen loads the next one.
+  $effect(() => {
+    void items.length;
+    void loading;
+    if (!end || !more) return;
+    const marker = end;
+    const watcher = more;
+    watcher.observe(marker);
+    return () => watcher.unobserve(marker);
   });
+
+  /** Tell the panel when a tile comes near the screen and when it leaves. */
+  function track(node: HTMLElement, slug: string) {
+    watching.set(node, slug);
+    seen?.observe(node);
+    far?.observe(node);
+    return {
+      destroy() {
+        watching.delete(node);
+        seen?.unobserve(node);
+        far?.unobserve(node);
+        near.delete(slug);
+      }
+    };
+  }
+
+  const columns = $derived(splitColumns(items));
 
   function searchKey(e: KeyboardEvent) {
     if (e.key === 'ArrowDown') {
@@ -130,7 +193,7 @@
     />
   </div>
 
-  <div class="scroll" bind:this={scroller} onscroll={scrolled}>
+  <div class="scroll" bind:this={scroller}>
     <h3>{query.trim() ? 'Results' : 'Trending'}</h3>
     {#if error}
       <div class="state">
@@ -150,15 +213,19 @@
                 class="tile"
                 style:aspect-ratio="{g.preview.width || 1} / {g.preview.height || 1}"
                 aria-label={g.title || 'GIF'}
+                use:track={g.slug}
                 onclick={() => onpick(g)}
               >
-                <img src={g.preview.url} alt="" loading="lazy" decoding="async" />
+                {#if near.has(g.slug)}
+                  <img src={g.preview.url} alt="" decoding="async" draggable="false" />
+                {/if}
               </button>
             {/each}
           </div>
         {/each}
       </div>
     {/if}
+    <div class="end" bind:this={end}></div>
     {#if loading}
       <div class="state"><span class="ring" aria-label="Loading GIFs"></span></div>
     {/if}
@@ -221,6 +288,9 @@
     background: var(--surface-200);
     cursor: pointer;
     transition: border-color var(--dur-fast) var(--ease-out);
+  }
+  .end {
+    height: 1px;
   }
   .tile:hover {
     border-color: var(--ink-muted);
