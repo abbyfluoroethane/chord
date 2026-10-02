@@ -71,7 +71,7 @@
   });
 
   function keydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.isComposing) {
       e.preventDefault();
       app.setStatus(joinStatus(emoji, text));
       onclose();
@@ -144,7 +144,7 @@
         onkeydown={keydown}
       ></textarea>
       {#if app.me.status || emoji}
-        <button type="button" class="clear" aria-label="Clear status" onclick={clear}>
+        <button type="button" class="clear" aria-label="Clear status" title="Clear status" onclick={clear}>
           <Icon icon={X} size={16} />
         </button>
       {/if}

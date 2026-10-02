@@ -323,11 +323,21 @@
               <span class="mono">{m.jid}</span>
               <span class="hint">{affiliationLabel[m.affiliation] ?? m.affiliation}</span>
               {#if m.affiliation !== 'owner'}
-                <button type="button" class="btn btn-ghost" onclick={() => void affiliate(m.jid, false)}>
+                <button
+                  type="button"
+                  class="btn btn-ghost"
+                  aria-label="{m.affiliation === 'outcast' ? 'Unban' : 'Remove'} {m.jid}"
+                  onclick={() => void affiliate(m.jid, false)}
+                >
                   {m.affiliation === 'outcast' ? 'Unban' : 'Remove'}
                 </button>
                 {#if m.affiliation !== 'outcast'}
-                  <button type="button" class="btn btn-ghost" onclick={() => void affiliate(m.jid, true)}>Ban</button>
+                  <button
+                    type="button"
+                    class="btn btn-ghost"
+                    aria-label="Ban {m.jid}"
+                    onclick={() => void affiliate(m.jid, true)}>Ban</button
+                  >
                 {/if}
               {/if}
             </div>
@@ -341,8 +351,18 @@
           {#each requests as r (r.jid)}
             <div class="req">
               <span class="mono">{r.jid}</span>
-              <button type="button" class="btn" onclick={() => void answer(r.jid, true)}>Approve</button>
-              <button type="button" class="btn btn-ghost" onclick={() => void answer(r.jid, false)}>Deny</button>
+              <button
+                type="button"
+                class="btn"
+                aria-label="Approve {r.jid}"
+                onclick={() => void answer(r.jid, true)}>Approve</button
+              >
+              <button
+                type="button"
+                class="btn btn-ghost"
+                aria-label="Deny {r.jid}"
+                onclick={() => void answer(r.jid, false)}>Deny</button
+              >
             </div>
           {/each}
           {#if requestsNote}<span class="hint">{requestsNote}</span>{/if}
@@ -357,6 +377,7 @@
               <button
                 type="button"
                 class="btn btn-ghost"
+                aria-label="Remove #{c.name} from space"
                 onclick={() => void app.removeChannelFromCircle(space, c.jid)}
               >
                 Remove from space
@@ -389,6 +410,7 @@
         class:btn-primary={kind !== 'leave'}
         type="submit"
         form="circle-dialog"
+        disabled={busy || ((kind === 'create-channel' || kind === 'nickname') && !text.trim())}
       >
         {kind === 'leave' ? 'Leave space' : kind === 'create-channel' ? 'Create channel' : 'Save'}
       </button>

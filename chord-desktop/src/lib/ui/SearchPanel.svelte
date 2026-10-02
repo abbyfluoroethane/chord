@@ -76,10 +76,35 @@
     })
   );
 
+  const rows = () => [...(root?.querySelectorAll<HTMLElement>('.hit') ?? [])];
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       close();
       (e.target as HTMLElement).blur();
+    } else if (e.key === 'ArrowDown' && open) {
+      e.preventDefault();
+      rows()[0]?.focus();
+    } else if (e.key === 'Enter' && open && searched === trimmed && hits[0]) {
+      // Enter takes the first hit, so the keyboard needs no arrow keys.
+      e.preventDefault();
+      pick(hits[0]);
+    }
+  }
+  // The arrow keys move through the hits. Esc goes back to the field.
+  function onpanelkey(e: KeyboardEvent) {
+    const list = rows();
+    const i = list.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      list[Math.min(i + 1, list.length - 1)]?.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (i <= 0) input?.focus();
+      else list[i - 1].focus();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      input?.focus();
+      open = false;
     }
   }
 
@@ -105,7 +130,8 @@
     />
   </label>
   {#if open && trimmed}
-    <div class="panel" role="listbox" aria-label="Search results">
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <div class="panel" role="listbox" aria-label="Search results" onkeydown={onpanelkey}>
       {#if searched !== trimmed}
         <p class="note">Searching…</p>
       {:else if hits.length === 0}
