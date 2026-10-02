@@ -26,6 +26,7 @@
     {src}
     alt={emoji}
     draggable="false"
+    decoding="async"
     onerror={() => (step += 1)}
     onload={(e) => {
       if (!(e.currentTarget as HTMLImageElement).naturalWidth) step += 1;

@@ -1,6 +1,7 @@
 <script lang="ts">
   // The emoji panel: search, skin tone, a category rail, and every emoji in groups
   // (Emojibase 17). The reaction picker and the composer picker use it.
+  // The list is virtual: about 1900 emoji need only the rows near the view in the DOM.
   import { onMount, tick } from 'svelte';
   import Apple from 'lucide-svelte/icons/apple';
   import Clock from 'lucide-svelte/icons/clock';
@@ -17,6 +18,8 @@
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
   import {
+    emojiEntry,
+    emojiNow,
     loadEmoji,
     searchEmoji,
     withTone,
@@ -29,6 +32,20 @@
     $props();
 
   const COLUMNS = 8;
+  // Row heights in px. They match the styles below: the virtual list needs fixed rows.
+  const HEAD_H = 28;
+  const CELL_H = 40;
+  const NONE_H = 40;
+  // How far past the view to render, so that a fast scroll shows no blank rows.
+  const OVERSCAN = 400;
+  // The most rows to keep in the DOM, 60 rows are 480 emoji. A longer span starts again.
+  const MAX_ROWS = 60;
+
+  type Row =
+    | { key: string; top: number; height: number; kind: 'head'; id: string; label: string }
+    | { key: string; top: number; height: number; kind: 'none' }
+    | { key: string; top: number; height: number; kind: 'cells'; items: EmojiEntry[] };
+  type RowInit = Row extends infer R ? (R extends Row ? Omit<R, 'top'> : never) : never;
   const TONE_KEY = 'chord.skinTone';
   const ICONS: Record<string, ComponentType> = {
     frequent: Clock,
@@ -44,7 +61,8 @@
   };
   const TONES = ['✋', '✋🏻', '✋🏼', '✋🏽', '✋🏾', '✋🏿'];
 
-  let groups = $state<EmojiGroup[]>([]);
+  // The data loads in idle time after the start, so it is ready on most opens.
+  let groups = $state<EmojiGroup[]>(emojiNow() ?? []);
   let query = $state('');
   let tone = $state(readTone());
   let choosingTone = $state(false);
@@ -52,6 +70,8 @@
   let active = $state('frequent');
   let scroller = $state<HTMLDivElement>();
   let search = $state<HTMLInputElement>();
+  let scrollTop = $state(0);
+  let viewHeight = $state(320);
 
   function readTone(): number {
     try {
@@ -74,21 +94,82 @@
   }
 
   onMount(() => {
-    void loadEmoji().then((g) => (groups = g));
-    search?.focus();
+    if (!groups.length) void loadEmoji().then((g) => (groups = g));
+    // Without scroll: the picker is near the edge of the window and the focus must not move it.
+    search?.focus({ preventScroll: true });
+    viewHeight = scroller?.clientHeight || viewHeight;
+    return () => clearTimeout(termTimer);
   });
 
   // "Frequently used": the emoji that the user reacts with and types most.
-  const frequent = $derived.by((): EmojiEntry[] => {
-    const all = new Map(groups.flatMap((g) => g.emoji.map((e) => [e.emoji, e] as const)));
-    return topReactions(app.reactionUse, 16)
-      .map((emoji) => all.get(emoji) ?? { emoji, label: emoji, words: '', skins: null });
-  });
+  const frequent = $derived.by((): EmojiEntry[] =>
+    topReactions(app.reactionUse, 16).map(
+      (emoji) => emojiEntry(emoji) ?? { emoji, label: emoji, words: '', skins: null }
+    )
+  );
+  // The search text that the list uses. It trails the input by a short time, so that fast
+  // typing draws the emoji of the last key only.
+  let term = $state('');
+  let termTimer: ReturnType<typeof setTimeout> | undefined;
   const sections = $derived(
-    query.trim()
-      ? [{ id: 'results', label: 'Search results', emoji: searchEmoji(groups, query) }]
+    term.trim()
+      ? [{ id: 'results', label: 'Search results', emoji: searchEmoji(groups, term) }]
       : [{ id: 'frequent', label: 'Frequently used', emoji: frequent }, ...groups]
   );
+
+  // Flat rows with fixed heights: a title, then the emoji in rows of 8.
+  const layout = $derived.by(() => {
+    const rows: Row[] = [];
+    const tops: Record<string, number> = {};
+    let top = 0;
+    const add = (r: RowInit) => {
+      rows.push({ ...r, top } as Row);
+      top += r.height;
+    };
+    for (const s of sections) {
+      tops[s.id] = top;
+      add({ key: `h:${s.id}`, height: HEAD_H, kind: 'head', id: s.id, label: s.label });
+      if (s.emoji.length === 0) add({ key: `n:${s.id}`, height: NONE_H, kind: 'none' });
+      for (let i = 0; i < s.emoji.length; i += COLUMNS) {
+        add({
+          key: `r:${s.id}:${i}`,
+          height: CELL_H,
+          kind: 'cells',
+          items: s.emoji.slice(i, i + COLUMNS)
+        });
+      }
+    }
+    return { rows, tops, height: top };
+  });
+
+  // The rows in or near the view. A binary search finds the first one. A row that showed
+  // once stays in the DOM until the list changes or the view jumps, so that a scroll
+  // back costs nothing. Making an emoji image is the slow part, not drawing it.
+  let shown: { rows: Row[]; from: number; to: number } = { rows: [], from: 0, to: -1 };
+  function windowOf(): [number, number] {
+    const { rows } = layout;
+    const from = scrollTop - OVERSCAN;
+    const to = scrollTop + viewHeight + OVERSCAN;
+    let lo = 0;
+    let hi = rows.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid].top + rows[mid].height < from) lo = mid + 1;
+      else hi = mid;
+    }
+    let end = lo;
+    while (end < rows.length && rows[end].top <= to) end++;
+    return [lo, end];
+  }
+  const visible = $derived.by(() => {
+    const { rows } = layout;
+    const [lo, end] = windowOf();
+    // A jump far away starts a new span: rows in between must not mount.
+    if (shown.rows !== rows || shown.to < shown.from || end < shown.from || lo > shown.to || shown.to - shown.from > MAX_ROWS) {
+      shown = { rows, from: lo, to: end };
+    } else shown = { rows, from: Math.min(shown.from, lo), to: Math.max(shown.to, end) };
+    return rows.slice(shown.from, shown.to);
+  });
 
   function pick(e: EmojiEntry) {
     const emoji = withTone(e, tone);
@@ -98,21 +179,38 @@
 
   async function jump(id: string) {
     query = '';
+    settle();
     await tick();
-    const target = scroller?.querySelector<HTMLElement>(`[data-section="${id}"]`);
-    if (scroller && target) scroller.scrollTop = target.offsetTop - scroller.offsetTop;
+    if (!scroller) return;
+    scroller.scrollTop = layout.tops[id] ?? 0;
+    scrollTop = scroller.scrollTop;
     active = id;
   }
 
   // The rail follows the scroll: the active group is the last one whose top passed.
   function scrolled() {
-    if (!scroller || query) return;
-    const top = scroller.scrollTop + scroller.offsetTop + 8;
+    if (!scroller) return;
+    scrollTop = scroller.scrollTop;
+    if (term) return;
     let current = 'frequent';
-    for (const el of scroller.querySelectorAll<HTMLElement>('[data-section]')) {
-      if (el.offsetTop <= top) current = el.dataset.section ?? current;
+    for (const [id, top] of Object.entries(layout.tops)) {
+      if (top <= scrollTop + 8) current = id;
     }
     active = current;
+  }
+
+  function onsearch() {
+    clearTimeout(termTimer);
+    // Clearing the text is at once. Typing waits 70ms for the next key.
+    if (!query.trim()) settle();
+    else termTimer = setTimeout(settle, 70);
+  }
+
+  function settle() {
+    clearTimeout(termTimer);
+    term = query;
+    if (scroller) scroller.scrollTop = 0;
+    scrollTop = 0;
   }
 
   function cells(): HTMLButtonElement[] {
@@ -143,8 +241,9 @@
       cells()[0]?.focus();
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      settle();
       const first = sections[0]?.emoji[0];
-      if (query.trim() && first) pick(first);
+      if (term.trim() && first) pick(first);
     }
   }
 </script>
@@ -160,6 +259,7 @@
       aria-label="Find an emoji"
       autocomplete="off"
       spellcheck="false"
+      oninput={onsearch}
       onkeydown={searchKey}
     />
     <div class="tone">
@@ -189,9 +289,9 @@
     <nav class="rail" aria-label="Emoji groups">
       {#each ['frequent', ...groups.map((g) => g.id)] as id (id)}
         <button
-          class:on={active === id && !query}
+          class:on={active === id && !term}
           aria-label={id === 'frequent' ? 'Frequently used' : groups.find((g) => g.id === id)?.label}
-          aria-current={active === id && !query ? 'true' : undefined}
+          aria-current={active === id && !term ? 'true' : undefined}
           onclick={() => jump(id)}
         >
           <Icon icon={ICONS[id]} size={18} />
@@ -204,14 +304,17 @@
       {#if groups.length === 0}
         <div class="loading" aria-label="Loading the emoji"><span class="ring"></span></div>
       {:else}
-        {#each sections as s (s.id)}
-          <section data-section={s.id} aria-label={s.label}>
-            <h3>{s.label}</h3>
-            {#if s.emoji.length === 0}
-              <p class="none">No emoji found.</p>
+        <div class="rows" style:height="{layout.height}px">
+          {#each visible as r (r.key)}
+            {#if r.kind === 'head'}
+              <h3 class="row" style:transform="translateY({r.top}px)" data-section={r.id}>
+                {r.label}
+              </h3>
+            {:else if r.kind === 'none'}
+              <p class="row none" style:transform="translateY({r.top}px)">No emoji found.</p>
             {:else}
-              <div class="grid">
-                {#each s.emoji as e (e.emoji)}
+              <div class="row grid" style:transform="translateY({r.top}px)" role="group">
+                {#each r.items as e (e.emoji)}
                   <button
                     class="cell"
                     aria-label={e.label}
@@ -223,8 +326,8 @@
                 {/each}
               </div>
             {/if}
-          </section>
-        {/each}
+          {/each}
+        </div>
       {/if}
     </div>
   </div>
@@ -341,18 +444,23 @@
     overflow-y: auto;
     padding: 0 var(--space-2) var(--space-2);
   }
-  section {
-    /* Offscreen groups skip layout and paint until they scroll near. */
+  .rows {
+    position: relative;
+  }
+  .row {
+    /* A row that is off the screen skips layout and paint. */
     content-visibility: auto;
-    contain-intrinsic-size: auto 400px;
+    contain-intrinsic-size: auto 40px;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    box-sizing: border-box;
   }
   h3 {
-    position: sticky;
-    top: 0;
-    z-index: 1;
     margin: 0;
+    height: 28px;
     padding: var(--space-2) var(--space-1) var(--space-1);
-    background: var(--surface-300);
     color: var(--ink-muted);
     font-size: 12px;
     font-weight: 500;
@@ -381,7 +489,9 @@
     outline-offset: -2px;
   }
   .none {
-    margin: var(--space-2) var(--space-1);
+    margin: 0;
+    height: 40px;
+    padding: var(--space-2) var(--space-1);
     color: var(--ink-muted);
   }
   .loading {

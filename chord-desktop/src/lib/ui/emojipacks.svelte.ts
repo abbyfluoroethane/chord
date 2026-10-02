@@ -4,6 +4,7 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { plainError } from './adapt';
 import { api, live } from './bridge';
+import { preloadEmoji } from './emojidata';
 import type { EmojiPackId } from './emojipackids';
 import { prefs } from './prefs.svelte';
 import { ui } from './ui.svelte';
@@ -108,5 +109,8 @@ class EmojiPacks {
 }
 
 export const emojiPacks = new EmojiPacks();
+
+// Parse the emoji data for the picker in idle time, so that the picker opens with no wait.
+preloadEmoji();
 
 export { splitEmoji, type EmojiPart } from './emojisplit';
