@@ -46,7 +46,7 @@
 
 <span class="avatar" style:width="{size}px" style:height="{size}px">
   {#if shown && failed !== shown}
-    <img src={shown} alt="" onerror={onError} />
+    <img src={shown} alt="" loading="lazy" decoding="async" onerror={onError} />
   {:else}
     <span class="fallback" style:background={tint(name)} style:font-size="{Math.round(size * 0.4)}px">
       {#if icon}<Icon {icon} size={Math.round(size * 0.55)} />{:else}{initials(name)}{/if}

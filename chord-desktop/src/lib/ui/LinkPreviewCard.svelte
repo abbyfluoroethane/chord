@@ -37,7 +37,7 @@
       onfocus={preloadLightbox}
       aria-label="View image"
     >
-      <img src={image} alt="" loading="lazy" onerror={() => (broken = true)} />
+      <img src={image} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
     </button>
   {/if}
 {:else}
@@ -51,11 +51,11 @@
       {/if}
       {#if preview.description}<p class="desc">{preview.description}</p>{/if}
       {#if large && image}
-        <img class="large" src={image} alt="" loading="lazy" onerror={() => (broken = true)} />
+        <img class="large" src={image} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
       {/if}
     </div>
     {#if thumb && image}
-      <img class="small" src={image} alt="" loading="lazy" onerror={() => (broken = true)} />
+      <img class="small" src={image} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
     {/if}
   </div>
 {/if}
