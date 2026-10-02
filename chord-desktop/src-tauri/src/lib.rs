@@ -23,6 +23,7 @@ mod pins;
 mod settings;
 mod state;
 mod theme_fetch;
+mod thumb;
 
 /// The worker threads of the async runtime. The work is network and database waits, so a
 /// few threads are enough. Tokio starts one thread per core by default, and each thread

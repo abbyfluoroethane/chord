@@ -26,6 +26,8 @@ const MAX_REDIRECTS: usize = 3;
 const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 /// The largest preview image that `link_image` sends to the page: 8 MB.
 const MAX_PREVIEW_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// The longest side of a preview image, in pixels.
+const MAX_PREVIEW_IMAGE_SIDE: u32 = 800;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_DESCRIPTION_CHARS: usize = 400;
 const CACHE_ENTRIES: usize = 256;
@@ -501,6 +503,16 @@ fn data_url(mime: &str, bytes: &[u8]) -> Option<String> {
 #[tauri::command]
 pub async fn link_image(url: String) -> Res<String> {
     let (bytes, mime) = download_capped(&url, MAX_PREVIEW_IMAGE_BYTES).await?;
+    // The page shows a small picture. Shrink a big one, so the webview decodes fewer pixels
+    // and the page keeps a shorter string. The decode runs off the async threads.
+    let (bytes, mime) = tauri::async_runtime::spawn_blocking(move || {
+        match crate::thumb::shrink(&bytes, MAX_PREVIEW_IMAGE_SIDE) {
+            Some(small) => (small.bytes, small.mime.to_owned()),
+            None => (bytes, mime),
+        }
+    })
+    .await
+    .map_err(|e| ChordError::io("the image task failed", e))?;
     data_url(&mime, &bytes).ok_or_else(|| ChordError::invalid("the image type is not supported"))
 }
 

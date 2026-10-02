@@ -22,6 +22,11 @@ use crate::state::{AppState, lock};
 
 pub const SCHEME: &str = "chord-avatar";
 
+/// The longest side of a served avatar, in pixels. The page shows an avatar at 128 pixels
+/// or less, so 256 stays sharp on a high-density screen. A bigger image is shrunk, and the
+/// webview then decodes fewer pixels.
+const MAX_AVATAR_SIDE: u32 = 256;
+
 /// An avatar image and its type.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Image {
@@ -79,6 +84,10 @@ pub fn respond(store: &Mutex<(Store, i64)>, path: &str) -> Response<Vec<u8>> {
     let Some(mime) = avatars::sniff_mime(&image.data) else {
         return status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     };
+    let (mime, data) = match crate::thumb::shrink(&image.data, MAX_AVATAR_SIDE) {
+        Some(small) => (small.mime, small.bytes),
+        None => (mime, image.data),
+    };
     let cache = if image.immutable {
         "max-age=31536000, immutable"
     } else {
@@ -94,7 +103,7 @@ pub fn respond(store: &Mutex<(Store, i64)>, path: &str) -> Response<Vec<u8>> {
         // The profile card reads the pixels for its banner colour. A canvas can do that
         // only for an image with CORS.
         .header("Access-Control-Allow-Origin", "*")
-        .body(image.data)
+        .body(data)
         .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
@@ -245,5 +254,26 @@ mod tests {
         let store = Mutex::new((store, id));
         let response = respond(&store, "/a%40example.org");
         assert_eq!(response.headers()[header::CONTENT_TYPE], "image/jpeg");
+    }
+
+    #[test]
+    fn a_big_avatar_is_served_smaller() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        let mut seed = 7u32;
+        image::RgbaImage::from_fn(512, 512, |_, _| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let b = seed.to_be_bytes();
+            image::Rgba([b[0], b[1], b[2], 255])
+        })
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+        let png = png.into_inner();
+        let (store, id) = store_with(&[("a@example.org", HASH, Some("image/png"), Some(&png))]);
+        let store = Mutex::new((store, id));
+        let response = respond(&store, "/a%40example.org");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.body().len() < png.len());
+        let small = image::load_from_memory(response.body()).unwrap();
+        assert_eq!((small.width(), small.height()), (256, 256));
     }
 }
