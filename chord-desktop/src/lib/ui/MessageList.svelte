@@ -8,6 +8,7 @@
   import { live } from './bridge';
   import { clock, dayLabel, sameDay } from './format';
   import { newLineSeen, shouldReadAtBottom } from './readstate';
+  import { messagesBelow, showOlderBar } from './olderbar';
   import { jumping, jumpTo } from './jump';
   import { JUMP_EVENT } from './search';
   import { isGroup, type TimelineItem } from './types';
@@ -20,6 +21,29 @@
   let scroller = $state<HTMLDivElement>();
   let content = $state<HTMLDivElement>();
   let atBottom = $state(true);
+  // The bar "You are viewing older messages" has its own state. It shows only when the
+  // reader is far from the present. It does not change the follow logic of `atBottom`.
+  let farFromPresent = $state(false);
+
+  // The derived list below runs again for each new message. A row that did not change keeps
+  // its old object. The each block then does no work for it, and the message below does not
+  // parse and draw its text again.
+  let rowCache = new Map<string, Row>();
+  function reuse(row: Row): Row {
+    const old = rowCache.get(row.key);
+    if (old && old.kind === row.kind) {
+      if (row.kind === 'day' && old.kind === 'day' && old.label === row.label) return old;
+      if (row.kind === 'new') return old;
+      if (
+        row.kind === 'msg' &&
+        old.kind === 'msg' &&
+        old.item === row.item &&
+        old.grouped === row.grouped
+      )
+        return old;
+    }
+    return row;
+  }
 
   const rows = $derived.by<Row[]>(() => {
     const out: Row[] = [];
@@ -27,23 +51,30 @@
     for (const item of app.items) {
       let broke = false;
       if (!prev || !sameDay(prev.timestamp, item.timestamp)) {
-        out.push({ kind: 'day', key: `day-${item.id}`, label: dayLabel(item.timestamp) });
+        out.push(reuse({ kind: 'day', key: `day-${item.id}`, label: dayLabel(item.timestamp) }));
         broke = true;
       }
       if (item.id === app.dividerId) {
-        out.push({ kind: 'new', key: `new-${item.id}` });
+        out.push(reuse({ kind: 'new', key: `new-${item.id}` }));
         broke = true;
       }
-      out.push({
-        kind: 'msg',
-        key: item.id,
-        item,
-        grouped: !broke && item.sameSenderAsPrevious && !item.replyTo
-      });
+      out.push(
+        reuse({
+          kind: 'msg',
+          key: item.id,
+          item,
+          grouped: !broke && item.sameSenderAsPrevious && !item.replyTo
+        })
+      );
       prev = item;
     }
+    rowCache = new Map(out.map((r) => [r.key, r]));
     return out;
   });
+
+  // Only the last own message can change. One value for all rows: a row does not scan the
+  // list by itself.
+  const editableId = $derived(app.lastOwn()?.id ?? null);
 
   const newCount = $derived.by(() => {
     if (!app.dividerId) return 0;
@@ -65,9 +96,30 @@
     return el.scrollHeight - el.scrollTop - el.clientHeight;
   }
 
+  // Count the messages below the view. One frame at most does this work for many scroll
+  // events. The binary search reads only a few positions.
+  let farFrame = 0;
+  function updateFar() {
+    if (farFrame) return;
+    farFrame = requestAnimationFrame(() => {
+      farFrame = 0;
+      const list = scroller;
+      if (!list) return;
+      if (atBottom || distanceToBottom(list) < NEAR_BOTTOM) {
+        farFromPresent = false;
+        return;
+      }
+      const els = list.querySelectorAll('.msg');
+      const edge = list.getBoundingClientRect().bottom;
+      const below = messagesBelow(els.length, (i) => els[i].getBoundingClientRect().top, edge);
+      farFromPresent = showOlderBar(below);
+    });
+  }
+
   function toBottom(smooth = false) {
     if (!scroller) return;
     atBottom = true;
+    farFromPresent = false;
     scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'instant' });
     if (!smooth) lastTop = scroller.scrollTop;
   }
@@ -107,6 +159,7 @@
     // the view, does not.
     else if (top < lastTop - 1) atBottom = false;
     lastTop = top;
+    updateFar();
     readIfSeen();
     noteNewLine();
     const scrolls = scroller.scrollHeight > scroller.clientHeight;
@@ -150,6 +203,7 @@
     const inner = content;
     if (!list || !inner) return;
     const observer = new ResizeObserver(() => {
+      updateFar();
       if (!atBottom || distanceToBottom(list) < 1) return;
       list.scrollTop = list.scrollHeight;
       lastTop = list.scrollTop;
@@ -157,7 +211,11 @@
     });
     observer.observe(list);
     observer.observe(inner);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(farFrame);
+      farFrame = 0;
+    };
   });
 
   // A jump to an older message stops the follow before the view moves.
@@ -249,14 +307,14 @@
       {:else if row.kind === 'new'}
         <div class="divider new" role="separator" aria-label="New messages"><span>New</span></div>
       {:else}
-        <Message item={row.item} grouped={row.grouped} onjump={jump} />
+        <Message item={row.item} grouped={row.grouped} onjump={jump} editable={editableId === row.item.id} />
       {/if}
     {/each}
     <div class="end"></div>
     </div>
   </div>
 
-  {#if !atBottom}
+  {#if farFromPresent}
     <div class="bottombar">
       <span>You are viewing older messages.</span>
       <button onclick={() => toBottom(true)}>
