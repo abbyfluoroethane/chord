@@ -379,7 +379,6 @@
     color: var(--danger);
     text-transform: uppercase;
     font-weight: 600;
-    animation: arrive var(--dur-arrive) var(--ease-out);
   }
   .divider.new::before {
     display: none;
@@ -403,7 +402,7 @@
     border: 1px solid var(--line);
     font-size: 13px;
     font-weight: 500;
-    animation: arrive var(--dur-arrive) var(--ease-out);
+    animation: pop var(--dur-arrive) var(--ease-out);
   }
   .topbar {
     top: 0;

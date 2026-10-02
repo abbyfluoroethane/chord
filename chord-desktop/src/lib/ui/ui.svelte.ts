@@ -238,7 +238,9 @@ class UiState {
     this.toast = text;
     this.toastIsError = error;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => (this.toast = null), 2400);
+    // An error, or a long text, stays longer: the reader needs time to read it.
+    const ms = error ? 6000 : Math.min(6000, 2400 + text.length * 30);
+    this.toastTimer = setTimeout(() => (this.toast = null), ms);
   }
 }
 
