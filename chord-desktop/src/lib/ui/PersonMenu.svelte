@@ -23,7 +23,16 @@
   import { spaceKey, type NotificationLevel, type SpaceItem } from './types';
   import { ui, type PersonMenuState } from './ui.svelte';
 
-  let { state: s }: { state: PersonMenuState } = $props();
+  let {
+    state: s,
+    inCard = false,
+    onclose = () => (ui.personMenu = null)
+  }: {
+    state: PersonMenuState;
+    /** The menu opens from a profile. The profile already has Profile, Message and the note. */
+    inCard?: boolean;
+    onclose?: () => void;
+  } = $props();
 
   const p = $derived(contactsStore.person(s.address, s.name));
   const circles = $derived(contactsStore.circlesYouAdmin());
@@ -62,27 +71,28 @@
   const muted = $derived(target?.role === 'Visitor');
 
   const items = $derived.by<MenuItem[]>(() => {
-    const out: MenuItem[] = [
-      { label: 'Profile', icon: User, onselect: () => ui.openProfile(p.address) }
-    ];
+    const out: MenuItem[] = [];
+    if (!inCard) out.push({ label: 'Profile', icon: User, onselect: () => ui.openProfile(p.address) });
     if (dm && (dm.unread > 0 || dm.mentions > 0)) {
       out.push({ label: 'Mark as read', icon: CheckCheck, onselect: () => app.markRead(dm.jid) });
     }
-    if (!p.isMe) {
+    if (!p.isMe && !inCard) {
       out.push({
         label: 'Message',
         icon: MessageSquare,
         onselect: () => contactsStore.message(p.address, p.name)
       });
     }
-    out.push({
-      label: 'Add note',
-      icon: StickyNote,
-      onselect: () => {
-        const a = s.anchor;
-        ui.openPopout(p.address, a, p.name, s.placement === 'bottom-start' ? 'right-start' : s.placement, true);
-      }
-    });
+    if (!inCard) {
+      out.push({
+        label: 'Add note',
+        icon: StickyNote,
+        onselect: () => {
+          const a = s.anchor;
+          ui.openPopout(p.address, a, p.name, s.placement === 'bottom-start' ? 'right-start' : s.placement, true);
+        }
+      });
+    }
     if (!p.isMe && circles.length) {
       out.push({
         label: 'Invite to space',
@@ -220,5 +230,5 @@
   {items}
   placement={s.placement}
   label="Menu for {p.name}"
-  onclose={() => (ui.personMenu = null)}
+  {onclose}
 />

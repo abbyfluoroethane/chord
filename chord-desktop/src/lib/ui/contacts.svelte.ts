@@ -58,7 +58,7 @@ class ContactsStore {
         avatar: me.avatar,
         show: me.show,
         online: true,
-        status: null,
+        status: me.status,
         since: null,
         isMe: true,
         isContact: false,

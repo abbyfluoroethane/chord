@@ -13,6 +13,7 @@
     size = 'small',
     footer,
     heading,
+    bare = false,
     children
   }: {
     title: string;
@@ -21,6 +22,8 @@
     footer?: Snippet;
     /** Replaces the title text in the header. The title stays the accessible name. */
     heading?: Snippet;
+    /** No title row and no padding. The content fills the dialog. The close button floats on top. */
+    bare?: boolean;
     children: Snippet;
   } = $props();
 
@@ -48,11 +51,11 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-<dialog bind:this={dlg} class={size} aria-label={title} onclick={backdrop} oncancel={cancel}>
+<dialog bind:this={dlg} class={[size, bare && 'bare']} aria-label={title} onclick={backdrop} oncancel={cancel}>
   <header>
     {#if heading}
       {@render heading()}
-    {:else}
+    {:else if !bare}
       <h2 class="title">{title}</h2>
     {/if}
     <button class="close" aria-label="Close" onclick={onclose}><Icon icon={X} size={18} /></button>
@@ -105,6 +108,27 @@
   .close:hover {
     background: var(--hover);
     color: var(--ink);
+  }
+  dialog.bare {
+    overflow: hidden;
+  }
+  dialog.bare header {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    z-index: 1;
+    padding: 0;
+  }
+  dialog.bare .close {
+    background: color-mix(in srgb, black 45%, transparent);
+    color: white;
+  }
+  dialog.bare .close:hover {
+    background: color-mix(in srgb, black 65%, transparent);
+    color: white;
+  }
+  dialog.bare .body {
+    padding: 0;
   }
   .body {
     padding: var(--space-2) var(--space-6) var(--space-6);

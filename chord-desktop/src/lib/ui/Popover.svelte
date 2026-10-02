@@ -71,7 +71,9 @@
 
     const down = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (!el?.contains(t) && !anchor.contains(t)) onclose();
+      // A menu that a control in the panel opens is part of the panel.
+      const inMenu = t instanceof Element && !!t.closest('[role="menu"]');
+      if (!el?.contains(t) && !anchor.contains(t) && !inMenu) onclose();
     };
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
