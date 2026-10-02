@@ -15,6 +15,12 @@
 
   const busy = $derived(session.state === 'connecting');
 
+  /** The first empty field gets the focus: the address, or the password when the address is saved. */
+  function focusStart(form: HTMLFormElement) {
+    const target = form.querySelector<HTMLInputElement>(address.trim() ? '#password' : '#address');
+    target?.focus();
+  }
+
   function submit(e: SubmitEvent) {
     e.preventDefault();
     void session.signIn({ address, password, remember, server });
@@ -37,7 +43,7 @@
       <RegisterForm {address} {server} onback={() => (registering = false)} onregistered={registered} />
     </div>
   {:else}
-  <form onsubmit={submit} aria-labelledby="login-title" novalidate>
+  <form use:focusStart onsubmit={submit} aria-labelledby="login-title" novalidate>
     <div class="brand">
       <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
         <circle cx="20" cy="20" r="16" stroke="var(--ink)" stroke-width="3" />

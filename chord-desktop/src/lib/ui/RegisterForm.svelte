@@ -106,6 +106,12 @@
     }
   }
 
+  /** Each step puts the focus on its first field. */
+  function focusFirst(form: HTMLFormElement) {
+    form
+      .querySelector<HTMLElement>('input:not([type=hidden]):not([disabled]), select, textarea')
+      ?.focus();
+  }
   const linkOnly = $derived(!!asked && !asked.form && asked.fields.length === 0);
 </script>
 
@@ -116,7 +122,7 @@
   <h1 class="title">Create an account</h1>
 
   {#if !asked}
-    <form onsubmit={fetchForm} novalidate>
+    <form use:focusFirst onsubmit={fetchForm} novalidate>
       <div class="field">
         <label for="reg-domain">Server</label>
         <input
@@ -138,7 +144,7 @@
       </button>
     </form>
   {:else}
-    <form onsubmit={send} novalidate>
+    <form use:focusFirst onsubmit={send} novalidate>
       {#if asked.instructions}<p class="instructions">{asked.instructions}</p>{/if}
 
       {#if form}

@@ -5,6 +5,10 @@
   let address = $state('');
   let result = $state<{ ok: boolean; text: string } | null>(null);
 
+  // The tab opens with the address field ready.
+  function focusNow(node: HTMLInputElement) {
+    node.focus();
+  }
   function submit(e: SubmitEvent) {
     e.preventDefault();
     if (!address.trim()) return;
@@ -34,6 +38,7 @@
         aria-invalid={result && !result.ok ? 'true' : undefined}
         aria-describedby="add-result"
         bind:value={address}
+        use:focusNow
         oninput={() => (result = null)}
       />
       <button class="btn btn-primary" type="submit" disabled={!address.trim()}>Send request</button>
