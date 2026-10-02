@@ -8,7 +8,8 @@
   import { live } from './bridge';
   import { clock, dayLabel, sameDay } from './format';
   import { newLineSeen, shouldReadAtBottom } from './readstate';
-  import { jumpToMessage } from './search';
+  import { jumping, jumpTo } from './jump';
+  import { JUMP_EVENT } from './search';
   import { isGroup, type TimelineItem } from './types';
 
   type Row =
@@ -17,6 +18,7 @@
     | { kind: 'msg'; key: string; item: TimelineItem; grouped: boolean };
 
   let scroller = $state<HTMLDivElement>();
+  let content = $state<HTMLDivElement>();
   let atBottom = $state(true);
 
   const rows = $derived.by<Row[]>(() => {
@@ -52,9 +54,22 @@
     app.items.find((m) => m.id === app.dividerId)?.timestamp ?? 0
   );
 
+  // The list follows the newest message while `atBottom` is true. A scroll up by the
+  // reader turns it off. A scroll back to the bottom, a new chat, "Jump to present" and
+  // an own new message turn it on. The content can grow after a row is on the page (an
+  // image, an embed, a font). A ResizeObserver then keeps the bottom on screen.
+  const NEAR_BOTTOM = 24;
+  let lastTop = 0;
+
+  function distanceToBottom(el: HTMLDivElement) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  }
+
   function toBottom(smooth = false) {
     if (!scroller) return;
+    atBottom = true;
     scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? 'smooth' : 'instant' });
+    if (!smooth) lastTop = scroller.scrollTop;
   }
 
   // Older messages: at the top of the list, ask for more (api.timelinePaginateBack).
@@ -86,11 +101,23 @@
 
   function onscroll() {
     if (!scroller) return;
-    atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    const top = scroller.scrollTop;
+    if (distanceToBottom(scroller) < NEAR_BOTTOM) atBottom = true;
+    // Only a move up stops the follow. A smooth scroll down, or content that grows below
+    // the view, does not.
+    else if (top < lastTop - 1) atBottom = false;
+    lastTop = top;
     readIfSeen();
     noteNewLine();
     const scrolls = scroller.scrollHeight > scroller.clientHeight;
-    if (live && scrolls && scroller.scrollTop < 60 && !loadingOlder && app.items.length > 0) {
+    if (
+      live &&
+      scrolls &&
+      top < 60 &&
+      !loadingOlder &&
+      !jumping.busy &&
+      app.items.length > 0
+    ) {
       loadingOlder = true;
       keep = { height: scroller.scrollHeight, first: app.items[0]?.id };
       void app.paginateBack(30).finally(() =>
@@ -109,34 +136,63 @@
       const before = keep.height;
       keep = null;
       queueMicrotask(() => {
-        if (scroller) scroller.scrollTop += scroller.scrollHeight - before;
+        if (!scroller || atBottom) return;
+        scroller.scrollTop += scroller.scrollHeight - before;
+        lastTop = scroller.scrollTop;
       });
     }
+  });
+
+  // Keep the bottom on screen while the list follows: new rows, images and embeds that
+  // load, and a list that gets shorter (a bigger composer, a reply bar).
+  $effect(() => {
+    const list = scroller;
+    const inner = content;
+    if (!list || !inner) return;
+    const observer = new ResizeObserver(() => {
+      if (!atBottom || distanceToBottom(list) < 1) return;
+      list.scrollTop = list.scrollHeight;
+      lastTop = list.scrollTop;
+      readIfSeen();
+    });
+    observer.observe(list);
+    observer.observe(inner);
+    return () => observer.disconnect();
+  });
+
+  // A jump to an older message stops the follow before the view moves.
+  $effect(() => {
+    const list = scroller;
+    if (!list) return;
+    const stop = () => (atBottom = false);
+    list.addEventListener(JUMP_EVENT, stop);
+    return () => list.removeEventListener(JUMP_EVENT, stop);
   });
 
   // The id of the last message that this list followed. Only a new last message moves the
   // view: a scroll, or an update of the last message (a status, a reaction), must not.
   let lastSeen: string | undefined;
 
-  // A new channel opens at the bottom.
+  // A new chat opens at the bottom. Its messages can arrive later: the follow keeps the
+  // bottom on screen.
   $effect(() => {
     void app.selectedJid;
     lastSeen = undefined;
+    atBottom = true;
     queueMicrotask(() => {
       toBottom();
       onscroll();
     });
   });
 
-  // A new message follows along when the reader is at the bottom, or wrote it.
-  // atBottom is read untracked: a change of the scroll position must not run this again.
+  // An own new message brings the reader to the bottom. Other new messages show at once
+  // when the list follows (the ResizeObserver), and wait below the view when it does not.
   $effect(() => {
     const last = app.items[app.items.length - 1];
     if (!last || last.id === lastSeen) return;
     const first = lastSeen === undefined;
     lastSeen = last.id;
-    const follow = untrack(() => atBottom) || (!first && last.outgoing);
-    if (follow) queueMicrotask(() => toBottom(!first));
+    if (!first && last.outgoing && !untrack(() => atBottom)) queueMicrotask(() => toBottom());
   });
 
   // A message that arrives while the reader sits at the bottom is read at once. The count
@@ -159,7 +215,7 @@
   });
 
   function jump(id: string) {
-    jumpToMessage(id);
+    void jumpTo(id);
   }
 </script>
 
@@ -172,6 +228,7 @@
   {/if}
 
   <div class="list" bind:this={scroller} {onscroll} role="log" aria-label="Messages" aria-live="polite">
+    <div class="content" bind:this={content}>
     {#if app.channel}
       <div class="welcome">
         {#if app.channel.kind === 'dm'}
@@ -196,6 +253,7 @@
       {/if}
     {/each}
     <div class="end"></div>
+    </div>
   </div>
 
   {#if !atBottom}

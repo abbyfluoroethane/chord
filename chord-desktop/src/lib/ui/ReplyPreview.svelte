@@ -1,13 +1,17 @@
 <script lang="ts">
-  // Small quote line above a reply. A click opens the reply chain: the messages that this
-  // one answers, and the ones that answer it. A click on a row of the chain jumps to it.
+  // Small quote line above a reply. A click on the quote jumps to the message that this
+  // one answers, and loads older messages first when it is not in the page. The button
+  // after the quote opens the reply chain: the messages that this one answers, and the
+  // ones that answer it. A click on a row of the chain jumps to it.
   import CornerUpLeft from 'lucide-svelte/icons/corner-up-left';
+  import ListTree from 'lucide-svelte/icons/list-tree';
   import { actionLine } from './action';
   import Icon from './Icon.svelte';
   import Popover from './Popover.svelte';
   import { app } from './app.svelte';
   import { clock } from './format';
   import { replyChain } from './replychain';
+  import { tooltip } from './tooltip';
   import type { ReplyPreview, TimelineItem } from './types';
 
   let {
@@ -26,18 +30,30 @@
   }
 </script>
 
-<button
-  bind:this={button}
-  class="preview"
-  aria-haspopup="dialog"
-  aria-expanded={open}
-  onclick={() => (open = !open)}
-  aria-label="Replying to {reply.senderName}. Show the reply chain."
->
-  <Icon icon={CornerUpLeft} size={14} />
-  <span class="who">{reply.senderName}</span>
-  <span class="text">{actionLine(reply.senderName, reply.body)}</span>
-</button>
+<div class="quote">
+  <button
+    class="preview"
+    onclick={() => onjump(reply.id)}
+    aria-label="Replying to {reply.senderName}. Jump to the original message."
+    use:tooltip={{ text: 'Jump to the original message', side: 'top' }}
+  >
+    <Icon icon={CornerUpLeft} size={14} />
+    <span class="who">{reply.senderName}</span>
+    <span class="text">{actionLine(reply.senderName, reply.body)}</span>
+  </button>
+  <button
+    bind:this={button}
+    class="chain"
+    class:open
+    aria-haspopup="dialog"
+    aria-expanded={open}
+    aria-label="Show the reply chain"
+    use:tooltip={{ text: 'Show the reply chain', side: 'top' }}
+    onclick={() => (open = !open)}
+  >
+    <Icon icon={ListTree} size={14} />
+  </button>
+</div>
 
 {#if open && button}
   <Popover anchor={button} onclose={() => (open = false)} label="Reply chain">
@@ -65,12 +81,18 @@
 {/if}
 
 <style>
+  .quote {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    max-width: 100%;
+    margin-bottom: 2px;
+  }
   .preview {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    max-width: 100%;
-    margin-bottom: 2px;
+    min-width: 0;
     color: var(--ink-muted);
     font-size: 13px;
     line-height: 18px;
@@ -78,6 +100,25 @@
   }
   .preview:hover .text {
     color: var(--ink);
+    text-decoration: underline;
+  }
+  .chain {
+    display: inline-flex;
+    flex: none;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--ink-muted);
+    opacity: 0;
+    transition: opacity var(--dur-fast);
+  }
+  .quote:hover .chain,
+  .chain:focus-visible,
+  .chain.open {
+    opacity: 1;
+  }
+  .chain:hover {
+    color: var(--ink);
+    background: var(--hover);
   }
   .who {
     font-weight: 600;

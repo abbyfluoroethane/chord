@@ -6,7 +6,8 @@
   import { app } from './app.svelte';
   import { api, live } from './bridge';
   import { stamp } from './format';
-  import { excerpt, jumpToMessage, SEARCH_LIMIT, searchItems, senderLabel } from './search';
+  import { jumpTo } from './jump';
+  import { excerpt, SEARCH_LIMIT, searchItems, senderLabel } from './search';
   import { ui } from './ui.svelte';
   import type { SearchHit } from '$lib/chord/types';
 
@@ -48,11 +49,8 @@
   }
 
   function pick(hit: SearchHit) {
-    if (!jumpToMessage(hit.id)) {
-      ui.say('That message is older than the loaded ones. Scroll up to load more.');
-      return;
-    }
     open = false;
+    void jumpTo(hit.id);
   }
 
   function close() {

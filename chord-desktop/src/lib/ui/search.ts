@@ -62,14 +62,21 @@ export function senderLabel(hit: SearchHit): string {
   return hit.sender.split('@')[0].split('/')[0];
 }
 
+/** The event that a jump sends to the timeline before it scrolls. */
+export const JUMP_EVENT = 'chordjump';
+
 /**
  * Scroll to a message in the timeline and flash it. Returns false when the message is not
- * in the page: it is older than the messages that the timeline holds.
+ * in the page: it is older than the messages that the timeline holds. The scroll is
+ * instant: a smooth scroll passes the top of the list and loads older messages, which
+ * move the target.
  */
 export function jumpToMessage(id: string): boolean {
   const el = document.getElementById(`msg-${id}`);
   if (!el) return false;
-  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  // The timeline stops following the newest message before the view moves.
+  el.dispatchEvent(new CustomEvent(JUMP_EVENT, { bubbles: true }));
+  el.scrollIntoView({ block: 'center', behavior: 'instant' });
   el.classList.remove('flash');
   void el.offsetWidth;
   el.classList.add('flash');

@@ -9,7 +9,7 @@
   import { stamp } from './format';
   import { pinLine } from './pins';
   import { pins } from './pins.svelte';
-  import { jumpToMessage } from './search';
+  import { jumpTo } from './jump';
   import { tooltip } from './tooltip';
   import { ui } from './ui.svelte';
   import type { Pin as PinItem } from '$lib/chord/types';
@@ -33,11 +33,12 @@
   }
 
   function pick(pin: PinItem) {
-    if (pin.itemId && jumpToMessage(pin.itemId)) {
-      open = false;
-    } else {
-      ui.say('That message is older than the loaded ones. Scroll up to load more.');
+    if (!pin.itemId) {
+      ui.say('Chord could not find that message. The server does not have it.');
+      return;
     }
+    open = false;
+    void jumpTo(pin.itemId);
   }
 </script>
 
