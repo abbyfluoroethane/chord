@@ -233,6 +233,27 @@ fn pasted_identity(media_type: &str, unix_secs: u64) -> (String, &'static str) {
     (format!("pasted-{unix_secs}.{ext}"), content_type)
 }
 
+/// The name and the type of a file that the page sends as bytes. A file from the file
+/// dialog keeps its own name: only the last path part, without control characters, at
+/// most 200 characters. The type comes from the extension of that name. A paste has no
+/// name, so it gets a generated one (`pasted_identity`).
+fn upload_identity(name: Option<&str>, media_type: &str, unix_secs: u64) -> (String, &'static str) {
+    let clean: String = name
+        .unwrap_or_default()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(200)
+        .collect();
+    let clean = clean.trim();
+    if clean.is_empty() || clean.chars().all(|c| c == '.') {
+        return pasted_identity(media_type, unix_secs);
+    }
+    (clean.to_owned(), guess_content_type(clean))
+}
+
 /// Decode a percent-encoded header value (the page uses `encodeURIComponent`). A bad
 /// escape stays as it is, and a byte sequence that is no UTF-8 gets replacement characters.
 fn percent_decode(text: &str) -> String {
@@ -294,7 +315,8 @@ pub async fn upload_pasted(
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let (name, content_type) = pasted_identity(&media_type, secs);
+    let name = header("name").ok();
+    let (name, content_type) = upload_identity(name.as_deref(), &media_type, secs);
     Ok(handle
         .upload(to, name, content_type.to_owned(), bytes.clone())
         .await?)
@@ -394,6 +416,30 @@ mod tests {
             ("pasted-7.bin", "application/octet-stream")
         );
         assert_eq!(pasted_identity("", 7).0, "pasted-7.bin");
+    }
+
+    #[test]
+    fn a_picked_file_keeps_its_name_without_a_path() {
+        assert_eq!(
+            upload_identity(Some("report.pdf"), "application/pdf", 5),
+            ("report.pdf".to_owned(), "application/pdf")
+        );
+        assert_eq!(
+            upload_identity(Some("../../etc/x.png"), "", 5),
+            ("x.png".to_owned(), "image/png")
+        );
+        assert_eq!(upload_identity(Some("C:\\a\\b.txt"), "", 5).0, "b.txt");
+        assert_eq!(
+            upload_identity(Some("a\nb.html"), "", 5),
+            ("ab.html".to_owned(), "application/octet-stream")
+        );
+        // No name, a blank name or only dots: a generated name.
+        assert_eq!(upload_identity(None, "image/png", 5).0, "pasted-5.png");
+        assert_eq!(
+            upload_identity(Some("  "), "image/png", 5).0,
+            "pasted-5.png"
+        );
+        assert_eq!(upload_identity(Some(".."), "", 5).0, "pasted-5.bin");
     }
 
     #[test]
