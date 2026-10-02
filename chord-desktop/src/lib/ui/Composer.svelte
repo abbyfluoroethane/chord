@@ -93,6 +93,17 @@
     });
   });
 
+  // Shortcuts ask for the pickers, the file dialog, and the focus (see keymap.ts).
+  $effect(() => {
+    const stops = [
+      ui.onRequest('emoji', () => openPicker('emoji')),
+      ui.onRequest('gif', () => prefs.gifPicker && openPicker('gif')),
+      ui.onRequest('upload', () => void upload()),
+      ui.onRequest('composer', () => box?.focus())
+    ];
+    return () => stops.forEach((stop) => stop());
+  });
+
   // Focus comes back when a reply starts or an edit ends.
   $effect(() => {
     if (app.replyingTo || app.editingId === null) box?.focus();

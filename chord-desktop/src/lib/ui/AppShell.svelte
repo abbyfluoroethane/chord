@@ -35,7 +35,8 @@
   import { rail } from './rail.svelte';
   import { session } from './session.svelte';
   import { spaceKey } from './types';
-  import { escMarksRead, pageTitle } from './unread';
+  import { pageTitle } from './unread';
+  import { handleKey } from './keyactions';
   import { ui } from './ui.svelte';
   import { xmppLinks } from './xmpplinks.svelte';
 
@@ -109,35 +110,9 @@
     if (session.state === 'connected') xmppLinks.flush();
   });
 
+  // The keymap decides what each key does. See keymap.ts and keyactions.ts.
   function keydown(e: KeyboardEvent) {
-    const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'k') {
-      e.preventDefault();
-      ui.switcherOpen = !ui.switcherOpen;
-    } else if (mod && e.key === ',') {
-      e.preventDefault();
-      if (ui.settingsOpen) ui.settingsOpen = false;
-      else ui.openSettings();
-    } else if (mod && e.key === '/') {
-      e.preventDefault();
-      ui.shortcutsOpen = !ui.shortcutsOpen;
-    } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-      e.preventDefault();
-      const dir = e.key === 'ArrowUp' ? -1 : 1;
-      if (e.shiftKey) app.stepUnread(dir);
-      else app.step(dir);
-    } else if (mod && e.shiftKey && e.key.toLowerCase() === 'a') {
-      e.preventDefault();
-      app.markAllRead();
-    } else if (
-      e.key === 'Escape' &&
-      !e.defaultPrevented &&
-      ui.overlays === 0 &&
-      !app.editingId &&
-      escMarksRead(e.target)
-    ) {
-      app.markRead();
-    }
+    handleKey(e);
   }
 </script>
 

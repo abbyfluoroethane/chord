@@ -32,6 +32,9 @@
     if (open) void pins.load(chat);
   }
 
+  // The Cmd+P shortcut opens or closes the list.
+  $effect(() => ui.onRequest('pins', toggle));
+
   function pick(pin: PinItem) {
     if (!pin.itemId) {
       ui.say('Chord could not find that message. The server does not have it.');

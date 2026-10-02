@@ -1,24 +1,37 @@
 // The shortcut list. The Ctrl+/ modal and the Keybinds page share it.
+// The global shortcuts come from `keymap.ts`. The rows at the end belong to one component.
 
-const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+import { bindings, comboLabel, type Group } from './keymap';
+
+export const mac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 export const mod = mac ? 'Cmd' : 'Ctrl';
+
+export type ShortcutGroup = Group | 'Composer';
 
 export interface Shortcut {
   keys: string[];
+  /** Other key sets that do the same. */
+  alternates?: string[][];
   what: string;
+  group: ShortcutGroup;
 }
 
+/** Shortcuts that a component handles on its own, inside a text field. */
+const local: Shortcut[] = [
+  { keys: ['Enter'], what: 'Send a message', group: 'Composer' },
+  { keys: ['Shift', 'Enter'], what: 'Start a new line', group: 'Composer' },
+  { keys: ['Up'], what: 'Edit your last message (in an empty composer)', group: 'Composer' },
+  { keys: ['Any letter'], what: 'Start to type a message from anywhere in the chat', group: 'Composer' }
+];
+
+export const shortcutGroups: ShortcutGroup[] = ['Navigation', 'Messages', 'Chat', 'Composer', 'App'];
+
 export const shortcuts: Shortcut[] = [
-  { keys: [mod, 'K'], what: 'Jump to a space, channel, or DM' },
-  { keys: ['Alt', 'Up'], what: 'Previous channel' },
-  { keys: ['Alt', 'Down'], what: 'Next channel' },
-  { keys: ['Alt', 'Shift', 'Up'], what: 'Previous channel with unread messages' },
-  { keys: ['Alt', 'Shift', 'Down'], what: 'Next channel with unread messages' },
-  { keys: ['Esc'], what: 'Mark this channel as read (not while you type)' },
-  { keys: [mod, 'Shift', 'A'], what: 'Mark every channel as read' },
-  { keys: ['Up'], what: 'Edit your last message (in an empty composer)' },
-  { keys: ['Enter'], what: 'Send a message' },
-  { keys: ['Shift', 'Enter'], what: 'Start a new line' },
-  { keys: [mod, ','], what: 'Open settings' },
-  { keys: [mod, '/'], what: 'Show this list' }
+  ...bindings.map((b) => ({
+    keys: comboLabel(b.combos[0], mac),
+    alternates: b.combos.slice(1).map((c) => comboLabel(c, mac)),
+    what: b.what,
+    group: b.group
+  })),
+  ...local
 ];

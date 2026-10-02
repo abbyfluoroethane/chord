@@ -60,7 +60,12 @@ export function pointAnchor(x: number, y: number): HTMLElement {
   } as unknown as HTMLElement;
 }
 
+/** Actions that a shortcut asks of a component that owns the thing. */
+export type UiRequest = 'emoji' | 'gif' | 'upload' | 'search' | 'pins' | 'composer';
+
 class UiState {
+  private requestHandlers = new Map<UiRequest, () => void>();
+
   membersOpen = $state(true);
   switcherOpen = $state(false);
   shortcutsOpen = $state(false);
@@ -110,6 +115,25 @@ class UiState {
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * A component calls this to answer a request. It returns a function that removes the
+   * handler. Use it as the return value of an effect.
+   */
+  onRequest(kind: UiRequest, handler: () => void): () => void {
+    this.requestHandlers.set(kind, handler);
+    return () => {
+      if (this.requestHandlers.get(kind) === handler) this.requestHandlers.delete(kind);
+    };
+  }
+
+  /** Ask the component that owns `kind` to act. Returns false when no component listens. */
+  request(kind: UiRequest): boolean {
+    const handler = this.requestHandlers.get(kind);
+    if (!handler) return false;
+    handler();
+    return true;
   }
 
   toggleMembers() {

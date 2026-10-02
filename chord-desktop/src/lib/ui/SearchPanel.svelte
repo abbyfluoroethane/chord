@@ -17,6 +17,7 @@
   let searched = $state('');
   let timer: ReturnType<typeof setTimeout> | undefined;
   let root = $state<HTMLElement>();
+  let input = $state<HTMLInputElement>();
 
   const trimmed = $derived(query.trim());
 
@@ -67,6 +68,14 @@
     close();
   });
 
+  // The Cmd+F shortcut focuses the field.
+  $effect(() =>
+    ui.onRequest('search', () => {
+      input?.focus();
+      input?.select();
+    })
+  );
+
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       close();
@@ -88,6 +97,7 @@
       type="search"
       placeholder="Search"
       aria-label="Search messages in this chat"
+      bind:this={input}
       bind:value={query}
       {oninput}
       {onkeydown}
