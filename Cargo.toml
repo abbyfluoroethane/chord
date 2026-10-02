@@ -67,3 +67,16 @@ debug = false
 
 [profile.release]
 panic = "unwind"
+# Size and speed of the release build. The desktop app and chord-cli use it. The cost is a
+# longer build, and the cost is only in release.
+# - lto = "fat" optimizes across all crates. It removes dead code from tokio, rustls,
+#   hyper and sqlite glue, so the binary gets smaller and calls get faster.
+# - codegen-units = 1 gives the optimizer one view of each crate. It makes the build slower
+#   because it cannot run in parallel.
+# - strip = "symbols" removes the symbol table from the binary. A panic still prints its
+#   message and its location, but a backtrace shows addresses instead of function names.
+# - opt-level stays at 3. "s" or "z" make the binary smaller but slow down parsing and SQL.
+# - debug stays off in release, which is the default.
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
