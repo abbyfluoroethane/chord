@@ -24,8 +24,8 @@
     flex: none;
     overflow-y: auto;
     padding-bottom: var(--space-4);
-    background: var(--surface-200);
-    border-left: 1px solid var(--line);
+    background: var(--surface-side);
+    border-left: 1px solid var(--line-strong);
     animation: arrive var(--dur-arrive) var(--ease-out);
   }
   .group {
@@ -34,9 +34,9 @@
     padding: 24px var(--space-2) 0 var(--space-4);
     font-size: 12px;
     line-height: 16px;
-    font-weight: 500;
+    font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--ink-muted);
+    color: color-mix(in srgb, var(--ink) 88%, var(--surface-side));
   }
 </style>

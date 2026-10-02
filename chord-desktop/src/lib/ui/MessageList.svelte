@@ -304,10 +304,10 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin: var(--space-4) var(--space-4) 0;
-    color: var(--ink-muted);
+    margin: var(--space-6) var(--space-4) var(--space-2);
+    color: var(--ink);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: 0.02em;
   }
   .divider::before,
@@ -315,7 +315,7 @@
     content: '';
     flex: 1;
     height: 1px;
-    background: var(--line);
+    background: var(--line-strong);
   }
   .divider.new {
     color: var(--danger);

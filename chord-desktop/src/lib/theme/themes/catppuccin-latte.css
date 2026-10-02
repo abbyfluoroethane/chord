@@ -26,8 +26,11 @@
   --surface-200: #e6e9ef;
   --surface-300: #dce0e8;
   --line: #ccd0da;
+  --surface-rail: #c3c8d4;
+  --surface-side: #e3e6ed;
+  --line-strong: #acb0be;
   --ink: #4c4f69;
-  --ink-muted: #6c6f85;
+  --ink-muted: #5c5f77;
   --brand: #8839ef;
   --brand-soft: color-mix(in srgb, var(--brand) 16%, #eff1f5);
   --brand-ink: var(--brand);

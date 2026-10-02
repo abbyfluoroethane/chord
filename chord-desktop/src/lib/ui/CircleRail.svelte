@@ -165,8 +165,8 @@
     align-items: center;
     width: var(--rail-width);
     padding: var(--space-2) 0;
-    background: var(--surface-300);
-    border-right: 1px solid var(--line);
+    background: var(--surface-rail);
+    border-right: 1px solid var(--line-strong);
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-width: none;

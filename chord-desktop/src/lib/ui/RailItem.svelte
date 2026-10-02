@@ -150,7 +150,7 @@
     height: 20px;
     padding: 0 5px;
     border-radius: 10px;
-    border: 3px solid var(--surface-300);
+    border: 3px solid var(--surface-rail);
     background: var(--brand);
     color: var(--on-brand);
     font-size: 11px;

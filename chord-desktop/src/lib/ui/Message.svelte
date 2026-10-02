@@ -241,7 +241,7 @@
     grid-template-columns: 40px minmax(0, 1fr);
     column-gap: var(--space-4);
     padding: 2px var(--space-4) 2px var(--space-4);
-    margin-top: var(--space-4);
+    margin-top: 20px;
     transition: background var(--dur-fast);
   }
   .msg:focus {

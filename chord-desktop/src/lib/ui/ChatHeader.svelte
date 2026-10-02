@@ -56,8 +56,11 @@
     height: var(--bar-height);
     flex: none;
     padding: 0 var(--space-4);
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--line-strong);
+    box-shadow: 0 1px 3px color-mix(in srgb, #000 14%, transparent);
     background: var(--surface-100);
+    position: relative;
+    z-index: 2;
   }
   .ico {
     display: grid;
@@ -71,7 +74,7 @@
     width: 1px;
     height: 24px;
     margin: 0 var(--space-2);
-    background: var(--line);
+    background: var(--line-strong);
   }
   .topic {
     margin: 0;

@@ -30,7 +30,7 @@
     src={member.avatar}
     size={32}
     presence={presenceKind(member.online, member.show)}
-    cut="var(--surface-200)"
+    cut="var(--surface-side)"
   />
   <span class="text">
     <span class="line">

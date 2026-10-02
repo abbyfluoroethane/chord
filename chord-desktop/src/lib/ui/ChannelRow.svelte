@@ -97,7 +97,7 @@
         src={channel.avatar}
         size={32}
         presence={known ? presenceKind(channel.online, channel.show) : null}
-        cut={selected ? 'var(--surface-300)' : 'var(--surface-200)'}
+        cut={selected ? 'color-mix(in srgb, var(--ink) 15%, var(--surface-side))' : 'var(--surface-side)'}
       />
     {:else if group}
       <Avatar name={channel.name} size={32} icon={Users} />
@@ -180,6 +180,10 @@
   .row.selected {
     background: var(--selected);
     color: var(--ink);
+    font-weight: 600;
+  }
+  .row.selected .sub {
+    color: var(--ink);
   }
   .row.unread {
     color: var(--ink);
@@ -228,7 +232,7 @@
     height: 20px;
     transform: translateY(-50%);
     border-radius: var(--radius-sm);
-    background: var(--surface-200);
+    background: var(--surface-side);
     color: var(--ink-muted);
   }
   .close:hover {

@@ -11,7 +11,10 @@
     --surface-100: #111316;
     --surface-200: #181b20;
     --surface-300: #21252b;
+    --surface-rail: var(--surface-300); /* the space rail */
+    --surface-side: var(--surface-200); /* the channel list and the member list */
     --line: #2e333b;
+    --line-strong: color-mix(in srgb, var(--ink) 22%, var(--surface-100)); /* the edge of a bar or a field */
 
     /* Text */
     --ink: #ece8e1;
@@ -31,9 +34,9 @@
     --on-danger: #1a1c20;
 
     /* Interaction overlays */
-    --hover: color-mix(in srgb, var(--ink) 6%, transparent);
-    --press: color-mix(in srgb, var(--ink) 10%, transparent);
-    --selected: color-mix(in srgb, var(--ink) 12%, transparent);
+    --hover: color-mix(in srgb, var(--ink) 7%, transparent);
+    --press: color-mix(in srgb, var(--ink) 11%, transparent);
+    --selected: color-mix(in srgb, var(--ink) 15%, transparent);
     --scrim: rgb(0 0 0 / 0.6);
 
     /* Type */
@@ -73,13 +76,13 @@
 
   /* The colours above are Chord Dark, the default before the theme loads. The active theme
      (theme.svelte.ts) puts its own tokens in a style element. */
-  /* A surface one step lighter than the rail (--surface-300), for the tiles on it. It
+  /* A surface one step lighter than the rail (--surface-rail), for the tiles on it. It
      comes from the theme colours, so every theme gets it. A theme can set its own. */
   :root {
-    --surface-raised: color-mix(in srgb, var(--ink) 14%, var(--surface-300));
+    --surface-raised: color-mix(in srgb, var(--ink) 14%, var(--surface-rail));
   }
   :root[data-mode='light'] {
     color-scheme: light;
-    --surface-raised: color-mix(in srgb, #ffffff 80%, var(--surface-300));
+    --surface-raised: color-mix(in srgb, #ffffff 80%, var(--surface-rail));
   }
 }

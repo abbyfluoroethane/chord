@@ -530,7 +530,7 @@
     display: flex;
     align-items: flex-start;
     background: var(--surface-300);
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     border-radius: var(--radius-md);
     transition: border-color var(--dur-fast);
   }

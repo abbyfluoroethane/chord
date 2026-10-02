@@ -14,8 +14,11 @@ A theme is CSS. Add it in Settings > Appearance > Import theme. You can give a l
 :root {
   --surface-100: #1e1e2e; /* message pane */
   --surface-200: #181825; /* cards, channel list */
-  --surface-300: #313244; /* rail, inputs, hovered rows */
+  --surface-300: #313244; /* inputs, tiles, hovered rows */
+  --surface-rail: #11111b; /* the space rail and the user panel */
+  --surface-side: #181825; /* the channel list and the member list */
   --line: #45475a;
+  --line-strong: #585b70; /* the edge of a column, the chat header, and the composer */
   --ink: #cdd6f4;
   --ink-muted: #a6adc8;
   --brand: #89b4fa;       /* buttons, mentions, the selected accent */
@@ -35,6 +38,7 @@ A theme is CSS. Add it in Settings > Appearance > Import theme. You can give a l
 - `@mode` is `dark` or `light`. Without it, Chord reads `--surface-100`.
 - Each `[data-accent="id"]` rule is an accent. `@accent id Name` names it and sets the order.
 - A token that the theme does not set keeps its Chord Dark value.
+- `--surface-rail`, `--surface-side` and `--line-strong` are optional. Without them, the rail uses `--surface-300`, the lists use `--surface-200`, and the strong line is a mix of `--ink` and `--surface-100`. Give the rail, the lists and the chat three clearly different surfaces. Then the areas stay easy to tell apart.
 - The rest of the CSS can style any part of the app.
 - An imported theme cannot load a file from outside the app. Chord removes `@import`, `image-set()`, `image()`, `src()`, `cross-fade()`, `expression()`, `attr()` that builds a `url`, and every `url()` that is not a `data:` URL or a `#fragment`. A `url()` that Chord removes becomes an empty one. Without this, a theme could send requests to its author and learn which links and file names are on your screen. The import dialog and the update question tell you how many requests Chord blocked. The built-in themes are not checked.
 - A theme cannot hide, move or cover the buttons of a question such as "Open this link?".

@@ -25,7 +25,7 @@
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <Avatar name={app.me.name} src={app.me.avatar} size={32} presence={kind} cut="var(--surface-300)" />
+    <Avatar name={app.me.name} src={app.me.avatar} size={32} presence={kind} cut="var(--surface-rail)" />
     <span class="text">
       <span class="name">{app.me.name}</span>
       {#if app.me.status}
@@ -58,8 +58,8 @@
     height: var(--panel-height);
     flex: none;
     padding: 0 var(--space-2);
-    background: var(--surface-300);
-    border-top: 1px solid var(--line);
+    background: var(--surface-rail);
+    border-top: 1px solid var(--line-strong);
   }
   .who {
     display: flex;
