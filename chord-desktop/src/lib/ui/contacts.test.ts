@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { app } from './app.svelte';
 import { contactsStore as c } from './contacts.svelte';
 
 describe('contacts store', () => {
@@ -52,5 +53,38 @@ describe('contacts store', () => {
     });
     c.accept('kit@chord.example', true);
     expect(c.isContact('kit@chord.example')).toBe(true);
+  });
+});
+
+describe('contacts store lookups', () => {
+  it('finds a person in the members of any space', () => {
+    app.members['other-space'] = [
+      { id: 'zed@chord.example', name: 'Zed', avatar: null, show: 'away', online: true } as never
+    ];
+    const p = c.person('zed@chord.example');
+    expect(p.name).toBe('Zed');
+    expect(p.online).toBe(true);
+    delete app.members['other-space'];
+  });
+
+  it('empties the lists on reset', () => {
+    c.reset();
+    expect(c.contacts).toEqual([]);
+    expect(c.incoming).toEqual([]);
+    expect(c.outgoing).toEqual([]);
+    expect(c.blocked).toEqual([]);
+  });
+});
+
+describe('space badges', () => {
+  it('sum the unread of each space in one pass and skip muted channels', () => {
+    app.channels = [
+      { jid: 'a@x', space: 's1', unread: 2, mentions: 1, muted: false },
+      { jid: 'b@x', space: 's1', unread: 5, mentions: 0, muted: true },
+      { jid: 'c@x', space: null, unread: 3, mentions: 0, muted: false }
+    ] as never;
+    expect(app.spaceBadge('s1')).toEqual({ unread: 2, mentions: 1 });
+    expect(app.spaceBadge('home')).toEqual({ unread: 3, mentions: 0 });
+    expect(app.spaceBadge('none')).toEqual({ unread: 0, mentions: 0 });
   });
 });

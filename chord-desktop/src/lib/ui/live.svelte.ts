@@ -55,6 +55,15 @@ import { spaceKey, type ChannelItem } from './types';
 import { ui } from './ui.svelte';
 import { tray } from './tray.svelte';
 import { emojiPacks } from './emojipacks.svelte';
+import { touchRecent } from './recent';
+
+/** Stop a subscription. A failure here is of no use to the user: the view is gone. */
+function quiet(sub: ViewSubscription | null | undefined): void {
+  void sub?.unsubscribe().catch(() => undefined);
+}
+
+/** Wait in ms before a burst of member diffs shows in the list. */
+const MEMBER_FLUSH_MS = 50;
 
 class LiveController {
   rawSpaces = $state.raw<BSpace[]>([]);
@@ -72,6 +81,8 @@ class LiveController {
   private levelsAsked = new Set<string>();
   private avatarsAsked = new Set<string>();
   private unlistenDrop: (() => void) | null = null;
+  /** The chats whose timelines stay in memory, newest first. */
+  private recent: string[] = [];
   private generation = 0;
 
   // --- start and stop ----------------------------------------------
@@ -104,7 +115,7 @@ class LiveController {
     const track = async <T extends ViewSubscription>(p: Promise<T>): Promise<T> => {
       const sub = await p;
       if (gen !== this.generation) {
-        void sub.unsubscribe();
+        quiet(sub);
       } else this.subs.add(sub);
       return sub;
     };
@@ -145,6 +156,8 @@ class LiveController {
     this.nickJids = {};
     this.levelsAsked.clear();
     this.avatarsAsked.clear();
+    this.recent = [];
+    app.resetSession();
     app.timelineSub = null;
     app.spaces = [];
     app.channels = [];
@@ -161,10 +174,7 @@ class LiveController {
     app.selectedSpace = HOME;
     app.selectedJid = '';
     app.showContacts = true;
-    contactsStore.contacts = [];
-    contactsStore.incoming = [];
-    contactsStore.outgoing = [];
-    contactsStore.blocked = [];
+    contactsStore.reset();
   }
 
   private diff<T>(list: readonly T[], d: ListDiff<T>): T[] {
@@ -239,7 +249,7 @@ class LiveController {
     for (const [key, sub] of [...this.spaceSubs]) {
       if (!this.wanted.has(key)) {
         this.spaceSubs.delete(key);
-        void sub?.unsubscribe();
+        quiet(sub);
         const rest = { ...this.rawBySpace };
         delete rest[key];
         this.rawBySpace = rest;
@@ -254,7 +264,7 @@ class LiveController {
         this.rawBySpace = { ...this.rawBySpace, [key]: this.diff(this.rawBySpace[key] ?? [], d) };
       })
         .then((sub) => {
-          if (gen !== this.generation || !this.wanted.has(key)) void sub.unsubscribe();
+          if (gen !== this.generation || !this.wanted.has(key)) quiet(sub);
           else this.spaceSubs.set(key, sub);
         })
         .catch((e) => ui.say(plainError(e), true));
@@ -291,6 +301,10 @@ class LiveController {
     let cancelled = false;
     let sub: TimelineSubscription | null = null;
     let first = true;
+    // A long session must not keep the messages of every chat that it ever showed.
+    const { recent, dropped } = touchRecent(this.recent, jid);
+    this.recent = recent;
+    for (const old of dropped) delete app.timelines[old];
     const pm = splitPrivate(jid);
     const onDiff = (d: ListDiff<BTimeline>) => {
       if (cancelled) return;
@@ -317,7 +331,7 @@ class LiveController {
         ? await subscribePrivateTimeline(pm.room, pm.nick, onDiff)
         : await subscribeTimeline(jid, onDiff);
       if (cancelled) {
-        await s.unsubscribe();
+        quiet(s);
         return;
       }
       sub = s;
@@ -326,7 +340,7 @@ class LiveController {
     return () => {
       cancelled = true;
       if (app.timelineSub === sub) app.timelineSub = null;
-      void sub?.unsubscribe();
+      quiet(sub);
     };
   }
 
@@ -334,11 +348,12 @@ class LiveController {
     let cancelled = false;
     let sub: ViewSubscription | null = null;
     let raw: BMember[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
     const room = c.kind === 'channel';
     const space = c.space ?? HOME;
-    const onDiff = (d: ListDiff<BMember>) => {
+    const flush = () => {
+      flushTimer = undefined;
       if (cancelled) return;
-      raw = this.diff(raw, d);
       if (room) {
         app.members[space] = raw.map((m) => toMember(m, jid));
         this.nickJids[jid] = Object.fromEntries(raw.filter((m) => m.jid).map((m) => [m.id, m.jid!]));
@@ -347,15 +362,25 @@ class LiveController {
         if (peer) app.dmPresence[jid] = { show: toShow(peer.show), online: peer.online };
       }
     };
+    // Presence comes in bursts. One pass for each burst keeps a big room fast.
+    const onDiff = (d: ListDiff<BMember>) => {
+      if (cancelled) return;
+      raw = this.diff(raw, d);
+      if (d.type === 'reset') {
+        clearTimeout(flushTimer);
+        flush();
+      } else flushTimer ??= setTimeout(flush, MEMBER_FLUSH_MS);
+    };
     void subscribeMemberList(jid, onDiff)
       .then(async (s) => {
-        if (cancelled) await s.unsubscribe();
+        if (cancelled) quiet(s);
         else sub = s;
       })
       .catch((e) => ui.say(plainError(e), true));
     return () => {
       cancelled = true;
-      void sub?.unsubscribe();
+      clearTimeout(flushTimer);
+      quiet(sub);
     };
   }
 

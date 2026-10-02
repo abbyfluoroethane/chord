@@ -8,7 +8,7 @@ import { api, live } from './bridge';
 import { settings } from './local';
 import { prefs } from './prefs.svelte';
 import { ui } from './ui.svelte';
-import type { Affiliation, ContactItem, ContactsTab, Person } from './types';
+import type { Affiliation, ContactItem, ContactsTab, MemberItem, Person } from './types';
 import { spaceKey } from './types';
 
 function clone<T>(v: T): T {
@@ -26,6 +26,9 @@ class ContactsStore {
   blocked = $state<ContactItem[]>(live ? [] : clone(fx.blockedContacts));
   /** Addresses whose requests are accepted before they arrive. */
   preapproved = $state<string[]>([]);
+
+  /** The number of the last read of the lists. */
+  private readSeq = 0;
 
   tab = $state<ContactsTab>('online');
   query = $state('');
@@ -69,9 +72,11 @@ class ContactsStore {
       this.incoming.find((c) => c.address === address) ??
       this.outgoing.find((c) => c.address === address) ??
       this.blocked.find((c) => c.address === address);
-    const member = Object.values(app.members)
-      .flat()
-      .find((m) => m.id === address);
+    let member: MemberItem | undefined;
+    for (const list of Object.values(app.members)) {
+      member = list.find((m) => m.id === address);
+      if (member) break;
+    }
     const dm = app.channels.find((c) => c.kind === 'dm' && c.jid === address);
     const seen = app.dmPresence[address];
     return {
@@ -128,9 +133,12 @@ class ContactsStore {
   /** Read the roster and the blocklist. Maps to api.contacts() and api.blockedContacts(). */
   async refresh() {
     if (!live) return;
+    const seq = ++this.readSeq;
     try {
       const b = await api();
       const { contacts, outgoing } = splitRoster(await b.contacts());
+      // An older answer must not replace a newer one, or the lists of a closed session.
+      if (seq !== this.readSeq) return;
       this.contacts = contacts;
       this.outgoing = outgoing;
       // A request that was answered is no longer pending.
@@ -139,6 +147,15 @@ class ContactsStore {
       ui.say(plainError(e), true);
     }
     await this.refreshBlocked();
+  }
+
+  /** Empty the lists. Answers that are on their way are dropped. Call it at sign-out. */
+  reset() {
+    this.readSeq++;
+    this.contacts = [];
+    this.incoming = [];
+    this.outgoing = [];
+    this.blocked = [];
   }
 
   /** A `subscriptionRequest` event. */
@@ -315,7 +332,9 @@ class ContactsStore {
   async refreshBlocked() {
     if (!live) return;
     try {
+      const seq = this.readSeq;
       const list = await (await api()).blockedContacts();
+      if (seq !== this.readSeq) return;
       this.blocked = list.map((jid) => {
         const known = this.contacts.find((c) => c.address === jid);
         return known ?? toContactItem(jid, null);

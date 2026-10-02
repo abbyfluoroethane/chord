@@ -128,10 +128,20 @@ class AppState {
   // --- derived -----------------------------------------------------
 
   channel = $derived(this.channels.find((c) => c.jid === this.selectedJid) ?? null);
+  /** The copies of mention messages. A message keeps its copy, so that its row does not redraw. */
+  private mentionCopies = new WeakMap<TimelineItem, TimelineItem>();
   items = $derived.by(() => {
     const list = this.timelines[this.selectedJid] ?? [];
     if (!live) return list;
-    return list.map((m) => (this.mentionIds[m.id] ? { ...m, mention: true } : m));
+    return list.map((m) => {
+      if (!this.mentionIds[m.id]) return m;
+      let copy = this.mentionCopies.get(m);
+      if (!copy) {
+        copy = { ...m, mention: true };
+        this.mentionCopies.set(m, copy);
+      }
+      return copy;
+    });
   });
   dividerId = $derived(this.newFrom[this.selectedJid] ?? null);
   // A group chat on the home list keeps its members under HOME (live.svelte.ts watchMembers).
@@ -193,17 +203,33 @@ class AppState {
     return (space && this.nickname[space]) || this.me.name || this.me.address.split('@')[0];
   }
 
+  /** Unread totals of each space, in one pass over the channels. Muted channels do not count. */
+  private badges = $derived.by(() => {
+    const out = new Map<string, { unread: number; mentions: number }>();
+    for (const c of this.channels) {
+      if (c.muted) continue;
+      const key = c.space === null ? HOME : c.space;
+      const b = out.get(key) ?? { unread: 0, mentions: 0 };
+      b.unread += c.unread;
+      b.mentions += c.mentions;
+      out.set(key, b);
+    }
+    return out;
+  });
+
   /** Totals for the rail. Muted channels do not count. */
   spaceBadge(key: string): { unread: number; mentions: number } {
-    let unread = 0;
-    let mentions = 0;
-    for (const c of this.channels) {
-      const inSpace = key === HOME ? c.space === null : c.space === key;
-      if (!inSpace || c.muted) continue;
-      unread += c.unread;
-      mentions += c.mentions;
-    }
-    return { unread, mentions };
+    return this.badges.get(key) ?? { unread: 0, mentions: 0 };
+  }
+
+  /** Forget the per-chat memory of the last session. The controller calls this at sign-out. */
+  resetSession() {
+    this.lastChannel = {};
+    this.unreadOnOpen = {};
+    this.subjectOpen = {};
+    this.barGone = {};
+    this.pendingJoins = [];
+    this.pending = null;
   }
 
   // --- navigation --------------------------------------------------

@@ -141,7 +141,15 @@ async function subscribe<T>(
   const channel = new Channel<ListDiff<T>>();
   channel.onmessage = onDiff;
   const id = await invoke<number>(command, { ...args, onDiff: channel });
-  return makeSubscription(id);
+  const sub = makeSubscription(id);
+  return {
+    id,
+    async unsubscribe() {
+      // The callback of a Tauri channel stays in the page for good. Cut what it holds.
+      channel.onmessage = () => undefined;
+      await sub.unsubscribe();
+    },
+  };
 }
 
 /** The spaces of the rail. The first diff is a `reset`. */
