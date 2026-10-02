@@ -8,7 +8,7 @@
 {#if session.state === 'reconnecting'}
   <div class="banner" role="status">
     <Icon icon={WifiOff} size={16} />
-    <span>Can't reach {session.host}. Your messages will send when it's back.</span>
+    <span>Chord cannot reach {session.host}. Your messages send when it is back.</span>
     {#if session.canRetry}
       <button class="retry" onclick={() => void session.retry()}>Try now</button>
     {/if}

@@ -6,6 +6,7 @@
   import { linkPreviews } from './linkpreviews.svelte';
   import { api, live } from './bridge';
   import { prefs } from './prefs.svelte';
+  import { ui } from './ui.svelte';
 
   let address = $state('');
   let result = $state<{ ok: boolean; text: string } | null>(null);
@@ -117,13 +118,26 @@
 <h2 class="section">Blocked addresses</h2>
 {#if contactsStore.blocked.length}
   <div class="bar">
-    <button class="btn" onclick={() => contactsStore.unblockAll()}>Unblock all</button>
+    <button
+        class="btn"
+        onclick={() =>
+          (ui.confirm = {
+            title: 'Unblock all',
+            text: `Unblock ${contactsStore.blocked.length === 1 ? '1 address' : `${contactsStore.blocked.length} addresses`}? These people can write to you again.`,
+            confirm: 'Unblock all',
+            onconfirm: () => contactsStore.unblockAll()
+          })}>Unblock all</button
+      >
   </div>
   <ul class="blocked">
     {#each contactsStore.blocked as b (b.address)}
       <li>
         <span class="mono">{b.address}</span>
-        <button class="btn" onclick={() => contactsStore.unblock(b.address)}>Unblock</button>
+        <button
+          class="btn"
+          aria-label="Unblock {b.address}"
+          onclick={() => contactsStore.unblock(b.address)}>Unblock</button
+        >
       </li>
     {/each}
   </ul>

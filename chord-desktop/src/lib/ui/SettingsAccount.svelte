@@ -82,11 +82,12 @@
       session.hasSavedPassword = false;
       ui.say('Saved password forgotten.');
     } catch (e) {
-      certError = plainError(e);
+      ui.say(plainError(e), true);
     }
   }
 
   const changed = $derived(name.trim() !== app.me.name && name.trim().length > 0);
+  let saving = $state(false);
 
   function pick() {
     error = '';
@@ -140,18 +141,22 @@
   // Maps to api.setNickname(name): publishes the nickname (XEP-0172) to our own PEP.
   async function save() {
     const next = name.trim();
+    if (!changed || saving) return;
     if (!live) {
       app.me.name = next;
-      ui.say('Saved.');
+      ui.say('Display name saved.');
       return;
     }
     error = '';
+    saving = true;
     try {
       await (await api()).setNickname(next);
       app.me.name = next;
-      ui.say('Saved.');
+      ui.say('Display name saved.');
     } catch (e) {
       error = plainError(e);
+    } finally {
+      saving = false;
     }
   }
 </script>
@@ -180,7 +185,7 @@
         />
         <button class="btn" onclick={() => file?.click()}>Change avatar</button>
         {#if app.me.avatar}
-          <button class="btn btn-ghost" onclick={removeAvatar}>Remove</button>
+          <button class="btn btn-ghost" onclick={removeAvatar}>Remove avatar</button>
         {/if}
       </div>
       {#if error}<span class="err" role="alert">{error}</span>{/if}
@@ -195,8 +200,14 @@
         class="input grow"
         maxlength="40"
         bind:value={name}
+        onkeydown={(e) => {
+          if (e.key === 'Enter' && !e.isComposing) {
+            e.preventDefault();
+            void save();
+          }
+        }}
       />
-      <button class="btn btn-primary" disabled={!changed} onclick={save}>Save</button>
+      <button class="btn btn-primary" disabled={!changed || saving} onclick={save}>Save</button>
     </div>
     {#if live}
       <span class="meta">Your contacts whose apps read nicknames see this name.</span>

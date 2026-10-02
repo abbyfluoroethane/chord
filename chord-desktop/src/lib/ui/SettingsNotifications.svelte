@@ -18,6 +18,6 @@
 <SettingRow title="Sound" hint="Play a short, quiet sound when a message arrives in a chat you do not read.">
   <Toggle checked={prefs.sound} label="Sound" onchange={(v) => prefs.set('sound', v)} />
 </SettingRow>
-<SettingRow title="Mute DMs" hint="No notice and no sound from any DM until you turn this off.">
-  <Toggle checked={prefs.muteDms} label="Mute DMs" onchange={(v) => prefs.set('muteDms', v)} />
+<SettingRow title="Mute messages from people" hint="No notice and no sound for a message from a person until you turn this off. Channels still tell you.">
+  <Toggle checked={prefs.muteDms} label="Mute messages from people" onchange={(v) => prefs.set('muteDms', v)} />
 </SettingRow>

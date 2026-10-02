@@ -39,7 +39,7 @@
     untrack(() => (ui.overlays += 1));
     return () => {
       untrack(() => (ui.overlays -= 1));
-      opener?.focus?.();
+      if (opener?.isConnected) opener.focus?.();
     };
   });
 
@@ -72,7 +72,7 @@
         {/if}
       </div>
       <div class="closer">
-        <button class="x" aria-label="Close settings" onclick={close}><Icon icon={X} size={18} /></button>
+        <button class="x" aria-label="Close settings" title="Close settings" onclick={close}><Icon icon={X} size={18} /></button>
         <span class="esc" aria-hidden="true">ESC</span>
       </div>
     </div>
