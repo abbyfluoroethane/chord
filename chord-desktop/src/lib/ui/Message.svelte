@@ -27,8 +27,19 @@
   let {
     item,
     grouped,
-    onjump
-  }: { item: TimelineItem; grouped: boolean; onjump: (id: string) => void } = $props();
+    onjump,
+    editable = false
+  }: {
+    item: TimelineItem;
+    grouped: boolean;
+    onjump: (id: string) => void;
+    /** This is the last own message of the chat: the only one that can change. */
+    editable?: boolean;
+  } = $props();
+
+  // The hover toolbar mounts when the pointer or the focus first comes to the row. A long
+  // chat then holds a few toolbars, not one for each message.
+  let toolbarOn = $state(false);
 
   let picker = $state<HTMLElement | null>(null);
   let deleting = $state(false);
@@ -122,11 +133,13 @@
   aria-label="{item.senderName}, {stamp(item.timestamp)}"
   oncontextmenu={openMenu}
   onkeydown={keydown}
+  onpointerenter={() => (toolbarOn = true)}
+  onfocusin={() => (toolbarOn = true)}
 >
-  {#if !item.retracted && !editing}
+  {#if toolbarOn && !item.retracted && !editing}
     <div class="toolbar">
       <MessageToolbar
-        own={app.canEdit(item)}
+        own={editable && !!item.body}
         onreact={(a) => (picker = a)}
         onreply={() => app.startReply(item)}
         onedit={() => (app.editingId = item.id)}

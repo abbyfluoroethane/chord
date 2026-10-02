@@ -40,8 +40,11 @@
     leaving.ask(href, text);
   }
 
+  // The prop is a getter. This value stays equal while the text stays equal, so the parser
+  // runs only when the text changes.
+  const source = $derived(body);
   const parsed = $derived(
-    parseMarkdown(body, {
+    parseMarkdown(source, {
       myNames: [app.me.name, app.me.address.split('@')[0], app.me.address],
       shortcodes: codes
     })
