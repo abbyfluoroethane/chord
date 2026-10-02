@@ -73,10 +73,13 @@
 
   $effect(() => {
     if (!dlg) return;
+    const opener = document.activeElement as HTMLElement | null;
     dlg.showModal();
     untrack(() => (ui.overlays += 1));
     return () => {
       untrack(() => (ui.overlays -= 1));
+      // After a pick, the new chat takes the focus. Only a plain close goes back to the opener.
+      if (opener?.isConnected && document.activeElement === document.body) opener.focus?.();
     };
   });
 
@@ -146,7 +149,7 @@
       <li class="none" role="presentation">Nothing matches. Try a shorter name.</li>
     {/each}
   </ul>
-  <p class="tip meta">Start with # for channels or @ for DMs. Type an address to join a room or message a person.</p>
+  <p class="tip meta">Start with # for channels or @ for people. Type an address to join a room or message a person.</p>
 </dialog>
 
 <style>

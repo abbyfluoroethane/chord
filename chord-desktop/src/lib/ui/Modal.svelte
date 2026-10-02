@@ -33,12 +33,31 @@
     if (!dlg) return;
     const opener = document.activeElement as HTMLElement | null;
     dlg.showModal();
+    startFocus(dlg);
     untrack(() => (ui.overlays += 1));
     return () => {
       untrack(() => (ui.overlays -= 1));
-      opener?.focus?.();
+      // The opener can be gone, for example a menu item. Then the focus stays where it is.
+      if (opener?.isConnected) opener.focus?.();
     };
   });
+
+  // The browser puts the focus on the Close button. Move it to the first field of the form.
+  // A dialog without a field gets the safe button: Cancel for a danger button, else the main one.
+  // A child that sets its own focus later still wins.
+  function startFocus(d: HTMLDialogElement) {
+    const field = d.querySelector<HTMLElement>(
+      '.body input:not([type=hidden]):not([disabled]), .body textarea:not([disabled]), .body select:not([disabled])'
+    );
+    if (field) {
+      field.focus();
+      return;
+    }
+    const buttons = [...d.querySelectorAll<HTMLElement>('footer button:not([disabled]), footer a')];
+    const main = buttons.find((b) => b.classList.contains('btn-primary')) ?? buttons.at(-1);
+    const danger = main?.classList.contains('btn-danger');
+    (danger ? buttons[0] : main)?.focus();
+  }
 
   function backdrop(e: MouseEvent) {
     if (e.target === dlg) onclose();
@@ -58,7 +77,7 @@
     {:else if !bare}
       <h2 class="title">{title}</h2>
     {/if}
-    <button class="close" aria-label="Close" onclick={onclose}><Icon icon={X} size={18} /></button>
+    <button class="close" aria-label="Close" title="Close" onclick={onclose}><Icon icon={X} size={18} /></button>
   </header>
   <div class="body">{@render children()}</div>
   {#if footer}<footer data-guard>{@render footer()}</footer>{/if}

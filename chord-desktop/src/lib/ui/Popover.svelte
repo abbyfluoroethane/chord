@@ -79,6 +79,9 @@
       if (e.key === 'Escape') {
         e.preventDefault();
         onclose();
+      } else if (e.key === 'Tab' && role === 'menu') {
+        // A menu is one tab stop. Tab leaves it, so it closes and the focus goes back.
+        onclose();
       }
     };
     const resize = () => place();
