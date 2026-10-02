@@ -26,6 +26,7 @@
     /* Accent and status */
     --accent: #4cc3b5;
     --online: #5bc46e;
+    --away: #f2a93b; /* always amber: it does not follow the accent */
     --danger: #f0676b;
     --on-danger: #1a1c20;
 

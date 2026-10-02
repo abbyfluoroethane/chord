@@ -45,8 +45,8 @@
   {#if kind === 'online'}
     <circle cx="5" cy="5" r="5" fill="var(--online)" />
   {:else if kind === 'away'}
-    <path d="M5 0a5 5 0 0 0 0 10z" fill="var(--brand)" />
-    <circle cx="5" cy="5" r="4" fill="none" stroke="var(--brand)" stroke-width="2" />
+    <path d="M5 0a5 5 0 0 0 0 10z" fill="var(--away)" />
+    <circle cx="5" cy="5" r="4" fill="none" stroke="var(--away)" stroke-width="2" />
   {:else if kind === 'dnd'}
     <rect x="0" y="3" width="10" height="4" rx="2" fill="var(--danger)" />
   {:else}

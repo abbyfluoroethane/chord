@@ -24,6 +24,7 @@ A theme is CSS. Add it in Settings > Appearance > Import theme. You can give a l
   --on-brand: #11111b;
   --accent: #89b4fa;      /* links, focus rings */
   --online: #a6e3a1;
+  --away: #f9e2af;        /* the away status, not the accent */
   --danger: #f38ba8;
   --on-danger: #11111b;
 }
