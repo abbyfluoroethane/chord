@@ -407,6 +407,20 @@ export interface OpenInfo {
  */
 export type Settings = Record<string, unknown>;
 
+/** The size of the stored data in bytes (Rust `StorageInfo`). */
+export interface StorageInfo {
+  database: number;
+  avatars: number;
+  emojiCache: number;
+}
+
+/** The app version and the system (Rust `AppInfo`). */
+export interface AppInfo {
+  version: string;
+  os: string;
+  arch: string;
+}
+
 /** The preview of a link (Rust `LinkPreview`). Every field but `url` can be null. */
 export interface LinkPreview {
   /** The URL after the redirects. */

@@ -3,6 +3,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
+  AppInfo,
   Availability,
   ChannelItem,
   ChannelScope,
@@ -45,6 +46,7 @@ import type {
   SpaceInfo,
   SpaceMember,
   SpaceItem,
+  StorageInfo,
   TimelineItem
 } from './types';
 
@@ -478,6 +480,19 @@ export const refreshPins = () => invoke<void>('refresh_pins');
 export const getSettings = () => invoke<Settings>('get_settings');
 /** Replace the local settings. Any JSON, 256 KB at most. */
 export const setSettings = (value: Settings) => invoke<void>('set_settings', { value });
+
+// ---------------------------------------------------------------- advanced settings
+
+/** The size in bytes of the stored data of the open account. */
+export const storageInfo = () => invoke<StorageInfo>('storage_info');
+/** Clear the link previews and the drawn emoji. Resolves to the freed bytes of files. */
+export const clearCaches = () => invoke<number>('clear_caches');
+/** Delete the stored messages of the open account. Resolves to their number. */
+export const clearHistory = () => invoke<number>('clear_history');
+/** The version of the app and the system. */
+export const appInfo = () => invoke<AppInfo>('app_info');
+/** The features that the server advertises (disco#info), sorted. Empty while offline. */
+export const serverFeatures = () => invoke<string[]>('server_features');
 
 // ---------------------------------------------------------------- link previews
 

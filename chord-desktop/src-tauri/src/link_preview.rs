@@ -267,6 +267,13 @@ fn shared() -> &'static Shared {
     })
 }
 
+/// Drop every cached preview. The next link fetches its page again.
+pub(crate) fn clear_cache() {
+    if let Ok(mut cache) = shared().cache.lock() {
+        *cache = Cache::new();
+    }
+}
+
 /// The permits for the page fetches.
 fn fetch_permits() -> &'static tokio::sync::Semaphore {
     static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();

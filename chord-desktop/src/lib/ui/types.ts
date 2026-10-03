@@ -197,7 +197,7 @@ export type SettingsPage =
   | 'appearance'
   | 'chat'
   | 'keybinds'
-  | 'server'
+  | 'advanced'
   | 'about';
 
 export type DisplayMode = 'cozy' | 'compact';

@@ -10,8 +10,7 @@
       label: 'User settings',
       pages: [
         { id: 'account', label: 'My account' },
-        { id: 'privacy', label: 'Privacy' },
-        { id: 'server', label: 'Server' }
+        { id: 'privacy', label: 'Privacy' }
       ]
     },
     {
@@ -20,7 +19,8 @@
         { id: 'notifications', label: 'Notifications' },
         { id: 'appearance', label: 'Appearance' },
         { id: 'chat', label: 'Chat' },
-        { id: 'keybinds', label: 'Keybinds' }
+        { id: 'keybinds', label: 'Keybinds' },
+        { id: 'advanced', label: 'Advanced' }
       ]
     }
   ];

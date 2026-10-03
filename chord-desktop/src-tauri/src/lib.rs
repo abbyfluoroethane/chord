@@ -5,6 +5,7 @@
 //! Views and events leave through Tauri channels, as JSON that chord-core's `serde`
 //! feature produces. The TypeScript side is in src/lib/chord/.
 
+mod advanced;
 mod avatars;
 mod badge;
 mod certpin;
@@ -80,6 +81,11 @@ pub fn run() {
     emoji::register(avatars::register(builder))
         .invoke_handler(tauri::generate_handler![
             commands::open,
+            advanced::storage_info,
+            advanced::clear_caches,
+            advanced::clear_history,
+            advanced::app_info,
+            advanced::server_features,
             commands::login,
             commands::logout,
             commands::saved_password,
