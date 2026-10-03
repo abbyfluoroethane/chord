@@ -19,6 +19,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import space.foid.chord.ui.composer.ForwardContent
+import space.foid.chord.ui.composer.ForwardTarget
+import space.foid.chord.ui.composer.linksIn
+import space.foid.chord.ui.composer.messageActions
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordTheme
 import space.foid.chord.ui.timeline.MessageUi
@@ -56,9 +60,24 @@ class SheetsScreenshotTest {
         compose.onRoot().captureRoboImage("src/test/screenshots/sheets/$name.png")
     }
 
-    @Composable private fun Actions(canEdit: Boolean = true, canRetract: Boolean = true) = SheetFrame {
-        MessageActionsContent(message, canEdit, canRetract, {}, {}, {}, {}, {}, {})
+    private val quick = listOf("\uD83D\uDC4D", "\u2764\uFE0F", "\uD83D\uDE02", "\uD83D\uDC40")
+
+    @Composable private fun Actions(
+        m: MessageUi = message,
+        moderator: Boolean = false,
+        links: List<String> = emptyList(),
+        channelLink: Boolean = true,
+    ) = SheetFrame {
+        MessageActionsContent(
+            message = m,
+            actions = messageActions(m, moderator, channelLink),
+            quick = quick,
+            onAction = {}, onReact = {}, onMoreReactions = {},
+            links = links,
+        )
     }
+
+    private val own = message.copy(outgoing = true, body = "Fixed. See https://example.org/build/42 for the log.")
 
     @Composable private fun Picker(query: String = "") = SheetFrame {
         ReactionPickerContent(groups, recents = listOf("😀", "😂", "👍"), onPick = {}, modifier = Modifier.height(440.dp), initialQuery = query)
@@ -66,11 +85,33 @@ class SheetsScreenshotTest {
 
     @Composable private fun Attach() = SheetFrame { AttachmentContent({}, {}) }
 
-    @Composable private fun Confirm() = Box(Modifier.fillMaxWidth().padding(24.dp)) { DeleteConfirmCard({}, {}) }
+    @Composable private fun Confirm(remove: Boolean = false) = Box(Modifier.fillMaxWidth().padding(24.dp)) { DeleteConfirmCard(message, remove, {}, {}) }
 
-    @Test fun actions_dark() = shot(true, "actions_dark") { Actions() }
-    @Test fun actions_light() = shot(false, "actions_light") { Actions() }
-    @Test fun actions_other_dark() = shot(true, "actions_other_dark") { Actions(canEdit = false, canRetract = false) }
+    @Composable private fun Forward(query: String = "", selected: String? = "bob@example.org") = SheetFrame {
+        ForwardContent(
+            senderName = "Alice", summary = message.body,
+            targets = listOf(
+                ForwardTarget("bob@example.org", "Bob", "Message", true),
+                ForwardTarget("general@conf.example.org", "general", "Channel", false),
+                ForwardTarget("ops@conf.example.org", "ops", "Launch Ops", false),
+                ForwardTarget("carol@example.org", "Carol", "Message", true),
+            ),
+            onCancel = {}, onForward = {},
+            modifier = Modifier.height(520.dp),
+            initialQuery = query, initialSelected = selected,
+        )
+    }
+
+    @Test fun actions_dark() = shot(true, "actions_dark") { Actions(own, links = linksIn(own.body)) }
+    @Test fun actions_light() = shot(false, "actions_light") { Actions(own, links = linksIn(own.body)) }
+    @Test fun actions_other_dark() = shot(true, "actions_other_dark") { Actions() }
+    @Test fun actions_other_light() = shot(false, "actions_other_light") { Actions() }
+    @Test fun actions_moderator_dark() = shot(true, "actions_moderator_dark") { Actions(moderator = true) }
+    @Test fun actions_deleted_dark() = shot(true, "actions_deleted_dark") { Actions(message.copy(retracted = true)) }
+    @Test fun forward_dark() = shot(true, "forward_dark") { Forward() }
+    @Test fun forward_light() = shot(false, "forward_light") { Forward() }
+    @Test fun forward_search_dark() = shot(true, "forward_search_dark") { Forward(query = "zz", selected = null) }
+    @Test fun remove_dark() = shot(true, "remove_dark") { Confirm(remove = true) }
     @Test fun picker_dark() = shot(true, "picker_dark") { Picker() }
     @Test fun picker_light() = shot(false, "picker_light") { Picker() }
     @Test fun picker_search_dark() = shot(true, "picker_search_dark") { Picker(query = "e1f60") }

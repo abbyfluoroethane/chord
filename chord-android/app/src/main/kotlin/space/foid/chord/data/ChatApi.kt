@@ -45,6 +45,8 @@ interface ChatApi {
     suspend fun reply(itemId: String, body: String)
     suspend fun edit(itemId: String, body: String)
     suspend fun retract(itemId: String)
+    /** Remove another person's message, as a room moderator (XEP-0425). */
+    suspend fun moderate(itemId: String)
     suspend fun toggleReaction(itemId: String, emoji: String)
     suspend fun markRead(target: TimelineTarget)
     suspend fun setTyping(target: TimelineTarget, typing: Boolean)
@@ -101,6 +103,7 @@ class ClientChatApi(private val client: ChordClient) : ChatApi {
     override suspend fun reply(itemId: String, body: String) = client.reply(itemId, body)
     override suspend fun edit(itemId: String, body: String) = client.editMessage(itemId, body)
     override suspend fun retract(itemId: String) = client.retractMessage(itemId)
+    override suspend fun moderate(itemId: String) = client.moderateMessage(itemId, null)
     override suspend fun toggleReaction(itemId: String, emoji: String) = client.toggleReaction(itemId, emoji)
 
     override suspend fun markRead(target: TimelineTarget) = when (target) {

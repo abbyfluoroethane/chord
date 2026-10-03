@@ -96,7 +96,7 @@ internal fun SheetFrame(content: @Composable () -> Unit) {
     }
 }
 
-enum class SheetIcon { Reply, Edit, Copy, Delete, Image, File, Plus, Search, Check }
+enum class SheetIcon { Reply, Edit, Copy, Delete, Image, File, Plus, Search, Check, Forward, Link, Open, Hash, ShieldX, Smile }
 
 /** A 24 unit line icon drawn with [tint]. */
 @Composable
@@ -140,6 +140,33 @@ internal fun LineIcon(icon: SheetIcon, tint: Color, size: Dp = 22.dp) {
                 SheetIcon.File -> {
                     drawPath(path { s -> moveTo(7 * s, 3 * s); lineTo(14 * s, 3 * s); lineTo(19 * s, 8 * s); lineTo(19 * s, 21 * s); lineTo(7 * s, 21 * s); close() }, tint, style = stroke)
                     drawPath(path { s -> moveTo(14 * s, 3 * s); lineTo(14 * s, 8 * s); lineTo(19 * s, 8 * s) }, tint, style = stroke)
+                }
+                SheetIcon.Forward -> {
+                    drawPath(path { s -> moveTo(14 * s, 6 * s); lineTo(20 * s, 12 * s); lineTo(14 * s, 18 * s) }, tint, style = stroke)
+                    drawPath(
+                        path { s -> moveTo(20 * s, 12 * s); lineTo(10 * s, 12 * s); cubicTo(6 * s, 12 * s, 4 * s, 14 * s, 4 * s, 19 * s) },
+                        tint, style = stroke,
+                    )
+                }
+                SheetIcon.Link -> {
+                    drawRoundRect(tint, Offset(3 * k, 9 * k), Size(10 * k, 6 * k), CornerRadius(3 * k), style = stroke)
+                    drawRoundRect(tint, Offset(11 * k, 9 * k), Size(10 * k, 6 * k), CornerRadius(3 * k), style = stroke)
+                }
+                SheetIcon.Open -> {
+                    drawPath(path { s -> moveTo(11 * s, 5 * s); lineTo(6 * s, 5 * s); quadraticTo(4 * s, 5 * s, 4 * s, 7 * s); lineTo(4 * s, 18 * s); quadraticTo(4 * s, 20 * s, 6 * s, 20 * s); lineTo(17 * s, 20 * s); quadraticTo(19 * s, 20 * s, 19 * s, 18 * s); lineTo(19 * s, 13 * s) }, tint, style = stroke)
+                    drawPath(path { s -> moveTo(14 * s, 4 * s); lineTo(20 * s, 4 * s); lineTo(20 * s, 10 * s) }, tint, style = stroke)
+                    line(20f, 4f, 11f, 13f)
+                }
+                SheetIcon.Hash -> { line(9f, 4f, 7f, 20f); line(17f, 4f, 15f, 20f); line(4f, 9f, 20f, 9f); line(4f, 15f, 20f, 15f) }
+                SheetIcon.ShieldX -> {
+                    drawPath(path { s -> moveTo(12 * s, 3 * s); lineTo(19 * s, 6 * s); lineTo(19 * s, 12 * s); cubicTo(19 * s, 16.5f * s, 16 * s, 19.5f * s, 12 * s, 21 * s); cubicTo(8 * s, 19.5f * s, 5 * s, 16.5f * s, 5 * s, 12 * s); lineTo(5 * s, 6 * s); close() }, tint, style = stroke)
+                    line(9.5f, 9.5f, 14.5f, 14.5f); line(14.5f, 9.5f, 9.5f, 14.5f)
+                }
+                SheetIcon.Smile -> {
+                    drawCircle(tint, 9 * k, Offset(12 * k, 12 * k), style = stroke)
+                    drawPath(path { s -> moveTo(8 * s, 14 * s); cubicTo(9 * s, 17 * s, 15 * s, 17 * s, 16 * s, 14 * s) }, tint, style = stroke)
+                    drawCircle(tint, 0.6f * k, Offset(9 * k, 10 * k), style = stroke)
+                    drawCircle(tint, 0.6f * k, Offset(15 * k, 10 * k), style = stroke)
                 }
                 SheetIcon.Plus -> { line(12f, 5f, 12f, 19f); line(5f, 12f, 19f, 12f) }
                 SheetIcon.Check -> drawPath(path { s -> moveTo(5 * s, 12.5f * s); lineTo(10 * s, 17.5f * s); lineTo(19 * s, 7 * s) }, tint, style = stroke)
