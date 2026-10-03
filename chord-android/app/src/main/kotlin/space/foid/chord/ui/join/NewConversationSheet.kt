@@ -256,14 +256,14 @@ private fun SpacesPart(spaces: SpacesState, cb: JoinCallbacks) {
                 Modifier.fillMaxWidth().heightIn(max = 360.dp).testTag("spaces_list"),
                 verticalArrangement = Arrangement.spacedBy(ChordSpace.s2),
             ) {
-                items(spaces.rows, key = { it.key }) { row -> SpaceCard(row) { cb.onJoinSpace(row) } }
+                items(spaces.rows, key = { it.key }) { row -> SpaceCard(row, { cb.onJoinSpace(row) }) }
             }
         }
     }
 }
 
 @Composable
-private fun SpaceCard(row: SpaceRow, onJoin: () -> Unit) {
+internal fun SpaceCard(row: SpaceRow, onJoin: () -> Unit, joined: Boolean = false) {
     val c = Chord.colors
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(ChordRadius.md)).background(c.surface300)
@@ -284,14 +284,17 @@ private fun SpaceCard(row: SpaceRow, onJoin: () -> Unit) {
         }
         JoinButton(
             text = stringResource(
-                when (row.status) {
+                when {
+                    joined -> R.string.spaces_joined
+                    else -> when (row.status) {
                     SpaceStatus.Idle -> R.string.join_space_join
                     SpaceStatus.Joining -> R.string.join_space_joining
                     SpaceStatus.Requested -> R.string.join_space_requested
+                    }
                 },
             ),
             onClick = onJoin, tag = "space_join_${row.info.node}",
-            enabled = row.status == SpaceStatus.Idle, busy = row.status == SpaceStatus.Joining, compact = true,
+            enabled = row.status == SpaceStatus.Idle && !joined, busy = row.status == SpaceStatus.Joining, compact = true,
         )
     }
 }

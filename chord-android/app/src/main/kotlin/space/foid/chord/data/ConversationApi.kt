@@ -4,6 +4,8 @@ import uniffi.chord_ffi.ChordClient
 import uniffi.chord_ffi.Contact
 import uniffi.chord_ffi.JoinOutcome
 import uniffi.chord_ffi.NotificationLevel
+import uniffi.chord_ffi.NotificationSetting
+import uniffi.chord_ffi.RoomSettings
 import uniffi.chord_ffi.PendingSpaceJoin
 import uniffi.chord_ffi.SpaceInfo
 
@@ -35,6 +37,18 @@ interface ConversationApi {
     suspend fun notificationLevel(peer: String): NotificationLevel
     suspend fun setNotificationLevel(peer: String, level: NotificationLevel)
     suspend fun markRead(jid: String)
+
+    /** The level and the end of a timed mute (Unix time in ms) of a chat. */
+    suspend fun notificationSetting(peer: String): NotificationSetting
+
+    /** Set the level. With [muteUntil] the chat is muted until that time and keeps its level. */
+    suspend fun setNotification(peer: String, level: NotificationLevel, muteUntil: Long?)
+
+    /** Set the topic of a room. An empty text clears it. */
+    suspend fun setRoomSubject(room: String, subject: String)
+
+    /** Change the name of a room that we own. */
+    suspend fun renameRoom(room: String, name: String)
 
     /** The address of our own account. */
     fun account(): String
@@ -74,6 +88,14 @@ class ClientConversationApi(private val client: ChordClient) : ConversationApi {
 
     override suspend fun markRead(jid: String) =
         if ('/' in jid) client.markReadPrivate(jid.substringBefore('/'), jid.substringAfter('/')) else client.markRead(jid)
+
+    override suspend fun notificationSetting(peer: String): NotificationSetting = client.notificationLevel(peer)
+    override suspend fun setNotification(peer: String, level: NotificationLevel, muteUntil: Long?) =
+        client.setNotificationLevel(peer, level, muteUntil)
+
+    override suspend fun setRoomSubject(room: String, subject: String) = client.setRoomSubject(room, subject)
+    override suspend fun renameRoom(room: String, name: String) = client.configureRoom(room, RoomSettings(name, null, null))
+
     override fun account(): String = client.account()
 }
 

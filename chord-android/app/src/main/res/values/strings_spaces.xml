@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Channel menu (more rows of the channel actions sheet) -->
+    <string name="actions_notification_level">Notification level</string>
+    <string name="actions_mute_channel">Mute channel</string>
+    <string name="actions_mute_chat">Mute conversation</string>
+    <string name="actions_unmute_channel">Unmute channel</string>
+    <string name="actions_unmute_chat">Unmute conversation</string>
+    <string name="actions_mute_15m">For 15 minutes</string>
+    <string name="actions_mute_1h">For 1 hour</string>
+    <string name="actions_mute_8h">For 8 hours</string>
+    <string name="actions_mute_24h">For 24 hours</string>
+    <string name="actions_mute_forever">Until I turn it back on</string>
+    <string name="actions_muted_forever">Muted until you turn it back on</string>
+    <string name="actions_muted_until">Muted until %1$s</string>
+    <string name="actions_set_topic">Set topic</string>
+    <string name="actions_topic_label">Topic</string>
+    <string name="actions_topic_hint">Everyone in the channel sees it in the header.</string>
+    <string name="actions_topic_keep">Leave empty to keep the topic</string>
+    <string name="actions_channel_settings">Channel settings</string>
+    <string name="actions_channel_name">Channel name</string>
+    <string name="actions_settings_hint">Only an owner can change the name. An admin can change the topic.</string>
+    <string name="actions_copy_link">Copy link</string>
+
+    <!-- Space menu -->
+    <string name="spaces_space_label">Space</string>
+    <string name="spaces_invite">Invite people</string>
+    <string name="spaces_settings">Space settings</string>
+    <string name="spaces_create_channel">Create channel</string>
+    <string name="spaces_notifications">Notification settings</string>
+    <string name="spaces_nickname">Change nickname</string>
+    <string name="spaces_leave">Leave space</string>
+    <string name="spaces_save">Save</string>
+    <string name="spaces_loading">Loading</string>
+    <string name="spaces_up_to_date">Up to date</string>
+
+    <!-- Rail menus -->
+    <string name="spaces_mark_read">Mark as read</string>
+    <string name="spaces_home_title">Home and messages</string>
+    <string name="spaces_mark_all_read">Mark all as read</string>
+    <string name="spaces_mark_every_read">Mark every space as read</string>
+
+    <!-- Notification settings -->
+    <string name="spaces_tell_me">Tell me about</string>
+    <string name="spaces_mute_space">Mute this space</string>
+
+    <!-- Create channel and nickname -->
+    <string name="spaces_create_channel_title">Create a channel</string>
+    <string name="spaces_create_channel_button">Create channel</string>
+    <string name="spaces_create_channel_hint">A new channel in %1$s.</string>
+    <string name="spaces_channel_name">Channel name</string>
+    <string name="spaces_channel_placeholder">general</string>
+    <string name="spaces_nickname_label">Nickname</string>
+    <string name="spaces_nickname_hint">The name that people see in the channels of %1$s.</string>
+
+    <!-- Leave -->
+    <string name="spaces_leave_title">Leave this space</string>
+    <string name="spaces_leave_text">You will leave %1$s and lose its channels. You can join again if it is public.</string>
+
+    <!-- Invite -->
+    <string name="spaces_invite_hint">Pick people to invite to %1$s. Each one gets a message with the join link.</string>
+    <string name="spaces_invite_search">Search your contacts</string>
+    <string name="spaces_invite_no_contacts">You have no contacts yet.</string>
+    <string name="spaces_invite_no_match">No contact matches.</string>
+    <string name="spaces_invite_or_copy">Or copy the link and send it yourself.</string>
+    <string name="spaces_copy">Copy</string>
+    <string name="spaces_copied">Copied</string>
+    <string name="spaces_send_invite">Send invite</string>
+    <plurals name="spaces_send_invites">
+        <item quantity="one">Send %d invite</item>
+        <item quantity="other">Send %d invites</item>
+    </plurals>
+
+    <!-- Space settings -->
+    <string name="spaces_settings_owner_only">Only the owner of a space can change it.</string>
+    <string name="spaces_settings_name">Space name</string>
+    <string name="spaces_settings_description">Description</string>
+    <string name="spaces_settings_images">Images</string>
+    <string name="spaces_settings_avatar">Change avatar</string>
+    <string name="spaces_settings_banner">Change banner</string>
+    <string name="spaces_settings_requests">Join requests</string>
+    <string name="spaces_settings_no_requests">Nobody is waiting to join.</string>
+    <string name="spaces_settings_members">Members</string>
+    <string name="spaces_settings_channels">Channels</string>
+    <string name="spaces_settings_no_channels">This space has no channels.</string>
+    <string name="spaces_settings_danger">Danger zone</string>
+    <string name="spaces_settings_delete">Delete space</string>
+    <string name="spaces_approve">Approve</string>
+    <string name="spaces_deny">Deny</string>
+    <string name="spaces_remove">Remove</string>
+    <string name="spaces_unban">Unban</string>
+    <string name="spaces_ban">Ban</string>
+    <string name="spaces_remove_from_space">Remove from space</string>
+    <string name="spaces_delete_title">Delete space</string>
+    <string name="spaces_delete_text">Delete %1$s for everyone? Its list of channels and members is removed. This cannot be undone.</string>
+    <string name="spaces_image_not_image">Pick an image file.</string>
+    <string name="spaces_image_too_big">The image is too big. Use one under %1$d MB.</string>
+
+    <!-- Add a space -->
+    <string name="spaces_add_button">Add a space</string>
+    <string name="spaces_add_create_title">Create a space</string>
+    <string name="spaces_add_join_title">Join a space</string>
+    <string name="spaces_add_tab_create">Create a space</string>
+    <string name="spaces_add_tab_join">Join a space</string>
+    <string name="spaces_add_create_hint">Anyone can make a space. It lives on your server and you own it.</string>
+    <string name="spaces_add_name">Space name</string>
+    <string name="spaces_add_name_placeholder">Launch Ops</string>
+    <string name="spaces_add_description">Description (optional)</string>
+    <string name="spaces_add_who">Who can join</string>
+    <string name="spaces_access_open">Anyone</string>
+    <string name="spaces_access_authorize">People I approve</string>
+    <string name="spaces_access_whitelist">Only people I invite</string>
+    <string name="spaces_add_create">Create space</string>
+    <string name="spaces_add_creating">Creating</string>
+    <string name="spaces_add_search">Search public spaces</string>
+    <string name="spaces_add_none">No space matches. Try another name.</string>
+    <string name="spaces_joined">Joined</string>
+
+    <!-- Channel list -->
+    <string name="spaces_header_menu">Space menu, %1$s</string>
+    <string name="spaces_add_channel">Create channel</string>
+</resources>

@@ -62,6 +62,13 @@ import space.foid.chord.ui.components.ChannelKind
 import space.foid.chord.ui.components.ChannelListItem
 import space.foid.chord.ui.components.RailIconKind
 import space.foid.chord.ui.join.DrawerHeaderActions
+import space.foid.chord.ui.spaces.SpaceGlyph
+import space.foid.chord.ui.spaces.SpaceHost
+import space.foid.chord.ui.spaces.SpaceIcon
+import space.foid.chord.ui.spaces.SpaceRequest
+import space.foid.chord.ui.spaces.rememberSpaceHostState
+import space.foid.chord.ui.spaces.target
+import androidx.compose.ui.draw.rotate
 import space.foid.chord.ui.components.SpaceRailIcon
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordSize
@@ -131,6 +138,9 @@ private fun sameScope(a: ChannelScope, b: ChannelScope): Boolean = when {
  * @param onSelect a tap on a channel row.
  * @param onLongPress a long press on a channel row.
  * @param inboxCount the number on the badge of the inbox button. [onInbox] and [onNew] are the header buttons.
+ * @param onSpaceMenu a tap on the name of the space in the header.
+ * @param onSpaceLongPress a long press on a space of the rail. [onHomeLongPress]: on Home. [onAddSpace]: a tap on "+".
+ * @param onCreateChannel the "+" of the Channels header in a space. Null: no button.
  */
 @Composable
 fun ChannelDrawerContent(
@@ -152,6 +162,11 @@ fun ChannelDrawerContent(
     onInbox: () -> Unit = {},
     onNew: () -> Unit = {},
     onLongPress: (ChannelItem) -> Unit = {},
+    onSpaceMenu: (SpaceItem) -> Unit = {},
+    onSpaceLongPress: (SpaceItem) -> Unit = {},
+    onHomeLongPress: () -> Unit = {},
+    onAddSpace: () -> Unit = {},
+    onCreateChannel: (() -> Unit)? = null,
 ) {
     val c = Chord.colors
     val isHome = scope is ChannelScope.Home
@@ -167,6 +182,7 @@ fun ChannelDrawerContent(
                     SpaceRailIcon(
                         name = "Home", selected = isHome, onClick = { onScope(ChannelScope.Home) },
                         kind = RailIconKind.Home, mentions = homeUnread,
+                        onLongClick = onHomeLongPress,
                         modifier = Modifier.testTag("rail_home"),
                     )
                 }
@@ -180,7 +196,14 @@ fun ChannelDrawerContent(
                         onClick = { onScope(ChannelScope.Space(s.service, s.node)) },
                         image = image,
                         seed = s.stableKey(), unread = n, mentions = n,
+                        onLongClick = { onSpaceLongPress(s) },
                         modifier = Modifier.testTag("rail_space_${s.node}"),
+                    )
+                }
+                item(key = "add") {
+                    SpaceRailIcon(
+                        name = "Add a space", selected = false, onClick = onAddSpace,
+                        kind = RailIconKind.Add, modifier = Modifier.testTag("rail_add"),
                     )
                 }
             }
@@ -190,11 +213,27 @@ fun ChannelDrawerContent(
                     Modifier.fillMaxWidth().statusBarsPadding().height(ChordSize.bar + 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        if (isHome) "Home" else space?.name ?: "",
-                        style = ChordType.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(start = ChordSpace.s4, end = ChordSpace.s2),
-                    )
+                    if (space != null) {
+                        // The name of the space opens the space menu.
+                        Row(
+                            Modifier.weight(1f).fillMaxHeight()
+                                .clickable(role = Role.Button, onClickLabel = space.name) { onSpaceMenu(space) }
+                                .semantics { contentDescription = "Space menu, ${space.name}" }
+                                .padding(start = ChordSpace.s4, end = ChordSpace.s2)
+                                .testTag("space_header"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(ChordSpace.s1),
+                        ) {
+                            Text(space.name, style = ChordType.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            SpaceGlyph(SpaceIcon.Chevron, c.inkMuted, Modifier.rotate(90f), size = 16.dp)
+                        }
+                    } else {
+                        Text(
+                            if (isHome) "Home" else "",
+                            style = ChordType.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(start = ChordSpace.s4, end = ChordSpace.s2),
+                        )
+                    }
                     DrawerHeaderActions(inboxCount, onInbox, onNew, Modifier.padding(end = ChordSpace.s1))
                 }
                 val sections = channelSections(scope, channels)
@@ -222,6 +261,7 @@ fun ChannelDrawerContent(
                                     sec.title, collapsed = isCollapsed,
                                     unread = sec.items.sumOf { it.unread.toInt() },
                                     onToggle = { if (isCollapsed) collapsed.remove(id) else collapsed.add(id) },
+                                    onAdd = if (sec.key == "channels") onCreateChannel else null,
                                 )
                             }
                         }
@@ -274,6 +314,7 @@ fun ChannelDrawer(
     onNew: () -> Unit = {},
     onLongPress: (ChannelItem) -> Unit = {},
 ) {
+    val host = rememberSpaceHostState()
     val spaceVm: SpaceListViewModel = viewModel(factory = ChordViewModels.spaceList)
     val channelVm: ChannelListViewModel = viewModel(factory = ChordViewModels.channelList(scope))
     LaunchedEffect(scope) { channelVm.setScope(scope) }
@@ -292,12 +333,20 @@ fun ChannelDrawer(
         onOpenSettings = onOpenSettings,
         connection = rememberConnectionState().notice(),
         inboxCount = inboxCount, onInbox = onInbox, onNew = onNew, onLongPress = onLongPress,
+        onSpaceMenu = { host.show(SpaceRequest.Menu(it.target())) },
+        onSpaceLongPress = { host.show(SpaceRequest.Rail(it.target())) },
+        onHomeLongPress = { host.show(SpaceRequest.Home) },
+        onAddSpace = { host.show(SpaceRequest.Add) },
+        onCreateChannel = (scope as? ChannelScope.Space)?.let { s ->
+            spaces.firstOrNull { it.service == s.service && it.node == s.node }?.let { sp -> { host.show(SpaceRequest.CreateChannel(sp.target())) } }
+        },
         modifier = modifier,
     )
+    SpaceHost(host, spaces, nick = account?.name.orEmpty())
 }
 
 @Composable
-private fun SectionHeader(title: String, collapsed: Boolean, unread: Int, onToggle: () -> Unit) {
+private fun SectionHeader(title: String, collapsed: Boolean, unread: Int, onToggle: () -> Unit, onAdd: (() -> Unit)? = null) {
     val c = Chord.colors
     Row(
         Modifier
@@ -317,6 +366,13 @@ private fun SectionHeader(title: String, collapsed: Boolean, unread: Int, onTogg
             modifier = Modifier.weight(1f),
         )
         if (collapsed && unread > 0) CountBadge(unread)
+        if (onAdd != null) {
+            Box(
+                Modifier.size(32.dp).clickable(role = Role.Button, onClickLabel = "Create channel", onClick = onAdd)
+                    .semantics { contentDescription = "Create channel" }.testTag("section_add_channel"),
+                contentAlignment = Alignment.Center,
+            ) { SpaceGlyph(SpaceIcon.Plus, c.inkMuted, size = 18.dp) }
+        }
     }
 }
 

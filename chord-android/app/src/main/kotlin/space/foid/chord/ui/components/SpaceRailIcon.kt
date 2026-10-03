@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
@@ -44,7 +46,7 @@ import space.foid.chord.ui.theme.ChordSize
 import space.foid.chord.ui.theme.ChordType
 
 /** The kind of a space rail icon. */
-enum class RailIconKind { Space, Home }
+enum class RailIconKind { Space, Home, Add }
 
 /**
  * One slot on the space rail (RailItem.svelte): the left pill, a tile and a mention badge.
@@ -72,6 +74,7 @@ fun SpaceRailIcon(
     unread: Int = 0,
     mentions: Int = 0,
     cut: Color = Chord.colors.surfaceRail,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val c = Chord.colors
     val hasUnread = unread > 0 || mentions > 0
@@ -104,10 +107,11 @@ fun SpaceRailIcon(
                 contentDescription = desc
                 this.selected = selected
             }
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                role = Role.Tab,
+                role = if (kind == RailIconKind.Add) Role.Button else Role.Tab,
+                onLongClick = onLongClick,
                 onClick = onClick,
             ),
         contentAlignment = Alignment.Center,
@@ -125,13 +129,16 @@ fun SpaceRailIcon(
         val fill = when (kind) {
             RailIconKind.Home -> if (selected) c.brand else c.surfaceRaised
             RailIconKind.Space -> Color.Transparent
+            RailIconKind.Add -> Color.Transparent
         }
         Box(
-            Modifier.size(tileSize).clip(shape).background(fill),
+            Modifier.size(tileSize).clip(shape).background(fill)
+                .then(if (kind == RailIconKind.Add) Modifier.border(1.5.dp, c.lineStrong, shape) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
             when {
                 kind == RailIconKind.Home -> HomeGlyph(if (selected) c.onBrand else c.ink)
+                kind == RailIconKind.Add -> AddGlyph(c.brandInk)
                 image != null -> Image(
                     bitmap = image,
                     contentDescription = null,
@@ -190,6 +197,16 @@ fun CountBadge(count: Int, modifier: Modifier = Modifier, ring: Color? = null) {
                 color = c.onBrand,
             )
         }
+    }
+}
+
+/** The plus of the "Add a space" tile. */
+@Composable
+private fun AddGlyph(color: Color) {
+    Canvas(Modifier.size(20.dp)) {
+        val u = size.width / 24f
+        drawLine(color, androidx.compose.ui.geometry.Offset(12 * u, 5 * u), androidx.compose.ui.geometry.Offset(12 * u, 19 * u), 2f * u, StrokeCap.Round)
+        drawLine(color, androidx.compose.ui.geometry.Offset(5 * u, 12 * u), androidx.compose.ui.geometry.Offset(19 * u, 12 * u), 2f * u, StrokeCap.Round)
     }
 }
 

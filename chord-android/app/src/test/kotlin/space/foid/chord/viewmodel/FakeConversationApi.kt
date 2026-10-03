@@ -4,6 +4,7 @@ import space.foid.chord.data.ConversationApi
 import uniffi.chord_ffi.Contact
 import uniffi.chord_ffi.JoinOutcome
 import uniffi.chord_ffi.NotificationLevel
+import uniffi.chord_ffi.NotificationSetting
 import uniffi.chord_ffi.PendingSpaceJoin
 import uniffi.chord_ffi.SpaceInfo
 import uniffi.chord_ffi.SubscriptionState
@@ -49,5 +50,17 @@ class FakeConversationApi : ConversationApi {
     override suspend fun notificationLevel(peer: String): NotificationLevel = level.also { rec("level $peer") }
     override suspend fun setNotificationLevel(peer: String, level: NotificationLevel) = rec("setLevel $peer $level")
     override suspend fun markRead(jid: String) = rec("markRead $jid")
+    var muteUntil: Long? = null
+    override suspend fun notificationSetting(peer: String): NotificationSetting =
+        NotificationSetting(level, muteUntil).also { rec("level $peer") }
+
+    override suspend fun setNotification(peer: String, level: NotificationLevel, muteUntil: Long?) {
+        rec(if (muteUntil == null) "setLevel $peer $level" else "mute $peer $level until=$muteUntil")
+        this.level = level
+        this.muteUntil = muteUntil
+    }
+
+    override suspend fun setRoomSubject(room: String, subject: String) = rec("subject $room $subject")
+    override suspend fun renameRoom(room: String, name: String) = rec("rename $room $name")
     override fun account(): String = own
 }
