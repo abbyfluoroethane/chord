@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.lifecycle.viewmodel.compose.viewModel
 import space.foid.chord.data.stableKey
-import space.foid.chord.ui.components.Avatar
+import space.foid.chord.ui.avatar.JidAvatar
 import space.foid.chord.ui.components.Presence
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordSpace
@@ -126,7 +126,7 @@ private fun MemberRow(m: MemberItem) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ChordSpace.s3),
     ) {
-        Avatar(jid = m.jid ?: m.id, name = name, size = 36.dp, presence = presence, cut = c.surfaceSide)
+        JidAvatar(owner = m.jid ?: m.id, name = name, size = 36.dp, presence = presence, hash = m.avatar, cut = c.surfaceSide)
         Column(Modifier.weight(1f)) {
             Text(name, style = ChordType.name, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val status = m.status?.takeIf { it.isNotBlank() }

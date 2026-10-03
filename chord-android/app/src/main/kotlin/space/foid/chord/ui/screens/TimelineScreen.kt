@@ -68,8 +68,8 @@ import kotlinx.coroutines.flow.mapLatest
 import space.foid.chord.data.TimelineTarget
 import space.foid.chord.data.stableKey
 import space.foid.chord.notify.ChordNotifications
-import space.foid.chord.ui.components.Avatar
 import space.foid.chord.ui.components.ConnectionBanner
+import space.foid.chord.ui.avatar.JidAvatar
 import space.foid.chord.ui.components.ComposerBar
 import space.foid.chord.ui.components.MessageRow
 import space.foid.chord.ui.sheets.AttachmentSheet
@@ -436,7 +436,7 @@ private fun TimelineRow(
     MessageRow(
         message = m,
         grouped = row.grouped,
-        avatar = { Avatar(jid = m.senderId, name = m.senderName) },
+        avatar = { JidAvatar(owner = m.senderId, name = m.senderName, hash = m.avatarUrl) },
         modifier = Modifier.testTag("message_row"),
         onLongPress = { onLongPress(m) },
         onReactionClick = { emoji -> onReactionClick(m.id, emoji) },
@@ -461,7 +461,7 @@ private fun TopBar(title: String, isRoom: Boolean, onOpenChannels: () -> Unit, o
                     modifier = Modifier.weight(1f).padding(start = ChordSpace.s1),
                 )
             } else {
-                Avatar(jid = title, name = title, size = 28.dp)
+                JidAvatar(owner = title, name = title, size = 28.dp)
                 Text(
                     title,
                     style = ChordType.title,

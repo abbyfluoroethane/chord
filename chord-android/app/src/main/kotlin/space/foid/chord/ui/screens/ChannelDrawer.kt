@@ -56,7 +56,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import space.foid.chord.data.stableKey
-import space.foid.chord.ui.components.Avatar
+import space.foid.chord.ui.avatar.JidAvatar
+import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.ChannelKind
 import space.foid.chord.ui.components.ChannelListItem
 import space.foid.chord.ui.components.RailIconKind
@@ -217,6 +218,8 @@ fun ChannelDrawerContent(
                                 onClick = { onSelect(ch) },
                                 kind = ch.rowKind(!isHome),
                                 jid = bareJid(ch.jid),
+                                image = if (ch.kind is uniffi.chord_ffi.ChannelKind.PrivateMessage || ch.rowKind(!isHome) == ChannelKind.Room) null
+                                    else rememberAvatarBitmap(bareJid(ch.jid), null, 36.dp),
                                 unread = ch.unread.toInt(),
                                 mentions = 0,
                                 subtitle = if (isHome) groupSubtitle(ch) else null,
@@ -331,7 +334,7 @@ private fun UserPanel(account: AccountUi, onSignOut: () -> Unit, onOpenSettings:
             horizontalArrangement = Arrangement.spacedBy(ChordSpace.s3),
         ) {
             Box {
-                Avatar(account.jid, name = account.name, size = 36.dp, cut = c.surfaceRail)
+                JidAvatar(account.jid, name = account.name, size = 36.dp, cut = c.surfaceRail)
                 ConnectionDot(connection, cut = c.surfaceRail, modifier = Modifier.align(Alignment.BottomEnd).offset(3.dp, 3.dp))
             }
             Column(Modifier.weight(1f)) {
