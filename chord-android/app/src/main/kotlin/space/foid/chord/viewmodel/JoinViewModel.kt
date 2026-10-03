@@ -22,6 +22,8 @@ import space.foid.chord.ui.join.XmppTarget
 import space.foid.chord.ui.join.parseXmppUri
 import space.foid.chord.ui.join.personAddressOf
 import space.foid.chord.ui.join.roomTargetOf
+import space.foid.chord.ui.spaces.MuteDuration
+import space.foid.chord.ui.spaces.muteUntil
 import uniffi.chord_ffi.ChordException
 import uniffi.chord_ffi.JoinOutcome
 import uniffi.chord_ffi.NotificationLevel
@@ -84,6 +86,8 @@ data class ChannelActionTarget(val jid: String, val name: String, val kind: Acti
 data class ActionsState(
     val target: ChannelActionTarget,
     val level: NotificationLevel? = null,
+    /** The end of a timed mute, Unix time in ms. Null: no timed mute. */
+    val muteUntil: Long? = null,
     val busy: Boolean = false,
     val error: String? = null,
 )
@@ -337,8 +341,10 @@ class JoinViewModel(
         _actions.value = ActionsState(target)
         scope.launch {
             try {
-                val level = requireApi().notificationLevel(target.jid)
-                _actions.update { cur -> cur?.takeIf { it.target == target }?.copy(level = level) ?: cur }
+                val setting = requireApi().notificationSetting(target.jid)
+                _actions.update { cur ->
+                    cur?.takeIf { it.target == target }?.copy(level = setting.level, muteUntil = setting.muteUntil) ?: cur
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -355,15 +361,67 @@ class JoinViewModel(
     fun setLevel(level: NotificationLevel) {
         val cur = _actions.value ?: return
         val before = cur.level
-        _actions.value = cur.copy(level = level, error = null)
+        val beforeUntil = cur.muteUntil
+        _actions.value = cur.copy(level = level, muteUntil = null, error = null)
         scope.launch {
             try {
-                requireApi().setNotificationLevel(cur.target.jid, level)
+                requireApi().setNotification(cur.target.jid, level, null)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 logWarn("JoinViewModel", "set level failed", e)
-                _actions.update { now -> now?.takeIf { it.target == cur.target }?.copy(level = before, error = describeError(e)) ?: now }
+                _actions.update { now -> now?.takeIf { it.target == cur.target }?.copy(level = before, muteUntil = beforeUntil, error = describeError(e)) ?: now }
+            }
+        }
+    }
+
+    /**
+     * Mute the chat for [duration]. A timed mute keeps the level. "Until I turn it back on" sets
+     * the level to Nothing. [now] is the Unix time in ms.
+     */
+    fun mute(duration: MuteDuration, now: Long = System.currentTimeMillis()) {
+        val cur = _actions.value ?: return
+        val until = muteUntil(duration, now)
+        val level = if (until == null) NotificationLevel.NONE else cur.level?.takeIf { it != NotificationLevel.NONE } ?: NotificationLevel.ALL
+        val before = cur
+        _actions.value = cur.copy(level = level, muteUntil = until, error = null)
+        scope.launch {
+            try {
+                requireApi().setNotification(cur.target.jid, level, until)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn("JoinViewModel", "mute failed", e)
+                _actions.update { now2 ->
+                    now2?.takeIf { it.target == cur.target }?.copy(level = before.level, muteUntil = before.muteUntil, error = describeError(e)) ?: now2
+                }
+            }
+        }
+    }
+
+    /** Turn a mute off: the level is All again, with no end time. */
+    fun unmute() = setLevel(NotificationLevel.ALL)
+
+    /**
+     * Change the topic and the name of the room of the sheet. A null value stays. The topic is a
+     * message to the room. Only an owner can change the name. Calls [onDone] on success.
+     */
+    fun saveChannel(topic: String?, name: String?, onDone: () -> Unit) {
+        val cur = _actions.value ?: return
+        if (cur.busy || cur.target.kind != ActionKind.Room) return
+        _actions.value = cur.copy(busy = true, error = null)
+        scope.launch {
+            try {
+                val a = requireApi()
+                if (topic != null) a.setRoomSubject(cur.target.address, topic)
+                if (name != null) a.renameRoom(cur.target.address, name)
+                _actions.update { now -> now?.copy(busy = false) }
+                onDone()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn("JoinViewModel", "save channel failed", e)
+                _actions.update { now -> now?.copy(busy = false, error = describeError(e)) }
             }
         }
     }

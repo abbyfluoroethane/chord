@@ -52,13 +52,16 @@ internal fun JoinField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     isError: Boolean = false,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
 ) {
     val c = Chord.colors
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
         enabled = enabled,
-        singleLine = true,
+        singleLine = singleLine,
+        minLines = minLines,
         isError = isError,
         label = { Text(label, style = ChordType.bodySmall) },
         placeholder = placeholder?.let { { Text(it, style = ChordType.body) } },

@@ -35,6 +35,8 @@ import space.foid.chord.ui.join.actionTarget
 import space.foid.chord.viewmodel.InboxViewModel
 import space.foid.chord.viewmodel.JoinEvent
 import space.foid.chord.viewmodel.JoinViewModel
+import space.foid.chord.viewmodel.SpaceEvent
+import space.foid.chord.viewmodel.SpaceViewModel
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -114,6 +116,7 @@ fun MainScreen(
     // Start, join and leave conversations; the inbox; notices.
     val joinVm: JoinViewModel = viewModel(factory = JoinViewModel.factory)
     val inboxVm: InboxViewModel = viewModel(factory = InboxViewModel.factory)
+    val spaceVm: SpaceViewModel = viewModel(factory = SpaceViewModel.factory)
     val join by joinVm.state.collectAsState()
     val actions by joinVm.actions.collectAsState()
     val inbox by inboxVm.state.collectAsState()
@@ -150,6 +153,29 @@ fun MainScreen(
     val currentOnJoinEvent by rememberUpdatedState(onJoinEvent)
     LaunchedEffect(joinVm) { joinVm.events.collect { currentOnJoinEvent(it) } }
     LaunchedEffect(inboxVm) { inboxVm.events.collect { currentOnJoinEvent(it) } }
+    // Create, leave and delete of a space (the space menus).
+    val onSpaceEvent: (SpaceEvent) -> Unit = { e ->
+        when (e) {
+            is SpaceEvent.OpenSpace -> scopeKey = scopeToString(ChannelScope.Space(e.service, e.node))
+            is SpaceEvent.OpenChannel -> {
+                selectedJid = e.jid
+                selectedName = e.name
+                selectedDirect = false
+                scope.launch { drawer.close() }
+            }
+            is SpaceEvent.SpaceGone -> {
+                if (scopeKey == scopeToString(ChannelScope.Space(e.service, e.node))) scopeKey = ""
+                if (bareJid(selectedJid) in e.rooms) {
+                    selectedJid = ""
+                    selectedName = ""
+                    scope.launch { drawer.openLeft() }
+                }
+            }
+            is SpaceEvent.Message -> scope.launch { snackbar.showSnackbar(e.text) }
+        }
+    }
+    val currentOnSpaceEvent by rememberUpdatedState(onSpaceEvent)
+    LaunchedEffect(spaceVm) { spaceVm.events.collect { currentOnSpaceEvent(it) } }
 
     // A link from outside the app waits in XmppLinkInbox until this screen shows.
     val pendingUri by XmppLinkInbox.pending.collectAsState()
@@ -289,6 +315,12 @@ fun MainScreen(
                 scope.launch { clipboard.setClipEntry(ClipData.newPlainText("address", state.target.address).toClipEntry()) }
             },
             onLeave = joinVm::leave,
+            onMute = { joinVm.mute(it) },
+            onUnmute = joinVm::unmute,
+            onCopyLink = {
+                scope.launch { clipboard.setClipEntry(ClipData.newPlainText("link", "xmpp:${state.target.address}?join").toClipEntry()) }
+            },
+            onSaveChannel = joinVm::saveChannel,
         )
     }
 }

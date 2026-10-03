@@ -13,6 +13,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import space.foid.chord.ui.spaces.MuteDuration
 import uniffi.chord_ffi.ChordException
 import uniffi.chord_ffi.JoinOutcome
 import uniffi.chord_ffi.NotificationLevel
@@ -387,5 +388,92 @@ class JoinViewModelTest {
         vm.markRead()
         runCurrent()
         assertEquals("markRead $room", api.calls.last())
+    }
+
+    // ---- mute, topic and settings of a channel ----
+
+    private fun TestScope.opened(api: FakeConversationApi, kind: ActionKind = ActionKind.Room): JoinViewModel {
+        val v = vm(api)
+        v.openActions(ChannelActionTarget(room, "chord-smoke", kind))
+        runCurrent()
+        return v
+    }
+
+    @Test
+    fun timedMuteKeepsTheLevelAndSendsTheEndTime() = runTest {
+        val api = FakeConversationApi().apply { level = NotificationLevel.MENTIONS }
+        val vm = opened(api)
+        vm.mute(MuteDuration.Hour1, now = 1_000L)
+        runCurrent()
+        assertEquals("mute $room MENTIONS until=3601000", api.calls.last())
+        assertEquals(3_601_000L, vm.actions.value!!.muteUntil)
+        assertEquals(NotificationLevel.MENTIONS, vm.actions.value!!.level)
+    }
+
+    @Test
+    fun foreverMuteSetsLevelNothing() = runTest {
+        val api = FakeConversationApi()
+        val vm = opened(api)
+        vm.mute(MuteDuration.Forever, now = 5L)
+        runCurrent()
+        assertEquals("setLevel $room NONE", api.calls.last())
+        assertNull(vm.actions.value!!.muteUntil)
+    }
+
+    @Test
+    fun unmuteSetsAllAndClearsTheEnd() = runTest {
+        val api = FakeConversationApi().apply { level = NotificationLevel.ALL; muteUntil = 9_999_999_999_999L }
+        val vm = opened(api)
+        assertEquals(9_999_999_999_999L, vm.actions.value!!.muteUntil)
+        vm.unmute()
+        runCurrent()
+        assertEquals("setLevel $room ALL", api.calls.last())
+        assertNull(vm.actions.value!!.muteUntil)
+    }
+
+    @Test
+    fun failedMuteGoesBack() = runTest {
+        val api = FakeConversationApi()
+        val vm = opened(api)
+        api.failWith = ChordException.NotConnected()
+        vm.mute(MuteDuration.Hours8, now = 0L)
+        runCurrent()
+        assertNull(vm.actions.value!!.muteUntil)
+        assertNotNull(vm.actions.value!!.error)
+    }
+
+    @Test
+    fun saveChannelSendsTopicThenName() = runTest {
+        val api = FakeConversationApi()
+        val vm = opened(api)
+        var done = false
+        vm.saveChannel("Welcome", "lobby") { done = true }
+        runCurrent()
+        assertEquals(listOf("subject $room Welcome", "rename $room lobby"), api.calls.takeLast(2))
+        assertTrue(done)
+        assertFalse(vm.actions.value!!.busy)
+    }
+
+    @Test
+    fun saveChannelShowsTheFailureAndStaysOpen() = runTest {
+        val api = FakeConversationApi()
+        val vm = opened(api)
+        api.failWith = ChordException.Server("forbidden")
+        var done = false
+        vm.saveChannel("x", null) { done = true }
+        runCurrent()
+        assertFalse(done)
+        assertNotNull(vm.actions.value!!.error)
+        assertFalse(vm.actions.value!!.busy)
+    }
+
+    @Test
+    fun contactsCannotSetATopic() = runTest {
+        val api = FakeConversationApi()
+        val vm = opened(api, ActionKind.Contact)
+        val before = api.calls.size
+        vm.saveChannel("x", null) {}
+        runCurrent()
+        assertEquals(before, api.calls.size)
     }
 }
