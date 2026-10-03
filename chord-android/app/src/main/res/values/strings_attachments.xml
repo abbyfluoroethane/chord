@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="attachment_image">Image</string>
+    <string name="attachment_image_failed">Could not load the image. Open the link.</string>
+    <string name="attachment_image_insecure">Not shown: insecure link.</string>
+    <string name="attachment_image_loading">Loading image</string>
+    <string name="attachment_open">Open</string>
+    <string name="attachment_kind_file">File</string>
+    <string name="attachment_kind_video">Video</string>
+    <string name="attachment_kind_audio">Audio</string>
+    <string name="attachment_open_failed">No app can open this link.</string>
+
+    <string name="upload_preparing">Preparing %1$s</string>
+    <string name="upload_sending">Sending %1$s</string>
+    <string name="upload_failed">Not sent: %1$s</string>
+    <string name="upload_retry">Try again</string>
+    <string name="upload_dismiss">Remove</string>
+
+    <string name="viewer_close">Close</string>
+    <string name="viewer_share">Share</string>
+    <string name="viewer_save">Save</string>
+    <string name="viewer_saved">Image saved to Pictures.</string>
+    <string name="viewer_save_failed">Could not save the image.</string>
+    <string name="viewer_image_failed">Could not load the image.</string>
+</resources>

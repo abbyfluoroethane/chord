@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.toClipEntry
 import android.content.ClipData
 import androidx.compose.ui.platform.testTag
@@ -71,7 +72,15 @@ import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.ui.components.Avatar
 import space.foid.chord.ui.components.ComposerBar
 import space.foid.chord.ui.components.MessageRow
+import space.foid.chord.ui.attachments.AttachmentReader
+import space.foid.chord.ui.attachments.ImageViewer
+import space.foid.chord.ui.attachments.PendingUploads
+import space.foid.chord.viewmodel.UploadUi
 import space.foid.chord.ui.sheets.AttachmentSheet
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import space.foid.chord.ui.sheets.MessageActionsSheet
 import space.foid.chord.ui.sheets.ReactionPickerSheet
 import space.foid.chord.ui.theme.Chord
@@ -130,6 +139,7 @@ fun TimelineScreen(
     val loaded by vm.loaded.collectAsStateWithLifecycle()
     val loadingOlder by vm.loadingOlder.collectAsStateWithLifecycle()
     val reachedStart by vm.reachedStart.collectAsStateWithLifecycle()
+    val uploads by vm.uploads.collectAsStateWithLifecycle()
 
     var draft by rememberSaveable { mutableStateOf("") }
     var mode by remember { mutableStateOf<Compose?>(null) }
@@ -137,6 +147,18 @@ fun TimelineScreen(
     var reactionFor by remember { mutableStateOf<MessageUi?>(null) }
     var attachOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var viewing by remember { mutableStateOf<MessageUi?>(null) }
+
+    // The system pickers need no storage permission. The result is a content URI that we read
+    // for the upload; the reader runs off the main thread.
+    val context = LocalContext.current
+    fun startUpload(uri: Uri?) {
+        if (uri == null) return
+        val name = AttachmentReader.info(context, uri).name
+        vm.upload(name) { AttachmentReader.read(context, uri) }
+    }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { startUpload(it) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { startUpload(it) }
 
     LaunchedEffect(vm) {
         vm.errors.collect { error = it }
@@ -217,6 +239,10 @@ fun TimelineScreen(
         onLongPress = { actionsFor = it },
         onReactionClick = { id, emoji -> vm.toggleReaction(id, emoji) },
         onRetry = { vm.send(it.body) },
+        onImageClick = { viewing = it },
+        uploads = uploads,
+        onRetryUpload = vm::retryUpload,
+        onDismissUpload = vm::dismissUpload,
         onLoadOlder = vm::loadOlder,
         error = error,
         listState = listState,
@@ -267,12 +293,20 @@ fun TimelineScreen(
         )
     }
     if (attachOpen) {
-        // The core has no upload call yet, so both choices close the sheet.
         AttachmentSheet(
             onDismiss = { attachOpen = false },
-            onPickImage = { attachOpen = false },
-            onPickFile = { attachOpen = false },
+            onPickImage = {
+                attachOpen = false
+                photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            },
+            onPickFile = {
+                attachOpen = false
+                filePicker.launch(arrayOf("*/*"))
+            },
         )
+    }
+    viewing?.let { m ->
+        m.attachment?.let { url -> ImageViewer(url = url, outgoing = m.outgoing, onDismiss = { viewing = null }) }
     }
 }
 
@@ -318,6 +352,10 @@ fun TimelineContent(
     onLongPress: (MessageUi) -> Unit = {},
     onReactionClick: (messageId: String, emoji: String) -> Unit = { _, _ -> },
     onRetry: (MessageUi) -> Unit = {},
+    onImageClick: (MessageUi) -> Unit = {},
+    uploads: List<UploadUi> = emptyList(),
+    onRetryUpload: (Long) -> Unit = {},
+    onDismissUpload: (Long) -> Unit = {},
     onLoadOlder: () -> Unit = {},
     error: String? = null,
     listState: LazyListState = rememberLazyListState(),
@@ -365,7 +403,7 @@ fun TimelineContent(
                 modifier = Modifier.fillMaxSize().testTag("timeline"),
             ) {
                 items(rows, key = { it.message.id }, contentType = { "message" }) { row ->
-                    TimelineRow(row, onLongPress, onReactionClick, onRetry, onRowComposed)
+                    TimelineRow(row, onLongPress, onReactionClick, onRetry, onImageClick, onRowComposed)
                 }
                 // After the rows: the top of the screen.
                 if (loadingOlder) {
@@ -404,6 +442,7 @@ fun TimelineContent(
                 Toast(error, Modifier.align(Alignment.BottomCenter).padding(horizontal = ChordSpace.s4, vertical = ChordSpace.s3))
             }
         }
+        PendingUploads(uploads, onRetry = onRetryUpload, onDismiss = onDismissUpload)
         ComposerBar(
             text = composerText,
             onTextChange = onComposerChange,
@@ -427,6 +466,7 @@ private fun TimelineRow(
     onLongPress: (MessageUi) -> Unit,
     onReactionClick: (String, String) -> Unit,
     onRetry: (MessageUi) -> Unit,
+    onImageClick: (MessageUi) -> Unit,
     onRowComposed: ((String) -> Unit)?,
 ) {
     if (onRowComposed != null) SideEffect { onRowComposed(row.message.id) }
@@ -439,6 +479,7 @@ private fun TimelineRow(
         onLongPress = { onLongPress(m) },
         onReactionClick = { emoji -> onReactionClick(m.id, emoji) },
         onRetryClick = { onRetry(m) },
+        onImageClick = { onImageClick(m) },
     )
 }
 

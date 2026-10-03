@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import space.foid.chord.ui.attachments.AttachmentView
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordRadius
 import space.foid.chord.ui.theme.ChordSize
@@ -58,6 +59,7 @@ import space.foid.chord.ui.timeline.SendState
  * @param onReactionClick toggles one reaction: gets the emoji.
  * @param onReplyPreviewClick jumps to the quoted message: gets its id, or null if unknown.
  * @param onRetryClick the "Try again" link of a failed message.
+ * @param onImageClick opens the viewer for an inline image: gets its URL.
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -70,6 +72,7 @@ fun MessageRow(
     onReactionClick: (String) -> Unit = {},
     onReplyPreviewClick: (String?) -> Unit = {},
     onRetryClick: () -> Unit = {},
+    onImageClick: (String) -> Unit = {},
 ) {
     val colors = Chord.colors
     val source = remember { MutableInteractionSource() }
@@ -120,14 +123,7 @@ fun MessageRow(
                 } else {
                     if (message.body.isNotEmpty()) MessageText(message)
                     if (message.attachment != null) {
-                        Text(
-                            message.attachment,
-                            style = ChordType.bodySmall,
-                            color = colors.accent,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = ChordSpace.s1),
-                        )
+                        AttachmentView(message.attachment, outgoing = message.outgoing, onImageClick = onImageClick)
                     }
                     if (message.reactions.isNotEmpty()) {
                         FlowRow(
