@@ -26,7 +26,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 
 args=(--console=plain)
 if (( prebuilt )); then
-  main=$(git worktree list --porcelain | awk '/^worktree / { print $2; exit }')
+  main=$(git worktree list --porcelain | awk '/^worktree / && !done { print $2; done = 1 }')
   dir=${CHORD_PREBUILT:-$main/target/android-prebuilt}
   [[ -d "$dir/jniLibs" && -d "$dir/uniffi" ]] ||
     { echo "FAIL: no prebuilt core in $dir. Run: cd chord-android && ./gradlew exportPrebuilt" >&2; exit 1; }

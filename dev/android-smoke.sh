@@ -57,7 +57,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # The .env files are not in a git worktree. Look in this checkout, then in the main one.
-main=$(git worktree list --porcelain | awk '/^worktree / { print $2; exit }')
+main=$(git worktree list --porcelain | awk '/^worktree / && !done { print $2; done = 1 }')
 load_env() {
   local f
   for f in "$PWD/$1" "$main/$1"; do
