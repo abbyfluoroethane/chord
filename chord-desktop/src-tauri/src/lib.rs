@@ -8,6 +8,7 @@
 mod advanced;
 mod avatars;
 mod badge;
+mod behaviour;
 mod certpin;
 mod commands;
 mod emoji;
@@ -58,6 +59,14 @@ pub fn run() {
     // arguments (an xmpp: link on Windows and Linux) to the first copy and quits.
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(links::second_instance));
+    // Open Chord at login (src/behaviour.rs). The argument lets a start from the login
+    // entry open hidden.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(
+        tauri_plugin_autostart::Builder::new()
+            .arg(behaviour::AUTOSTART_ARG)
+            .build(),
+    );
     let builder = builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -68,6 +77,8 @@ pub fn run() {
         .manage(files::Dropped::default())
         .manage(notify::NoticePrefs::default())
         .manage(certpin::CertPins::default())
+        .manage(behaviour::Behaviour::default())
+        .on_window_event(behaviour::on_window_event)
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -77,6 +88,7 @@ pub fn run() {
         })
         .setup(|app| {
             settings::init_notice_prefs(app.handle());
+            behaviour::setup(app.handle());
             links::setup(app)
         });
     emoji::register(avatars::register(builder))
@@ -211,7 +223,12 @@ pub fn run() {
             emoji::emoji_pack_install,
             settings::get_settings,
             settings::set_settings,
+            behaviour::get_autostart,
+            behaviour::set_autostart,
+            behaviour::set_tray_unread,
+            behaviour::system_idle_seconds,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| behaviour::on_run_event(app, &event));
 }

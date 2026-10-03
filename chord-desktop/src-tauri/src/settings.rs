@@ -87,6 +87,7 @@ pub async fn set_settings(app: AppHandle, notice: State<'_, NoticePrefs>, value:
     let dir = config_dir(&app)?;
     write_to(&dir, &value)?;
     notice.apply(&value);
+    crate::behaviour::apply(&app, &value);
     Ok(())
 }
 
