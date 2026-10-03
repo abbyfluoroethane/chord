@@ -122,7 +122,7 @@ fun ChannelActionsContent(
         }
         Spacer(Modifier.height(ChordSpace.s3))
         Divider()
-        SheetRow(SheetIcon.Search, stringResource(R.string.actions_mark_read), onMarkRead, Modifier.testTag("action_mark_read"))
+        SheetRow(SheetIcon.Check, stringResource(R.string.actions_mark_read), onMarkRead, Modifier.testTag("action_mark_read"))
         Text(
             stringResource(R.string.actions_notifications).uppercase(),
             style = ChordType.caption, color = c.inkMuted,

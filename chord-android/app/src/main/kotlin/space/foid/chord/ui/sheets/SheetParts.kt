@@ -96,7 +96,7 @@ internal fun SheetFrame(content: @Composable () -> Unit) {
     }
 }
 
-enum class SheetIcon { Reply, Edit, Copy, Delete, Image, File, Plus, Search }
+enum class SheetIcon { Reply, Edit, Copy, Delete, Image, File, Plus, Search, Check }
 
 /** A 24 unit line icon drawn with [tint]. */
 @Composable
@@ -142,6 +142,7 @@ internal fun LineIcon(icon: SheetIcon, tint: Color, size: Dp = 22.dp) {
                     drawPath(path { s -> moveTo(14 * s, 3 * s); lineTo(14 * s, 8 * s); lineTo(19 * s, 8 * s) }, tint, style = stroke)
                 }
                 SheetIcon.Plus -> { line(12f, 5f, 12f, 19f); line(5f, 12f, 19f, 12f) }
+                SheetIcon.Check -> drawPath(path { s -> moveTo(5 * s, 12.5f * s); lineTo(10 * s, 17.5f * s); lineTo(19 * s, 7 * s) }, tint, style = stroke)
                 SheetIcon.Search -> {
                     drawCircle(tint, 6 * k, Offset(11 * k, 11 * k), style = stroke)
                     line(15.5f, 15.5f, 20f, 20f)
