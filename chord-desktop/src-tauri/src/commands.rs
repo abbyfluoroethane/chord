@@ -9,7 +9,7 @@ use chord_core::actor;
 use chord_core::actor::ClientEvent;
 use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomRole, RoomSettings};
 use chord_core::features::notify::{NotificationLevel, NotificationSetting};
-use chord_core::features::profile::Profile;
+use chord_core::features::profile::{Device, Profile, ProfileEdit};
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
 use chord_core::features::spaces::{
@@ -184,6 +184,10 @@ pub async fn open(app: AppHandle, state: State<'_, AppState>, account: String) -
     // The saved choice is in place before the first login, so the first presence has it.
     if !crate::settings::share_info(&app) {
         handle.set_share_info(false).await?;
+    }
+    let (read, typing) = crate::settings::notices(&app);
+    if !read || !typing {
+        handle.set_notices(read, typing).await?;
     }
     let events_task =
         tauri::async_runtime::spawn(notify::pump(app.clone(), events, state.events.clone()));
@@ -602,6 +606,32 @@ pub async fn set_share_info(state: State<'_, AppState>, share: bool) -> Res<()> 
     Ok(state.handle()?.set_share_info(share).await?)
 }
 
+/// Turn the read notices (markers and receipts) and the typing notices on or off.
+#[tauri::command]
+pub async fn set_notices(state: State<'_, AppState>, read: bool, typing: bool) -> Res<()> {
+    Ok(state.handle()?.set_notices(read, typing).await?)
+}
+
+/// Which messages the server archives for us: `always`, `roster` or `never`. `None` when
+/// the server has no archive. Fails offline.
+#[tauri::command]
+pub async fn archive_default(state: State<'_, AppState>) -> Res<Option<String>> {
+    let current = state.handle()?.archive_default().await?;
+    Ok(current.map(|d| d.as_str().to_owned()))
+}
+
+/// Change which messages the server archives for us.
+#[tauri::command]
+pub async fn set_archive_default(
+    state: State<'_, AppState>,
+    default: String,
+) -> Res<Option<String>> {
+    let default = chord_core::features::mam::ArchiveDefault::parse(&default)
+        .ok_or_else(|| ChordError::invalid(format!("no archive default {default:?}")))?;
+    let current = state.handle()?.set_archive_default(default).await?;
+    Ok(current.map(|d| d.as_str().to_owned()))
+}
+
 /// Our stored availability and status text.
 #[tauri::command]
 pub async fn own_presence(
@@ -970,6 +1000,18 @@ pub async fn set_nickname(state: State<'_, AppState>, nickname: Option<String>) 
 #[tauri::command]
 pub async fn profile(state: State<'_, AppState>, jid: String) -> Res<Profile> {
     Ok(state.handle()?.profile(bare(&jid)?).await?)
+}
+
+/// Write the vCard4 fields of our own profile: name, about, website and pronouns.
+#[tauri::command]
+pub async fn set_profile(state: State<'_, AppState>, edit: ProfileEdit) -> Res<()> {
+    Ok(state.handle()?.set_profile(edit).await?)
+}
+
+/// The resources of our own account that are online.
+#[tauri::command]
+pub async fn own_devices(state: State<'_, AppState>) -> Res<Vec<Device>> {
+    Ok(state.handle()?.own_devices().await?)
 }
 
 #[tauri::command]

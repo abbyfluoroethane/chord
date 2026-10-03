@@ -56,7 +56,7 @@ export function replaceShortcodes(text: string, map: Shortcodes): string {
 }
 
 // Code in a message stays as typed: fences, double-tick spans and single-tick spans.
-const CODE_SPANS = /(```[\s\S]*?```|``[\s\S]*?``|`[^`\n]+`)/;
+export const CODE_SPANS = /(```[\s\S]*?```|``[\s\S]*?``|`[^`\n]+`)/;
 
 /** Replace shortcodes in a message that the user sends. Code stays as typed. */
 export function replaceShortcodesOutsideCode(text: string, map: Shortcodes): string {

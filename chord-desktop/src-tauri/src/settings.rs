@@ -87,6 +87,7 @@ pub async fn set_settings(app: AppHandle, notice: State<'_, NoticePrefs>, value:
     let dir = config_dir(&app)?;
     write_to(&dir, &value)?;
     notice.apply(&value);
+    crate::behaviour::apply(&app, &value);
     Ok(())
 }
 
@@ -103,6 +104,24 @@ pub fn share_info_from(settings: &Value) -> bool {
 /// The saved `shareInfo` switch, on when there is no file.
 pub fn share_info(app: &AppHandle) -> bool {
     config_dir(app).map_or(true, |dir| share_info_from(&read_from(&dir)))
+}
+
+/// The `sendReadNotices` and `sendTypingNotices` switches of the `prefs` object. Each is on
+/// when it is not there.
+pub fn notices_from(settings: &Value) -> (bool, bool) {
+    let flag = |key: &str| {
+        settings
+            .get("prefs")
+            .and_then(|p| p.get(key))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    };
+    (flag("sendReadNotices"), flag("sendTypingNotices"))
+}
+
+/// The saved notice switches, both on when there is no file.
+pub fn notices(app: &AppHandle) -> (bool, bool) {
+    config_dir(app).map_or((true, true), |dir| notices_from(&read_from(&dir)))
 }
 
 /// At start: the notice switches come from the file, before the UI is up.
@@ -123,6 +142,23 @@ mod tests {
             std::env::temp_dir().join(format!("chord-settings-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn the_notices_are_on_unless_the_file_says_off() {
+        assert_eq!(notices_from(&json!({})), (true, true));
+        assert_eq!(
+            notices_from(&json!({"prefs": {"sendReadNotices": "no"}})),
+            (true, true)
+        );
+        assert_eq!(
+            notices_from(&json!({"prefs": {"sendReadNotices": false}})),
+            (false, true)
+        );
+        assert_eq!(
+            notices_from(&json!({"prefs": {"sendTypingNotices": false}})),
+            (true, false)
+        );
     }
 
     #[test]
@@ -189,7 +225,7 @@ mod tests {
             item_id: "m:1".into(),
         };
         assert!(
-            !notice.allows(&chat),
+            !notice.allows(&chat, 600),
             "mute DMs from the file silences a chat"
         );
         let _ = std::fs::remove_dir_all(&dir);

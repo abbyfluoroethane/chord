@@ -13,6 +13,7 @@
   import type { MenuItem } from './Menu.svelte';
   import { channelMenu } from './menus';
   import { app } from './app.svelte';
+  import { prefs } from './prefs.svelte';
   import { drafts } from './drafts.svelte';
   import { tooltip } from './tooltip';
   import { isGroup, memberLine, presenceKind, type ChannelItem } from './types';
@@ -96,7 +97,7 @@
         name={channel.name}
         src={channel.avatar}
         size={32}
-        presence={known ? presenceKind(channel.online, channel.show) : null}
+        presence={known && prefs.showPresence ? presenceKind(channel.online, channel.show) : null}
         cut={selected ? 'color-mix(in srgb, var(--ink) 15%, var(--surface-side))' : 'var(--surface-side)'}
       />
     {:else if group}

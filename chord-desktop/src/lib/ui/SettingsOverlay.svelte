@@ -8,11 +8,13 @@
   import SettingsAbout from './SettingsAbout.svelte';
   import SettingsAccount from './SettingsAccount.svelte';
   import SettingsAppearance from './SettingsAppearance.svelte';
+  import SettingsChat from './SettingsChat.svelte';
+  import SettingsBehaviour from './SettingsBehaviour.svelte';
   import SettingsKeybinds from './SettingsKeybinds.svelte';
   import SettingsNav from './SettingsNav.svelte';
   import SettingsNotifications from './SettingsNotifications.svelte';
   import SettingsPrivacy from './SettingsPrivacy.svelte';
-  import SettingsServer from './SettingsServer.svelte';
+  import SettingsAdvanced from './SettingsAdvanced.svelte';
   import Toast from './Toast.svelte';
   import { ui } from './ui.svelte';
 
@@ -22,9 +24,11 @@
     account: 'My account',
     privacy: 'Privacy',
     notifications: 'Notifications',
+    behaviour: 'App behaviour',
     appearance: 'Appearance',
+    chat: 'Chat',
     keybinds: 'Keybinds',
-    server: 'Server',
+    advanced: 'Advanced',
     about: 'About'
   } as const;
 
@@ -61,12 +65,16 @@
           <SettingsPrivacy />
         {:else if ui.settingsPage === 'notifications'}
           <SettingsNotifications />
+        {:else if ui.settingsPage === 'behaviour'}
+          <SettingsBehaviour />
         {:else if ui.settingsPage === 'appearance'}
           <SettingsAppearance />
+        {:else if ui.settingsPage === 'chat'}
+          <SettingsChat />
         {:else if ui.settingsPage === 'keybinds'}
           <SettingsKeybinds />
-        {:else if ui.settingsPage === 'server'}
-          <SettingsServer />
+        {:else if ui.settingsPage === 'advanced'}
+          <SettingsAdvanced />
         {:else}
           <SettingsAbout />
         {/if}

@@ -5,6 +5,7 @@
 // cubic-bezier(.2,0,0,1), and none with reduced motion.
 
 import { mount, unmount } from 'svelte';
+import { prefs } from './prefs.svelte';
 import 'photoswipe/style.css';
 import './lightbox.css';
 import MediaPlayer from './media/MediaPlayer.svelte';
@@ -138,7 +139,7 @@ export async function openLightbox(items: LightboxItem[], index: number): Promis
     measureItem(first),
     first.kind === 'image' ? decodeSoon(first.src) : Promise.resolve()
   ]);
-  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const still = prefs.reduceMotion;
   const pswp = new PhotoSwipe({
     // The placeholder is the thumbnail on screen (`msrc`), not an empty box. The file is
     // the same, so the browser has it already.

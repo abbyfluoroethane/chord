@@ -20,6 +20,8 @@
   import { pastedFiles } from './filetransfer';
   import AttachmentTray from './AttachmentTray.svelte';
   import { tray } from './tray.svelte';
+  import { replaceEmoticons } from './emoticons';
+  import { isSendKey } from './sendkey';
   import { tooltip } from './tooltip';
   import { isGroup } from './types';
   import {
@@ -142,9 +144,10 @@
     mention = null;
     queueMicrotask(fit);
     // Other clients do not know :shortcodes:, so the message goes out with real emoji.
-    const out = mayHaveShortcode(text)
-      ? replaceShortcodesOutsideCode(text, await loadShortcodes())
-      : text;
+    const plain = prefs.emoticons ? replaceEmoticons(text) : text;
+    const out = mayHaveShortcode(plain)
+      ? replaceShortcodesOutsideCode(plain, await loadShortcodes())
+      : plain;
     const ok = await app.send(out);
     // A message that did not go stays in the box, unless the user typed something new.
     // The files stay in the tray then, and they wait for the next send.
@@ -286,7 +289,7 @@
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    if (isSendKey(e, prefs.sendKey)) {
       e.preventDefault();
       send();
     } else if (e.key === 'Escape' && app.replyingTo) {
@@ -389,6 +392,7 @@
       bind:value
       onscroll={() => (scrollTop = box?.scrollTop ?? 0)}
       rows="1"
+      spellcheck={prefs.spellcheck}
       aria-label={placeholder}
       {placeholder}
       oninput={input}

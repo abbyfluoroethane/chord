@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseLegacy, parsePrefs, resolvePrefs } from './prefsdata';
+import { CHAT_DEFAULTS, hourCycleOf, parseLegacy, parsePrefs, resolvePrefs, signInPresence } from './prefsdata';
 
 describe('parsePrefs', () => {
   it('keeps good fields and drops bad ones', () => {
@@ -11,9 +11,113 @@ describe('parsePrefs', () => {
     expect(parsePrefs({ shareInfo: false })).toEqual({ shareInfo: false });
     expect(parsePrefs({ shareInfo: 'off' })).toEqual({});
   });
+  it('keeps the notice fields that have the right type', () => {
+    expect(
+      parsePrefs({
+        noticePreview: false,
+        quietHours: true,
+        quietFrom: 1380,
+        quietTo: 420,
+        soundChoice: 'drop',
+        soundVolume: 80,
+        unreadBadge: false
+      })
+    ).toEqual({
+      noticePreview: false,
+      quietHours: true,
+      quietFrom: 1380,
+      quietTo: 420,
+      soundChoice: 'drop',
+      soundVolume: 80,
+      unreadBadge: false
+    });
+  });
+  it('drops bad notice values and clamps the volume', () => {
+    expect(
+      parsePrefs({
+        noticePreview: 'no',
+        quietHours: 1,
+        quietFrom: 1440,
+        quietTo: -1,
+        soundChoice: 'siren',
+        soundVolume: 400,
+        unreadBadge: null
+      })
+    ).toEqual({ soundVolume: 100 });
+    expect(parsePrefs({ quietFrom: 7.5, soundVolume: -5 })).toEqual({ soundVolume: 0 });
+    expect(parsePrefs({ soundVolume: Infinity })).toEqual({});
+  });
+  it('reads the privacy fields with their types', () => {
+    expect(
+      parsePrefs({ sendReadNotices: false, sendTypingNotices: false, shareIdle: false, idleMinutes: 30 })
+    ).toEqual({ sendReadNotices: false, sendTypingNotices: false, shareIdle: false, idleMinutes: 30 });
+    expect(parsePrefs({ sendReadNotices: 'no', shareIdle: 1, idleMinutes: 7 })).toEqual({});
+  });
+  it('reads the app behaviour fields with their types', () => {
+    expect(
+      parsePrefs({
+        closeToBackground: true,
+        trayIcon: 1,
+        rememberWindow: false,
+        startMinimised: true,
+        autoAway: true,
+        autoAwayMinutes: 15
+      })
+    ).toEqual({
+      closeToBackground: true,
+      rememberWindow: false,
+      startMinimised: true,
+      autoAway: true,
+      autoAwayMinutes: 15
+    });
+  });
+  it('drops an auto-away time that the menu does not offer', () => {
+    expect(parsePrefs({ autoAwayMinutes: 7 })).toEqual({});
+    expect(parsePrefs({ autoAwayMinutes: '5' })).toEqual({});
+  });
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});
+  });
+});
+
+describe('parsePrefs, appearance', () => {
+  it('keeps good appearance fields', () => {
+    const v = {
+      timeFormat: '12h',
+      groupSpacing: 'large',
+      jumboEmoji: false,
+      animateGifs: 'hover',
+      zoom: 125,
+      motion: 'reduce',
+      showPresence: false,
+      linkUnderline: 'hover'
+    };
+    expect(parsePrefs(v)).toEqual(v);
+  });
+  it('drops bad appearance fields', () => {
+    const bad = {
+      timeFormat: '13h',
+      groupSpacing: 3,
+      jumboEmoji: 'no',
+      animateGifs: true,
+      zoom: 'big',
+      motion: 'on',
+      showPresence: 1,
+      linkUnderline: 'never'
+    };
+    expect(parsePrefs(bad)).toEqual({});
+  });
+  it('keeps the zoom in range and whole', () => {
+    expect(parsePrefs({ zoom: 400 })).toEqual({ zoom: 150 });
+    expect(parsePrefs({ zoom: 10 })).toEqual({ zoom: 80 });
+    expect(parsePrefs({ zoom: 112.6 })).toEqual({ zoom: 113 });
+    expect(parsePrefs({ zoom: NaN })).toEqual({});
+  });
+  it('maps the time format to an hour cycle', () => {
+    expect(hourCycleOf('12h')).toBe('h12');
+    expect(hourCycleOf('24h')).toBe('h23');
+    expect(hourCycleOf('system')).toBeUndefined();
   });
 });
 
@@ -38,5 +142,62 @@ describe('resolvePrefs', () => {
     expect(parseLegacy('{oops')).toEqual({});
     expect(resolvePrefs(undefined, '{oops')).toEqual({ prefs: {}, migrate: false });
     expect(resolvePrefs(undefined, null)).toEqual({ prefs: {}, migrate: false });
+  });
+});
+
+describe('Chat prefs', () => {
+  it('has defaults that keep the old behaviour', () => {
+    expect(CHAT_DEFAULTS).toEqual({
+      sendKey: 'enter',
+      inlineMedia: true,
+      autoplayVideo: false,
+      showSpoilers: false,
+      emoticons: false,
+      spellcheck: true,
+      confirmDelete: true
+    });
+  });
+  it('keeps good Chat values', () => {
+    const v = {
+      sendKey: 'mod-enter',
+      inlineMedia: false,
+      autoplayVideo: true,
+      showSpoilers: true,
+      emoticons: true,
+      spellcheck: false,
+      confirmDelete: false
+    };
+    expect(parsePrefs(v)).toEqual(v);
+  });
+  it('drops bad Chat values', () => {
+    expect(
+      parsePrefs({ sendKey: 'tab', inlineMedia: 1, autoplayVideo: 'yes', confirmDelete: null })
+    ).toEqual({});
+  });
+});
+
+describe('sign-in presence', () => {
+  it('reads the two defaults and drops bad ones', () => {
+    expect(parsePrefs({ signInShow: 'dnd', signInStatus: 'Back soon' })).toEqual({
+      signInShow: 'dnd',
+      signInStatus: 'Back soon'
+    });
+    expect(parsePrefs({ signInShow: 'invisible', signInStatus: 5 })).toEqual({});
+    expect(parsePrefs({ signInStatus: 'x'.repeat(300) }).signInStatus).toHaveLength(128);
+  });
+  it('keeps the stored presence with the default settings', () => {
+    const stored = { show: 'away' as const, status: 'Lunch' };
+    expect(signInPresence(stored, { signInShow: 'last', signInStatus: '' })).toEqual(stored);
+  });
+  it('lays the defaults over the stored presence', () => {
+    const stored = { show: 'away' as const, status: 'Lunch' };
+    expect(signInPresence(stored, { signInShow: 'chat', signInStatus: '  Hello ' })).toEqual({
+      show: 'chat',
+      status: 'Hello'
+    });
+    expect(signInPresence(stored, { signInShow: 'dnd', signInStatus: '' })).toEqual({
+      show: 'dnd',
+      status: 'Lunch'
+    });
   });
 });

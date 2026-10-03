@@ -364,6 +364,26 @@ export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway' | 'invi
 export interface Profile {
   nickname: string | null;
   fullName: string | null;
+  /** The vCard4 note: the text "about me". */
+  about: string | null;
+  website: string | null;
+  pronouns: string | null;
+}
+
+/** The vCard4 fields that we write. An empty text removes the field. */
+export interface ProfileEdit {
+  fullName: string;
+  about: string;
+  website: string;
+  pronouns: string;
+}
+
+/** One online resource of our own account. `show` is null when it is available. */
+export interface Device {
+  resource: string;
+  show: 'chat' | 'away' | 'dnd' | 'xa' | null;
+  status: string | null;
+  priority: number;
 }
 
 export interface OwnPresence {
@@ -406,6 +426,20 @@ export interface OpenInfo {
  * Keep the fields you know and pass unknown fields back, so that a newer version works.
  */
 export type Settings = Record<string, unknown>;
+
+/** The size of the stored data in bytes (Rust `StorageInfo`). */
+export interface StorageInfo {
+  database: number;
+  avatars: number;
+  emojiCache: number;
+}
+
+/** The app version and the system (Rust `AppInfo`). */
+export interface AppInfo {
+  version: string;
+  os: string;
+  arch: string;
+}
 
 /** The preview of a link (Rust `LinkPreview`). Every field but `url` can be null. */
 export interface LinkPreview {

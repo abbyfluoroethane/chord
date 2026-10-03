@@ -37,10 +37,22 @@ async function controller() {
 }
 
 class Session {
-  state = $state<ConnState>('signed-out');
+  private current = $state<ConnState>('signed-out');
+  /** When the connection came up, in ms. Null while the app is not connected. */
+  connectedAt = $state<number | null>(null);
+  get state(): ConnState {
+    return this.current;
+  }
+  set state(next: ConnState) {
+    if (next !== 'connected') this.connectedAt = null;
+    else if (this.current !== 'connected') this.connectedAt = Date.now();
+    this.current = next;
+  }
   error = $state<string | null>(null);
   /** The server name the reconnect banner shows. */
   host = $state('foid.space');
+  /** The resource of this session, from the bound address. The device list marks it. */
+  resource = $state('');
   /** True while the app reads its settings and decides on the login. */
   booting = $state(live);
   /** The account that is open (live only). */
@@ -262,6 +274,7 @@ class Session {
         this.state = 'connected';
         const at = s.data.boundJid.split('@')[1]?.split('/')[0];
         if (at) this.host = at;
+        this.resource = s.data.boundJid.split('/').slice(1).join('/');
         break;
       }
       case 'suspended':

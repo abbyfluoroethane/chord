@@ -523,7 +523,7 @@ class LiveController {
       case 'notification': {
         const n = e.data;
         const looking = n.peer === app.selectedJid && document.hasFocus();
-        if (shouldChime(prefs, { room: n.room }, looking)) beep();
+        if (shouldChime(prefs, { room: n.room }, looking)) beep(prefs.soundChoice, prefs.soundVolume);
         if (!n.mention) break;
         app.addMentionId(n.itemId);
         if (!looking) app.mentions[n.peer] = (app.mentions[n.peer] ?? 0) + 1;

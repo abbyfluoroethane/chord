@@ -14,6 +14,8 @@
   import Icon from './Icon.svelte';
   import PersonMenu from './PersonMenu.svelte';
   import { app } from './app.svelte';
+  import { api, live } from './bridge';
+  import { openLink } from './attachments';
   import { contactsStore } from './contacts.svelte';
   import { dayLabel, tint } from './format';
   import { bannerColor } from './imagecolor';
@@ -60,6 +62,28 @@
     });
     return () => {
       live = false;
+    };
+  });
+
+  // The vCard4 fields. Ours come from the settings. For others the card asks the server once.
+  type Extra = { about: string; website: string; pronouns: string };
+  let theirs = $state<Extra | null>(null);
+  const extra = $derived<Extra | null>(p.isMe ? app.myProfile : theirs);
+  $effect(() => {
+    const who = p.address;
+    theirs = null;
+    if (!live || p.isMe || hidden) return;
+    let current = true;
+    void (async () => {
+      try {
+        const r = await (await api()).profile(who);
+        if (current) theirs = { about: r.about ?? '', website: r.website ?? '', pronouns: r.pronouns ?? '' };
+      } catch {
+        /* no profile to show */
+      }
+    })();
+    return () => {
+      current = false;
     };
   });
 
@@ -110,6 +134,7 @@
     <h3 class="name" class:me={p.isMe}>{p.name}</h3>
     <CopyAddress address={p.address} />
     {#if hidden}<span class="meta">This room hides the real address.</span>{/if}
+    {#if extra?.pronouns}<span class="meta pronouns">{extra.pronouns}</span>{/if}
     {#if p.isBlocked}<span class="chip danger tag">Blocked</span>{/if}
     <p class="status">{#if p.status}<EmojiText text={p.status} />{:else}{presenceLabel[kind]}{/if}</p>
   </div>
@@ -159,6 +184,18 @@
   {/if}
 
   <div class="panel">
+    {#if extra?.about}
+      <section>
+        <h4 class="head">About me</h4>
+        <p class="value about">{extra.about}</p>
+      </section>
+    {/if}
+    {#if extra?.website}
+      <section>
+        <h4 class="head">Website</h4>
+        <button class="link site" onclick={() => void openLink(extra.website)}>{extra.website}</button>
+      </section>
+    {/if}
     {#if p.affiliation}
       <section>
         <h4 class="head">Roles</h4>
@@ -391,6 +428,15 @@
     margin: 0;
     font-size: 14px;
     line-height: 20px;
+  }
+  .about {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .site {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    text-align: left;
   }
   .chips {
     display: flex;

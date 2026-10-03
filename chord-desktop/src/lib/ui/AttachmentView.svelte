@@ -14,8 +14,10 @@
   import { fileSize } from './format';
   import { openLink, viewImage, viewMedia } from './attachments';
   import { preloadLightbox } from './lightbox';
+  import { mayMove, still } from './still.svelte';
   import MediaPlayer from './media/MediaPlayer.svelte';
   import { hostOf, isLocalHost } from './mediatrust';
+  import { prefs } from './prefs.svelte';
   import type { Attachment } from './types';
   import { ui } from './ui.svelte';
 
@@ -88,6 +90,7 @@
     <img
       src={file.url}
       alt={file.name}
+      use:still={{ moving: mayMove(file.mime) }}
       loading="lazy"
       decoding="async"
       onerror={() => (broken = true)}
@@ -99,6 +102,7 @@
       kind="video"
       src={file.url}
       name={file.name}
+      autoplay={prefs.autoplayVideo}
       bind:media
       onexpand={expand}
       onfail={() => (broken = true)}
@@ -145,6 +149,7 @@
     object-fit: cover;
   }
   .image {
+    position: relative;
     max-width: min(400px, 100%);
   }
   .image.natural {

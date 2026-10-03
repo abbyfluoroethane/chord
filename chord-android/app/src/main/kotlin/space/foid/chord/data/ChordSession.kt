@@ -11,6 +11,10 @@ import uniffi.chord_ffi.ConnectionState
  * ChordApp creates it. The ViewModels and ChordConnectionService read it.
  *
  * This interface is the contract between the data layer and the service. Keep it small.
+ *
+ * [ChordSessionImpl] is the implementation. [signIn], [restore] and [signOut] run one at a time.
+ * [events] keeps 256 events for slow collectors and drops the oldest after that; the core thread never waits.
+ * [restore] and [signIn] throw the error of the core (ChordException) when the login fails.
  */
 interface ChordSession {
     /** The client of the signed-in account, or null when nobody is signed in. */

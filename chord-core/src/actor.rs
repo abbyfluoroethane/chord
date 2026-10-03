@@ -665,6 +665,17 @@ impl<S: Session> Actor<S> {
                 self.state.disco.hide_info = !share;
                 let _ = reply.send(Ok(()));
             }
+            Command::Feature(FeatureCommand::Presence(
+                features::presence::Command::SetNotices {
+                    read,
+                    typing,
+                    reply,
+                },
+            )) if self.online.is_none() => {
+                self.state.privacy.no_read_notices = !read;
+                self.state.privacy.no_typing_notices = !typing;
+                let _ = reply.send(Ok(()));
+            }
             Command::Feature(command) => {
                 if self.online.is_some() {
                     self.with_ctx(|ctx| features::on_command(ctx, command));

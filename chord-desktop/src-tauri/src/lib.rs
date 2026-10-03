@@ -5,8 +5,10 @@
 //! Views and events leave through Tauri channels, as JSON that chord-core's `serde`
 //! feature produces. The TypeScript side is in src/lib/chord/.
 
+mod advanced;
 mod avatars;
 mod badge;
+mod behaviour;
 mod certpin;
 mod commands;
 mod emoji;
@@ -20,6 +22,7 @@ mod links;
 mod navigation;
 mod notify;
 mod pins;
+mod privacy;
 mod settings;
 mod state;
 mod theme_fetch;
@@ -56,6 +59,14 @@ pub fn run() {
     // arguments (an xmpp: link on Windows and Linux) to the first copy and quits.
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(links::second_instance));
+    // Open Chord at login (src/behaviour.rs). The argument lets a start from the login
+    // entry open hidden.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(
+        tauri_plugin_autostart::Builder::new()
+            .arg(behaviour::AUTOSTART_ARG)
+            .build(),
+    );
     let builder = builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
@@ -66,6 +77,8 @@ pub fn run() {
         .manage(files::Dropped::default())
         .manage(notify::NoticePrefs::default())
         .manage(certpin::CertPins::default())
+        .manage(behaviour::Behaviour::default())
+        .on_window_event(behaviour::on_window_event)
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {
             if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
@@ -75,11 +88,17 @@ pub fn run() {
         })
         .setup(|app| {
             settings::init_notice_prefs(app.handle());
+            behaviour::setup(app.handle());
             links::setup(app)
         });
     emoji::register(avatars::register(builder))
         .invoke_handler(tauri::generate_handler![
             commands::open,
+            advanced::storage_info,
+            advanced::clear_caches,
+            advanced::clear_history,
+            advanced::app_info,
+            advanced::server_features,
             commands::login,
             commands::logout,
             commands::saved_password,
@@ -123,6 +142,11 @@ pub fn run() {
             commands::invisible_method,
             commands::set_idle,
             commands::set_share_info,
+            commands::set_notices,
+            commands::archive_default,
+            commands::set_archive_default,
+            privacy::privacy_cache_info,
+            privacy::clear_privacy_cache,
             commands::set_avatar,
             commands::remove_avatar,
             commands::set_room_affiliation,
@@ -161,6 +185,8 @@ pub fn run() {
             commands::add_contact,
             commands::set_nickname,
             commands::profile,
+            commands::set_profile,
+            commands::own_devices,
             commands::remove_contact,
             commands::rename_contact,
             commands::set_contact_groups,
@@ -176,6 +202,7 @@ pub fn run() {
             pins::pins,
             pins::refresh_pins,
             badge::set_unread_count,
+            notify::send_test_notice,
             forms::list_commands,
             forms::command_step,
             forms::room_config_form,
@@ -192,13 +219,19 @@ pub fn run() {
             link_preview::link_preview,
             link_preview::link_image,
             files::save_image,
+            files::save_text,
             theme_fetch::theme_fetch,
             gif::gif_search,
             emoji::emoji_packs,
             emoji::emoji_pack_install,
             settings::get_settings,
             settings::set_settings,
+            behaviour::get_autostart,
+            behaviour::set_autostart,
+            behaviour::set_tray_unread,
+            behaviour::system_idle_seconds,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| behaviour::on_run_event(app, &event));
 }

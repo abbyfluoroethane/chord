@@ -10,16 +10,18 @@
       label: 'User settings',
       pages: [
         { id: 'account', label: 'My account' },
-        { id: 'privacy', label: 'Privacy' },
-        { id: 'server', label: 'Server' }
+        { id: 'privacy', label: 'Privacy' }
       ]
     },
     {
       label: 'App settings',
       pages: [
         { id: 'notifications', label: 'Notifications' },
+        { id: 'behaviour', label: 'App behaviour' },
         { id: 'appearance', label: 'Appearance' },
-        { id: 'keybinds', label: 'Keybinds' }
+        { id: 'chat', label: 'Chat' },
+        { id: 'keybinds', label: 'Keybinds' },
+        { id: 'advanced', label: 'Advanced' }
       ]
     }
   ];

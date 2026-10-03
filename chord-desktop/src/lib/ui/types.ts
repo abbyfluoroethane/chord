@@ -194,9 +194,11 @@ export type SettingsPage =
   | 'account'
   | 'privacy'
   | 'notifications'
+  | 'behaviour'
   | 'appearance'
+  | 'chat'
   | 'keybinds'
-  | 'server'
+  | 'advanced'
   | 'about';
 
 export type DisplayMode = 'cozy' | 'compact';

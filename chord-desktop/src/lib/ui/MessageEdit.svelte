@@ -1,7 +1,9 @@
 <script lang="ts">
-  // Inline edit. Esc cancels, Enter saves, Shift+Enter adds a line.
+  // Inline edit. Esc cancels. Enter saves, or Ctrl+Enter when the setting says so.
   import { untrack } from 'svelte';
   import { app } from './app.svelte';
+  import { prefs } from './prefs.svelte';
+  import { isSendKey } from './sendkey';
   import { loadShortcodes, mayHaveShortcode, replaceShortcodesOutsideCode } from './shortcodes';
   import type { TimelineItem } from './types';
 
@@ -35,7 +37,7 @@
     if (e.key === 'Escape') {
       e.preventDefault();
       app.editingId = null;
-    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    } else if (isSendKey(e, prefs.sendKey)) {
       e.preventDefault();
       void save();
     }
@@ -48,11 +50,12 @@
     bind:value
     rows="1"
     aria-label="Edit message"
+    spellcheck={prefs.spellcheck}
     oninput={fit}
     onkeydown={keydown}
   ></textarea>
   <p class="hint">
-    escape to <button onclick={() => (app.editingId = null)}>cancel</button> · enter to
+    escape to <button onclick={() => (app.editingId = null)}>cancel</button> · {prefs.sendKey === 'enter' ? 'enter' : 'ctrl+enter'} to
     <button onclick={save}>save</button>
   </p>
 </div>

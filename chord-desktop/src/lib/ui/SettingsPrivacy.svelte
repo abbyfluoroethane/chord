@@ -4,9 +4,14 @@
   import Toggle from './Toggle.svelte';
   import { contactsStore } from './contacts.svelte';
   import { linkPreviews } from './linkpreviews.svelte';
+  import Segmented from './Segmented.svelte';
   import { api, live } from './bridge';
+  import { fileSize } from './format';
   import { prefs } from './prefs.svelte';
+  import { privacyCache } from './privacycache.svelte';
+  import { session } from './session.svelte';
   import { ui } from './ui.svelte';
+  import type { ArchiveDefault } from '$lib/chord/api';
 
   /** Save the choice, then tell the running client. Rust reads the file at the next open. */
   function setShareInfo(v: boolean) {
@@ -14,7 +19,103 @@
     if (live) void api().then((b) => b.setShareInfo(v)).catch(() => {});
   }
 
+  /** Save the choice, then tell the running client. Rust reads the file at the next open. */
+  function setNotice(key: 'sendReadNotices' | 'sendTypingNotices', v: boolean) {
+    prefs.set(key, v);
+    if (live)
+      void api()
+        .then((b) => b.setNotices(prefs.sendReadNotices, prefs.sendTypingNotices))
+        .catch(() => {});
+  }
+
+  const waits = [
+    { value: '5', label: '5 min' },
+    { value: '10', label: '10 min' },
+    { value: '30', label: '30 min' }
+  ];
+
+  // What the server archives. `undefined` while unknown, `null` when it has no archive.
+  let archive = $state<ArchiveDefault | null | undefined>(live ? undefined : 'roster');
+  const archiveOptions: { value: ArchiveDefault; label: string }[] = [
+    { value: 'always', label: 'Everyone' },
+    { value: 'roster', label: 'Contacts' },
+    { value: 'never', label: 'No one' }
+  ];
+
+  $effect(() => {
+    if (!live || session.state !== 'connected') return;
+    void api()
+      .then((b) => b.archiveDefault())
+      .then((v) => (archive = v))
+      .catch(() => (archive = undefined));
+  });
+
+  async function setArchive(v: ArchiveDefault) {
+    const before = archive;
+    archive = v;
+    if (!live) return;
+    try {
+      archive = await (await api()).setArchiveDefault(v);
+    } catch {
+      archive = before;
+      ui.say('Could not change the archive', true);
+    }
+  }
+
+  $effect(() => {
+    void privacyCache.refresh();
+  });
+
+  // A long list gets a search box.
+  let blockedQuery = $state('');
+  const shownBlocked = $derived(
+    contactsStore.blocked.filter((b) =>
+      b.address.toLowerCase().includes(blockedQuery.trim().toLowerCase())
+    )
+  );
+
+  const pages = (n: number) => `${n} ${n === 1 ? 'page' : 'pages'} saved.`;
 </script>
+
+<h2 class="section">Activity</h2>
+<SettingRow title="Send read receipts" hint="Contacts see when you have read their messages.">
+  <Toggle
+    checked={prefs.sendReadNotices}
+    label="Send read receipts"
+    onchange={(v) => setNotice('sendReadNotices', v)}
+  />
+</SettingRow>
+<SettingRow title="Send typing notices" hint="Contacts see when you are typing.">
+  <Toggle
+    checked={prefs.sendTypingNotices}
+    label="Send typing notices"
+    onchange={(v) => setNotice('sendTypingNotices', v)}
+  />
+</SettingRow>
+<SettingRow title="Share when you are idle" hint="Contacts see that you have not used Chord for a while.">
+  <Toggle
+    checked={prefs.shareIdle}
+    label="Share when you are idle"
+    onchange={(v) => prefs.set('shareIdle', v)}
+  />
+</SettingRow>
+{#if prefs.shareIdle}
+  <SettingRow title="Idle after" hint="Time without input in Chord.">
+    <Segmented
+      label="Idle after"
+      value={String(prefs.idleMinutes)}
+      options={waits}
+      onchange={(v) => prefs.set('idleMinutes', Number(v))}
+    />
+  </SettingRow>
+{/if}
+
+{#if archive}
+  <h2 class="section">Message archive</h2>
+  <SettingRow title="Keep messages on the server for" hint="Whose messages your server stores for you.">
+    <Segmented label="Keep messages on the server for" value={archive} options={archiveOptions} onchange={setArchive} />
+  </SettingRow>
+{/if}
 
 <h2 class="section">Link previews</h2>
 <SettingRow
@@ -73,9 +174,40 @@
   />
 </SettingRow>
 
+{#if privacyCache.info}
+  <h2 class="section">Saved on this device</h2>
+  <SettingRow title="Link preview cache" hint={pages(privacyCache.info.previewEntries)}>
+    <button
+      class="btn"
+      disabled={privacyCache.info.previewEntries === 0}
+      onclick={() => privacyCache.clear('previews')}>Clear</button
+    >
+  </SettingRow>
+  <SettingRow
+    title="Drawn emoji cache"
+    hint={`${privacyCache.info.emojiFiles} files, ${fileSize(privacyCache.info.emojiBytes)}.`}
+  >
+    <button
+      class="btn"
+      disabled={privacyCache.info.emojiFiles === 0}
+      onclick={() => privacyCache.clear('emoji')}>Clear</button
+    >
+  </SettingRow>
+{/if}
+
 <h2 class="section">Blocked addresses</h2>
 {#if contactsStore.blocked.length}
   <div class="bar">
+    {#if contactsStore.blocked.length > 8}
+      <input
+        class="input search"
+        type="search"
+        placeholder="Search blocked addresses"
+        aria-label="Search blocked addresses"
+        autocomplete="off"
+        bind:value={blockedQuery}
+      />
+    {/if}
     <button
         class="btn"
         onclick={() =>
@@ -88,7 +220,7 @@
       >
   </div>
   <ul class="blocked">
-    {#each contactsStore.blocked as b (b.address)}
+    {#each shownBlocked as b (b.address)}
       <li>
         <span class="mono">{b.address}</span>
         <button
@@ -99,6 +231,9 @@
       </li>
     {/each}
   </ul>
+  {#if !shownBlocked.length}
+    <p class="note">No blocked address matches.</p>
+  {/if}
 {:else}
   <p class="note">You have not blocked anyone.</p>
 {/if}
@@ -125,8 +260,13 @@
     margin: 0;
     padding: 0;
   }
+  .search {
+    flex: 1;
+    min-width: 0;
+  }
   .bar {
     display: flex;
+    gap: var(--space-3);
     justify-content: flex-end;
     margin-bottom: var(--space-2);
   }

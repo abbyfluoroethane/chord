@@ -30,6 +30,7 @@
   import { watchClientState } from './clientstate';
   import { contactsStore } from './contacts.svelte';
   import { drafts } from './drafts.svelte';
+  import { useBehaviour } from './behaviour.svelte';
   import { watchIdle } from './idle';
   import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
@@ -40,6 +41,8 @@
   import { ui } from './ui.svelte';
   import { xmppLinks } from './xmpplinks.svelte';
 
+  useBehaviour();
+
   onMount(() => {
     ui.load();
     prefs.load();
@@ -48,13 +51,17 @@
     // Tell the server when nobody looks at the window (XEP-0352).
     if (live) {
       // Tell the contacts when nobody used Chord for a while (XEP-0319).
-      idleWatch = watchIdle((since) => {
-        void api()
-          .then((b) => b.setIdle(since === null ? null : Math.floor(since / 1000)))
-          .catch(() => {
-            /* Offline: resend after the next connect. */
-          });
-      });
+      idleWatch = watchIdle(
+        (since) => {
+          void api()
+            .then((b) => b.setIdle(since === null ? null : Math.floor(since / 1000)))
+            .catch(() => {
+              /* Offline: resend after the next connect. */
+            });
+        },
+        undefined,
+        () => (prefs.shareIdle ? prefs.idleMinutes * 60_000 : null)
+      );
       const stopState = watchClientState((active) => {
         void api()
           .then((b) => b.setClientActive(active))
@@ -70,6 +77,12 @@
   });
 
   let idleWatch: ReturnType<typeof watchIdle> | undefined;
+  // The user changed the idle switch or wait in Privacy.
+  $effect(() => {
+    void prefs.shareIdle;
+    void prefs.idleMinutes;
+    untrack(() => idleWatch?.retune());
+  });
   // A new session starts with no idle time: send it again.
   $effect(() => {
     if (session.state === 'connected') idleWatch?.resend();
@@ -77,7 +90,7 @@
 
   // The total of unread messages goes to the window title and the dock badge.
   $effect(() => {
-    const n = app.totalUnread;
+    const n = prefs.unreadBadge ? app.totalUnread : 0;
     document.title = pageTitle(n);
     if (live) {
       void api()

@@ -267,10 +267,22 @@ fn shared() -> &'static Shared {
     })
 }
 
+/// Drop every cached preview. The next link fetches its page again.
+pub(crate) fn clear_cache() {
+    if let Ok(mut cache) = shared().cache.lock() {
+        *cache = Cache::new();
+    }
+}
+
 /// The permits for the page fetches.
 fn fetch_permits() -> &'static tokio::sync::Semaphore {
     static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
     PERMITS.get_or_init(|| tokio::sync::Semaphore::new(MAX_PARALLEL_FETCHES))
+}
+
+/// How many answers the cache holds now.
+pub(crate) fn cache_len() -> usize {
+    shared().cache.lock().map_or(0, |c| c.map.len())
 }
 
 fn cached(key: &str) -> Option<Option<LinkPreview>> {

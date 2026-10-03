@@ -649,8 +649,13 @@ pub(crate) fn on_presence(ctx: &mut Ctx<'_>, presence: &Presence) {
         return;
     };
     let bare = from.to_bare();
-    // Our other resources are not contacts.
+    // Our other resources are not contacts. The store keeps their presence for `own_devices`.
     if bare == *ctx.account {
+        match presence.type_ {
+            Type::None => store_presence(ctx, from, presence),
+            Type::Unavailable => remove_presence(ctx, from),
+            _ => {}
+        }
         return;
     }
     match presence.type_ {
@@ -1451,15 +1456,22 @@ mod tests {
     }
 
     #[test]
-    fn presence_of_our_own_account_is_not_stored() {
+    fn presence_of_our_own_account_is_kept_for_the_device_list() {
         let mut h = Harness::new();
-        h.with_ctx(|ctx| on_presence(ctx, &presence("alice@chord.localhost/phone", Type::None)));
-        let n: i64 = h
-            .store
-            .conn()
-            .query_row("SELECT count(*) FROM presences", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 0);
+        let count = |h: &Harness| -> i64 {
+            h.store
+                .conn()
+                .query_row("SELECT count(*) FROM presences", [], |r| r.get(0))
+                .unwrap()
+        };
+        let phone = "alice@chord.localhost/phone";
+        h.with_ctx(|ctx| on_presence(ctx, &presence(phone, Type::None)));
+        assert_eq!(count(&h), 1);
+        // A subscription request from our own account does nothing.
+        h.with_ctx(|ctx| on_presence(ctx, &presence(phone, Type::Subscribe)));
+        assert_eq!(count(&h), 1);
+        h.with_ctx(|ctx| on_presence(ctx, &presence(phone, Type::Unavailable)));
+        assert_eq!(count(&h), 0);
     }
 
     #[test]

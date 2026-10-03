@@ -3,6 +3,7 @@
   // Svelte markup. No {@html}. Links are http, https, or xmpp:. A click on an xmpp: link
   // opens the question dialog of Chord and never goes to the OS.
   import { app } from './app.svelte';
+  import { prefs } from './prefs.svelte';
   import CodeBlock from './CodeBlock.svelte';
   import EmojiText from './EmojiText.svelte';
   import { parseMarkdown, type Block, type Inline } from './markdown';
@@ -88,7 +89,7 @@
       >{@render inline(item.content)}{#if item.sub}{@render blocks([item.sub])}{/if}</li
     >{/each}{/snippet}
 
-<div class="body" class:jumbo={parsed.jumbo}>{@render blocks(parsed.blocks)}</div>
+<div class="body" class:jumbo={parsed.jumbo && prefs.jumboEmoji}>{@render blocks(parsed.blocks)}</div>
 
 <style>
   .body {
@@ -100,6 +101,12 @@
   .heading,
   .subtext {
     white-space: pre-wrap;
+  }
+  :global(:root[data-links='hover']) .body a {
+    text-decoration: none;
+  }
+  :global(:root[data-links='hover']) .body a:hover {
+    text-decoration: underline;
   }
   .jumbo {
     font-size: 40px;

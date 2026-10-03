@@ -3,6 +3,8 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
+  AppInfo,
+  Device,
   Availability,
   ChannelItem,
   ChannelScope,
@@ -30,6 +32,7 @@ import type {
   PendingJoin,
   Pin,
   Profile,
+  ProfileEdit,
   PushRegistration,
   RegistrationForm,
   RegistrationSubmission,
@@ -45,6 +48,7 @@ import type {
   SpaceInfo,
   SpaceMember,
   SpaceItem,
+  StorageInfo,
   TimelineItem
 } from './types';
 
@@ -317,6 +321,25 @@ export const invisibleMethod = () => invoke<InvisibleMethod | null>('invisible_m
 export const setIdle = (since: number | null) => invoke<void>('set_idle', { since });
 /** Answer version (XEP-0092) and time (XEP-0202) queries, or not. A new presence follows. */
 export const setShareInfo = (share: boolean) => invoke<void>('set_share_info', { share });
+/** Send read markers and receipts (`read`) and typing notices (`typing`), or not. */
+export const setNotices = (read: boolean, typing: boolean) =>
+  invoke<void>('set_notices', { read, typing });
+/** Which messages the server archives (XEP-0313). */
+export type ArchiveDefault = 'always' | 'roster' | 'never';
+/** The server default, or null when the server has no archive. Fails offline. */
+export const archiveDefault = () => invoke<ArchiveDefault | null>('archive_default');
+export const setArchiveDefault = (value: ArchiveDefault) =>
+  invoke<ArchiveDefault | null>('set_archive_default', { default: value });
+/** What the local caches hold: link preview answers, and the drawn emoji files. */
+export interface PrivacyCacheInfo {
+  previewEntries: number;
+  emojiFiles: number;
+  emojiBytes: number;
+}
+export const privacyCacheInfo = () => invoke<PrivacyCacheInfo>('privacy_cache_info');
+/** Clear one local cache: `previews` or `emoji`. */
+export const clearPrivacyCache = (kind: 'previews' | 'emoji') =>
+  invoke<void>('clear_privacy_cache', { kind });
 /** The room service of the server (for example conference.example.org), or null. */
 export const roomService = () => invoke<string | null>('room_service');
 export const sendPrivate = (room: string, nick: string, body: string) =>
@@ -428,6 +451,12 @@ export const addContact = (jid: string, name?: string, preauth?: string) =>
 export const setNickname = (nickname: string | null) => invoke<void>('set_nickname', { nickname });
 /** The nickname and the vCard4 name of an account. Both can be null. */
 export const profile = (jid: Jid) => invoke<Profile>('profile', { jid });
+/** Write the vCard4 fields of our own profile. An empty text removes a field. */
+export const setProfile = (edit: ProfileEdit) => invoke<void>('set_profile', { edit });
+/** The resources of our own account that are online. */
+export const ownDevices = () => invoke<Device[]>('own_devices');
+/** Ask where to save the text, and write it there. False when the user cancelled. */
+export const saveText = (name: string, text: string) => invoke<boolean>('save_text', { name, text });
 export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });
 /** Rename a contact in the roster. An empty name or null clears it. The groups stay. */
 export const renameContact = (jid: string, name: string | null) =>
@@ -478,6 +507,19 @@ export const refreshPins = () => invoke<void>('refresh_pins');
 export const getSettings = () => invoke<Settings>('get_settings');
 /** Replace the local settings. Any JSON, 256 KB at most. */
 export const setSettings = (value: Settings) => invoke<void>('set_settings', { value });
+
+// ---------------------------------------------------------------- advanced settings
+
+/** The size in bytes of the stored data of the open account. */
+export const storageInfo = () => invoke<StorageInfo>('storage_info');
+/** Clear the link previews and the drawn emoji. Resolves to the freed bytes of files. */
+export const clearCaches = () => invoke<number>('clear_caches');
+/** Delete the stored messages of the open account. Resolves to their number. */
+export const clearHistory = () => invoke<number>('clear_history');
+/** The version of the app and the system. */
+export const appInfo = () => invoke<AppInfo>('app_info');
+/** The features that the server advertises (disco#info), sorted. Empty while offline. */
+export const serverFeatures = () => invoke<string[]>('server_features');
 
 // ---------------------------------------------------------------- link previews
 

@@ -5,6 +5,8 @@ export type TimeStyle = 't' | 'T' | 'd' | 'D' | 'f' | 'F' | 'R';
 export interface TimeOptions {
   locale?: string;
   timeZone?: string;
+  /** 12-hour, 24-hour, or none for the locale. */
+  hourCycle?: 'h12' | 'h23';
 }
 
 /** The Date for a count of seconds, or null when the number is not a valid date. */
@@ -40,9 +42,9 @@ export function formatTimestamp(
   now: number,
   opt: TimeOptions = {}
 ): string {
-  const { locale, timeZone } = opt;
+  const { locale, timeZone, hourCycle } = opt;
   const f = (o: Intl.DateTimeFormatOptions) =>
-    new Intl.DateTimeFormat(locale, { ...o, timeZone }).format(date);
+    new Intl.DateTimeFormat(locale, { ...o, timeZone, hourCycle }).format(date);
   switch (style) {
     case 't':
       return f(SHORT_TIME);
