@@ -161,6 +161,7 @@ fun MainScreen(
                 selectedJid = e.jid
                 selectedName = e.name
                 selectedDirect = false
+                selectedUnread = 0
                 scope.launch { drawer.close() }
             }
             is SpaceEvent.SpaceGone -> {
@@ -256,6 +257,7 @@ fun MainScreen(
                     selectedJid = jid
                     selectedName = name
                     selectedDirect = true
+                    selectedUnread = 0
                     homePage = ""
                     scope.launch { drawer.close() }
                 }
@@ -266,6 +268,7 @@ fun MainScreen(
                             selectedJid = ch.jid
                             selectedName = ch.name.ifBlank { bareJid(ch.jid) }
                             selectedDirect = ch.kind is ChannelKind.Direct
+                            selectedUnread = ch.unread.toInt()
                             homePage = ""
                             scope.launch { drawer.close() }
                         },
@@ -294,6 +297,7 @@ fun MainScreen(
                 selectedJid = a
                 selectedName = n
                 selectedDirect = true
+                selectedUnread = 0
                 scope.launch { drawer.close() }
             },
             onOpenSettings = onOpenSettings,
