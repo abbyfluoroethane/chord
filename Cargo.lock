@@ -767,6 +767,10 @@ version = "0.1.0"
 dependencies = [
  "chord-core",
  "futures-core",
+ "jni 0.22.4",
+ "ndk-context",
+ "reqwest",
+ "rustls-platform-verifier",
  "tokio",
  "uniffi",
 ]
@@ -6055,6 +6059,7 @@ dependencies = [
  "pin-project-lite",
  "rand 0.10.3",
  "rustls-native-certs",
+ "rustls-platform-verifier",
  "rxml",
  "sasl",
  "thiserror 2.0.21",
