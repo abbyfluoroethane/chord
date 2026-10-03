@@ -29,6 +29,8 @@ class ChordApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Before any login or upload: the DNS resolver and the certificate verifier need it.
+        NativeInit.init(this)
         ChordNotifications.createChannels(this)
         // The reaction picker then opens at once.
         appScope.launch { EmojiCatalog.load(this@ChordApp) }
