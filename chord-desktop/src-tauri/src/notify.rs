@@ -233,7 +233,10 @@ mod tests {
 
     #[test]
     fn a_chat_notification_shows_the_sender() {
-        assert_eq!(text(&notification(None), true), ("bob".into(), "hello".into()));
+        assert_eq!(
+            text(&notification(None), true),
+            ("bob".into(), "hello".into())
+        );
     }
 
     #[test]
@@ -256,7 +259,10 @@ mod tests {
     #[test]
     fn a_notice_can_hide_the_text() {
         let room = notification(Some("dev@muc.example.org"));
-        assert_eq!(text(&room, false), ("bob in dev".into(), "New message".into()));
+        assert_eq!(
+            text(&room, false),
+            ("bob in dev".into(), "New message".into())
+        );
         let mut n = notification(None);
         n.body_preview = "/me waves".into();
         assert_eq!(text(&n, false).1, "New message");
