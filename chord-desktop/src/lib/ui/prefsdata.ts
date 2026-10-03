@@ -31,6 +31,14 @@ export interface Saved {
   motion: MotionMode;
   showPresence: boolean;
   linkUnderline: LinkUnderline;
+  // Notifications
+  noticePreview: boolean;
+  quietHours: boolean;
+  quietFrom: number;
+  quietTo: number;
+  soundChoice: SoundId;
+  soundVolume: number;
+  unreadBadge: boolean;
 }
 
 export type SendKey = 'enter' | 'mod-enter';
@@ -68,6 +76,10 @@ export function hourCycleOf(f: TimeFormat): 'h12' | 'h23' | undefined {
 
 export const ZOOM_MIN = 80;
 export const ZOOM_MAX = 150;
+
+/** The built-in sounds. The page makes them with WebAudio. */
+export const SOUND_IDS = ['chime', 'pop', 'ping', 'drop'] as const;
+export type SoundId = (typeof SOUND_IDS)[number];
 
 /** The key in the settings file, and the old localStorage key of the same blob. */
 export const SETTINGS_KEY = 'prefs';
@@ -110,7 +122,22 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (o.motion === 'system' || o.motion === 'reduce' || o.motion === 'full') out.motion = o.motion;
   if (typeof o.showPresence === 'boolean') out.showPresence = o.showPresence;
   if (o.linkUnderline === 'always' || o.linkUnderline === 'hover') out.linkUnderline = o.linkUnderline;
+  // Notifications
+  if (typeof o.noticePreview === 'boolean') out.noticePreview = o.noticePreview;
+  if (typeof o.quietHours === 'boolean') out.quietHours = o.quietHours;
+  if (isMinute(o.quietFrom)) out.quietFrom = o.quietFrom;
+  if (isMinute(o.quietTo)) out.quietTo = o.quietTo;
+  if (typeof o.soundChoice === 'string' && (SOUND_IDS as readonly string[]).includes(o.soundChoice))
+    out.soundChoice = o.soundChoice as SoundId;
+  if (typeof o.soundVolume === 'number' && Number.isFinite(o.soundVolume))
+    out.soundVolume = Math.min(100, Math.max(0, Math.round(o.soundVolume)));
+  if (typeof o.unreadBadge === 'boolean') out.unreadBadge = o.unreadBadge;
   return out;
+}
+
+/** A minute of the day: a whole number from 0 to 1439. */
+function isMinute(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 1440;
 }
 
 /** Parse the JSON text of the old localStorage value. Bad text gives no prefs. */

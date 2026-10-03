@@ -11,6 +11,42 @@ describe('parsePrefs', () => {
     expect(parsePrefs({ shareInfo: false })).toEqual({ shareInfo: false });
     expect(parsePrefs({ shareInfo: 'off' })).toEqual({});
   });
+  it('keeps the notice fields that have the right type', () => {
+    expect(
+      parsePrefs({
+        noticePreview: false,
+        quietHours: true,
+        quietFrom: 1380,
+        quietTo: 420,
+        soundChoice: 'drop',
+        soundVolume: 80,
+        unreadBadge: false
+      })
+    ).toEqual({
+      noticePreview: false,
+      quietHours: true,
+      quietFrom: 1380,
+      quietTo: 420,
+      soundChoice: 'drop',
+      soundVolume: 80,
+      unreadBadge: false
+    });
+  });
+  it('drops bad notice values and clamps the volume', () => {
+    expect(
+      parsePrefs({
+        noticePreview: 'no',
+        quietHours: 1,
+        quietFrom: 1440,
+        quietTo: -1,
+        soundChoice: 'siren',
+        soundVolume: 400,
+        unreadBadge: null
+      })
+    ).toEqual({ soundVolume: 100 });
+    expect(parsePrefs({ quietFrom: 7.5, soundVolume: -5 })).toEqual({ soundVolume: 0 });
+    expect(parsePrefs({ soundVolume: Infinity })).toEqual({});
+  });
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});

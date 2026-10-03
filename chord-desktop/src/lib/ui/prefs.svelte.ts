@@ -19,7 +19,8 @@ import {
   type MotionMode,
   type Saved,
   type SendKey,
-  type TimeFormat
+  type TimeFormat,
+  type SoundId
 } from './prefsdata';
 
 const GROUP_GAP = { small: '8px', normal: '20px', large: '32px' } as const;
@@ -70,6 +71,19 @@ class Prefs {
   emoticons = $state<boolean>(CHAT_DEFAULTS.emoticons);
   spellcheck = $state<boolean>(CHAT_DEFAULTS.spellcheck);
   confirmDelete = $state<boolean>(CHAT_DEFAULTS.confirmDelete);
+
+  // Notifications
+  /** The system notice shows the text of the message. Rust reads it. */
+  noticePreview = $state(true);
+  /** No notice and no sound between two times. The times are minutes after midnight. */
+  quietHours = $state(false);
+  quietFrom = $state(22 * 60);
+  quietTo = $state(8 * 60);
+  soundChoice = $state<SoundId>('chime');
+  /** 0 to 100. 50 is the level of the old fixed beep. */
+  soundVolume = $state(50);
+  /** The unread count in the window title and on the dock icon. */
+  unreadBadge = $state(true);
 
   load() {
     let legacy: string | null = null;
@@ -123,7 +137,14 @@ class Prefs {
       zoom: this.zoom,
       motion: this.motion,
       showPresence: this.showPresence,
-      linkUnderline: this.linkUnderline
+      linkUnderline: this.linkUnderline,
+      noticePreview: this.noticePreview,
+      quietHours: this.quietHours,
+      quietFrom: this.quietFrom,
+      quietTo: this.quietTo,
+      soundChoice: this.soundChoice,
+      soundVolume: this.soundVolume,
+      unreadBadge: this.unreadBadge
     };
   }
 

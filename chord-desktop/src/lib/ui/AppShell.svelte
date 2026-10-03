@@ -77,7 +77,7 @@
 
   // The total of unread messages goes to the window title and the dock badge.
   $effect(() => {
-    const n = app.totalUnread;
+    const n = prefs.unreadBadge ? app.totalUnread : 0;
     document.title = pageTitle(n);
     if (live) {
       void api()

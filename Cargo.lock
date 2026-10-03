@@ -720,6 +720,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chord-core",
+ "chrono",
  "flate2",
  "image",
  "keyring",

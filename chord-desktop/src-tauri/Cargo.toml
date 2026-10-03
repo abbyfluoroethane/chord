@@ -22,6 +22,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2"
 # Desktop notifications for ClientEvent::Notification (src/notify.rs).
 tauri-plugin-notification = "2"
+# The local time for the quiet hours of a notice (src/notify.rs).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The system file dialog. Rust opens it (src/files.rs), so the page needs no permission for it.
 tauri-plugin-dialog = "2"
 # O_NOFOLLOW and ELOOP for the file gate (src/files.rs). Already in the tree through tauri.

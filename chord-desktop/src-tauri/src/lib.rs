@@ -176,6 +176,7 @@ pub fn run() {
             pins::pins,
             pins::refresh_pins,
             badge::set_unread_count,
+            notify::send_test_notice,
             forms::list_commands,
             forms::command_step,
             forms::room_config_form,

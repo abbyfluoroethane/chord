@@ -189,7 +189,7 @@ mod tests {
             item_id: "m:1".into(),
         };
         assert!(
-            !notice.allows(&chat),
+            !notice.allows(&chat, 600),
             "mute DMs from the file silences a chat"
         );
         let _ = std::fs::remove_dir_all(&dir);
