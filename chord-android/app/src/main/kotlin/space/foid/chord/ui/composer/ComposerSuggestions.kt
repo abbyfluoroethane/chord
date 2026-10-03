@@ -73,6 +73,13 @@ object ShortcodeIndexCache {
     suspend fun load(context: Context): ShortcodeIndex {
         index?.let { return it }
         val groups = EmojiCatalog.load(context)
-        return withContext(Dispatchers.Default) { index ?: ShortcodeIndex(groups).also { index = it } }
+        return withContext(Dispatchers.Default) {
+            index ?: run {
+                val known = runCatching {
+                    parseShortcodes(context.applicationContext.assets.open("shortcodes.txt").bufferedReader().use { it.readText() })
+                }.getOrDefault(emptyList())
+                ShortcodeIndex(groups, known).also { index = it }
+            }
+        }
     }
 }

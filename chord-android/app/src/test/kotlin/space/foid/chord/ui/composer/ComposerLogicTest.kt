@@ -78,6 +78,12 @@ class ComposerLogicTest {
         assertEquals(hits.map { it.emoji }.distinct(), hits.map { it.emoji })
     }
 
+    @Test fun a_real_shortcode_table_replaces_the_tag_names() {
+        val known = parseShortcodes("smile\t😄\nsmiley\t😃\nbad line\n\t😀\n")
+        assertEquals(listOf(ShortcodeHit("smile", "😄"), ShortcodeHit("smiley", "😃")), known)
+        assertEquals(listOf("smile", "smiley"), ShortcodeIndex(groups, known).suggest("smi").map { it.name })
+    }
+
     @Test fun insert_shortcode_puts_the_emoji_and_a_space() {
         val m = findShortcode("nice :fi", 8)!!
         assertEquals(TextEdit("nice 🔥 ", 8), insertShortcode("nice :fi", 8, m, "🔥"))

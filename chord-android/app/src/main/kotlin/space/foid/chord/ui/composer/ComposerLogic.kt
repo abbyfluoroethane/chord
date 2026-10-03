@@ -65,10 +65,15 @@ data class ShortcodeHit(val name: String, val emoji: String)
  * a name is the label with underscores ("grinning_face") or a one-word tag ("grin").
  * Build it once for a catalog.
  */
-class ShortcodeIndex(groups: List<EmojiGroup>) {
+class ShortcodeIndex(groups: List<EmojiGroup>, known: List<ShortcodeHit> = emptyList()) {
     private val entries: List<ShortcodeHit>
 
     init {
+        // The real shortcode table (assets/shortcodes.txt, as on the desktop) wins when it is there.
+        entries = known.ifEmpty { fromTags(groups) }
+    }
+
+    private fun fromTags(groups: List<EmojiGroup>): List<ShortcodeHit> {
         val list = ArrayList<ShortcodeHit>()
         for (g in groups) for (e in g.emoji) {
             list += ShortcodeHit(shortcodeOf(e.label), e.emoji)
@@ -78,7 +83,7 @@ class ShortcodeIndex(groups: List<EmojiGroup>) {
                 .filter { it.length >= 2 && it.all { c -> c.isLetterOrDigit() } }
                 .forEach { list += ShortcodeHit(it, e.emoji) }
         }
-        entries = list
+        return list
     }
 
     /** Up to [max] names that start with [prefix], best first, one for each emoji. */
@@ -95,6 +100,13 @@ class ShortcodeIndex(groups: List<EmojiGroup>) {
         val TONE = Regex("_tone\\d|skin_tone|-tone")
     }
 }
+
+/** Reads assets/shortcodes.txt: one "name<TAB>emoji" for each line. */
+fun parseShortcodes(text: String): List<ShortcodeHit> =
+    text.lineSequence().mapNotNull { line ->
+        val i = line.indexOf('\t')
+        if (i <= 0 || i == line.length - 1) null else ShortcodeHit(line.substring(0, i), line.substring(i + 1))
+    }.toList()
 
 /** "grinning face" becomes "grinning_face"; "flag: Fiji" becomes "flag_fiji". */
 fun shortcodeOf(label: String): String =
