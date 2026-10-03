@@ -17,8 +17,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -55,7 +53,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import space.foid.chord.R
 import space.foid.chord.data.stableKey
+import space.foid.chord.ui.components.availabilityLabel
+import space.foid.chord.ui.components.shownOwnPresence
+import space.foid.chord.ui.status.StatusSheet
+import space.foid.chord.ui.status.StatusState
+import space.foid.chord.ui.status.StatusViewModel
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import space.foid.chord.ui.avatar.JidAvatar
 import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.ChannelKind
@@ -65,6 +73,7 @@ import space.foid.chord.ui.join.DrawerHeaderActions
 import space.foid.chord.ui.components.SpaceRailIcon
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordSize
+import space.foid.chord.ui.theme.ChordRadius
 import space.foid.chord.ui.theme.ChordSpace
 import space.foid.chord.ui.theme.ChordType
 import uniffi.chord_ffi.ChannelItem
@@ -152,6 +161,8 @@ fun ChannelDrawerContent(
     onInbox: () -> Unit = {},
     onNew: () -> Unit = {},
     onLongPress: (ChannelItem) -> Unit = {},
+    status: StatusState = StatusState(),
+    onOpenStatus: () -> Unit = {},
 ) {
     val c = Chord.colors
     val isHome = scope is ChannelScope.Home
@@ -245,7 +256,7 @@ fun ChannelDrawerContent(
                 }
             }
         }
-        if (account != null) UserPanel(account, onSignOut, onOpenSettings, connection)
+        if (account != null) UserPanel(account, status, connection, onOpenStatus, onOpenSettings)
     }
 }
 
@@ -274,6 +285,12 @@ fun ChannelDrawer(
     onNew: () -> Unit = {},
     onLongPress: (ChannelItem) -> Unit = {},
 ) {
+    val statusVm: StatusViewModel = viewModel(factory = StatusViewModel.factory)
+    val status by statusVm.state.collectAsState()
+    var statusOpen by rememberSaveable { mutableStateOf(false) }
+    val connection = rememberConnectionState().notice()
+    // The core has no event for our own presence: read it again when the connection changes.
+    LaunchedEffect(connection) { statusVm.refresh() }
     val spaceVm: SpaceListViewModel = viewModel(factory = ChordViewModels.spaceList)
     val channelVm: ChannelListViewModel = viewModel(factory = ChordViewModels.channelList(scope))
     LaunchedEffect(scope) { channelVm.setScope(scope) }
@@ -290,10 +307,19 @@ fun ChannelDrawer(
         selectedJid = selectedJid, onSelect = onSelect, account = account, onSignOut = onSignOut,
         homeUnread = if (scope is ChannelScope.Home && current) channels.sumOf { it.unread.toInt() } else 0,
         onOpenSettings = onOpenSettings,
-        connection = rememberConnectionState().notice(),
+        connection = connection,
         inboxCount = inboxCount, onInbox = onInbox, onNew = onNew, onLongPress = onLongPress,
+        status = status, onOpenStatus = { statusVm.refresh(); statusOpen = true },
         modifier = modifier,
     )
+    if (statusOpen) {
+        StatusSheet(
+            state = status,
+            onAvailability = statusVm::setAvailability,
+            onStatus = statusVm::setStatus,
+            onDismiss = { statusOpen = false },
+        )
+    }
 }
 
 @Composable
@@ -337,73 +363,83 @@ private fun Chevron(color: Color, collapsed: Boolean) {
     }
 }
 
-/** The account at the bottom of the left drawer, with a menu for sign-out. */
+/**
+ * The account at the bottom of the left drawer, as the desktop user panel: the "who" button
+ * (avatar with our presence shape, name, status or address) opens the status sheet, and the
+ * gear opens the settings. While the connection is not up the shape is the grey ring.
+ */
 @Composable
-private fun UserPanel(account: AccountUi, onSignOut: () -> Unit, onOpenSettings: () -> Unit, connection: ConnectionNotice?) {
+internal fun UserPanel(
+    account: AccountUi,
+    status: StatusState,
+    connection: ConnectionNotice?,
+    onOpenStatus: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
     val c = Chord.colors
-    var menu by remember { mutableStateOf(false) }
-    var confirmSignOut by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth().background(c.surfaceRail).navigationBarsPadding()) {
+    val shown = status.availability.let { shownOwnPresence(it, connection == null) }
+    val label = availabilityLabel(status.availability)
+    val cd = if (connection == null) stringResource(R.string.status_panel_cd, label)
+        else stringResource(R.string.status_panel_cd_offline, label, stringResource(R.string.connection_offline))
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(c.surfaceRail)
+            .navigationBarsPadding()
+            .height(64.dp)
+            .padding(start = ChordSpace.s2, end = ChordSpace.s2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Row(
             Modifier
-                .fillMaxWidth()
-                .height(64.dp)
-                .clickable(role = Role.Button, onClickLabel = "Account menu") { menu = true }
-                .padding(horizontal = ChordSpace.s4)
+                .weight(1f)
+                .height(52.dp)
+                .clip(RoundedCornerShape(ChordRadius.md))
+                .clickable(role = Role.Button, onClick = onOpenStatus)
+                .semantics { contentDescription = cd }
+                .padding(horizontal = ChordSpace.s2)
                 .testTag("user_panel"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(ChordSpace.s3),
         ) {
-            Box {
-                JidAvatar(account.jid, name = account.name, size = 36.dp, cut = c.surfaceRail)
-                ConnectionDot(connection, cut = c.surfaceRail, modifier = Modifier.align(Alignment.BottomEnd).offset(3.dp, 3.dp))
-            }
+            JidAvatar(account.jid, name = account.name, size = 36.dp, presence = shown, cut = c.surfaceRail)
             Column(Modifier.weight(1f)) {
                 Text(account.name, style = ChordType.name, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(account.jid, style = ChordType.caption, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val custom = status.status
+                if (custom != null) {
+                    Text(custom, style = ChordType.caption, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("user_status_text"))
+                } else {
+                    Text(account.jid, style = ChordType.caption, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            GearGlyph(c.inkMuted)
         }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(
-                text = { Text("Settings") },
-                onClick = { menu = false; onOpenSettings() },
-                modifier = Modifier.testTag("open_settings"),
-            )
-            DropdownMenuItem(
-                text = { Text("Sign out") },
-                onClick = { menu = false; confirmSignOut = true },
-                modifier = Modifier.testTag("sign_out"),
-            )
-        }
-        if (confirmSignOut) {
-            // The same question as in the settings: a wrong tap must not sign the user out.
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { confirmSignOut = false },
-                containerColor = c.surface300,
-                title = { Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_sign_out_title), style = ChordType.title, color = c.ink) },
-                text = { Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_sign_out_body), style = ChordType.body, color = c.inkMuted) },
-                confirmButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = { confirmSignOut = false; onSignOut() },
-                        modifier = Modifier.testTag("confirm_sign_out"),
-                    ) { Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_sign_out), style = ChordType.label, color = c.danger) }
-                },
-                dismissButton = {
-                    androidx.compose.material3.TextButton(onClick = { confirmSignOut = false }) {
-                        Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_cancel), style = ChordType.label, color = c.ink)
-                    }
-                },
-            )
-        }
+        val settingsCd = stringResource(R.string.status_settings)
+        Box(
+            Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable(role = Role.Button, onClick = onOpenSettings)
+                .semantics { contentDescription = settingsCd }
+                .testTag("open_settings"),
+            contentAlignment = Alignment.Center,
+        ) { GearGlyph(c.inkMuted) }
     }
 }
 
+/** A gear: a ring with eight teeth. */
 @Composable
 private fun GearGlyph(color: Color) {
-    // Three dots, vertical: the account menu.
-    Canvas(Modifier.size(20.dp)) {
-        val r = 1.8.dp.toPx()
-        for (i in -1..1) drawCircle(color, r, Offset(size.width / 2, size.height / 2 + i * 6.dp.toPx()))
+    Canvas(Modifier.size(22.dp)) {
+        val k = size.width / 24f
+        val st = 1.8f * k
+        val mid = Offset(12 * k, 12 * k)
+        drawCircle(color, 3.2f * k, mid, style = androidx.compose.ui.graphics.drawscope.Stroke(st))
+        drawCircle(color, 6.6f * k, mid, style = androidx.compose.ui.graphics.drawscope.Stroke(st))
+        for (i in 0 until 8) {
+            val a = Math.toRadians(i * 45.0)
+            val dx = Math.cos(a).toFloat()
+            val dy = Math.sin(a).toFloat()
+            drawLine(color, mid + Offset(dx * 7.4f * k, dy * 7.4f * k), mid + Offset(dx * 10 * k, dy * 10 * k), st * 1.4f, StrokeCap.Round)
+        }
     }
 }
