@@ -145,14 +145,28 @@ fun MessageRow(
                         Text(
                             message.senderName,
                             style = ChordType.name,
-                            color = if (message.outgoing) colors.brandInk else colors.ink,
+                            color = when {
+                                message.outgoing -> colors.brandInk
+                                message.foreignDomain != null -> colors.accent
+                                else -> colors.ink
+                            },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                                 .then(if (onProfileClick != null) Modifier.clickable(onClick = onProfileClick).testTag("message_name") else Modifier),
                         )
+                        if (message.foreignDomain != null) {
+                            Text(
+                                "@${message.foreignDomain}",
+                                style = ChordType.caption.copy(fontFamily = ChordType.mono),
+                                color = colors.accent,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false).padding(start = ChordSpace.s1),
+                            )
+                        }
                         Text(
-                            message.timeLabel,
+                            message.stamp.ifEmpty { message.timeLabel },
                             style = ChordType.caption,
                             color = colors.inkMuted,
                             maxLines = 1,

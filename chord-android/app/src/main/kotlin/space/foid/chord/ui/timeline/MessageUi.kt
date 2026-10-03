@@ -41,6 +41,10 @@ data class MessageUi(
     val timestamp: Long,
     /** Short clock label, for example "14:05". */
     val timeLabel: String,
+    /** The time for the header line: "today 13:24". Empty when the mapping did not set it. */
+    val stamp: String = "",
+    /** The domain of a sender on another server, shown as "@other.example". Null for our server. */
+    val foreignDomain: String? = null,
     val outgoing: Boolean,
     /** The core says the previous row has the same sender and is close in time. */
     val sameSenderAsPrevious: Boolean,

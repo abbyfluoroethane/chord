@@ -39,6 +39,10 @@ fun TimelineItem.toMessageUi(
     zone: ZoneId = ZoneId.systemDefault(),
     palette: FormatPalette? = null,
     ownNames: List<String> = emptyList(),
+    now: Long = System.currentTimeMillis(),
+    account: String? = null,
+    /** True in a room: the sender address is room@service/nick there, so it has no foreign domain. */
+    inRoom: Boolean = true,
 ): MessageUi = MessageUi(
     id = id,
     senderId = sender,
@@ -47,6 +51,8 @@ fun TimelineItem.toMessageUi(
     body = body,
     timestamp = timestamp,
     timeLabel = clockLabel(timestamp, zone),
+    stamp = stampLabel(timestamp, now, zone),
+    foreignDomain = if (inRoom) null else foreignDomain(sender, account),
     outgoing = outgoing,
     sameSenderAsPrevious = sameSenderAsPrevious,
     edited = edited,

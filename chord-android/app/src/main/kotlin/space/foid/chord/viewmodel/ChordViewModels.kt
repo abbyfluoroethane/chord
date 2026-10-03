@@ -31,7 +31,7 @@ object ChordViewModels {
     }
 
     fun timeline(target: TimelineTarget): ViewModelProvider.Factory = viewModelFactory {
-        initializer { TimelineViewModel(target, app().session.chatApi()) }
+        initializer { TimelineViewModel(target, app().session.chatApi(), events = app().session.events) }
     }
 
     fun memberList(room: String): ViewModelProvider.Factory = viewModelFactory {

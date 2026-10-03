@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -22,6 +23,8 @@ import space.foid.chord.data.TimelineTarget
 import space.foid.chord.data.logWarn
 import space.foid.chord.data.stableKey
 import space.foid.chord.data.toListDiff
+import space.foid.chord.ui.timeline.firstUnreadId
+import uniffi.chord_ffi.ClientEvent
 import uniffi.chord_ffi.TimelineItem
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,6 +46,8 @@ class TimelineViewModel(
     private val pageSize: Int = PAGE_SIZE,
     private val growWaitMillis: Long = GROW_WAIT_MILLIS,
     private val typingIdleMillis: Long = TYPING_IDLE_MILLIS,
+    events: Flow<ClientEvent> = emptyFlow(),
+    private val typersExpireMillis: Long = TYPERS_EXPIRE_MILLIS,
 ) : ViewModel(scope) {
     private val scope = scope
     private val resync = MutableStateFlow(0)
@@ -84,6 +89,26 @@ class TimelineViewModel(
     private var typingJob: Job? = null
     private var typing = false
 
+    private val _typers = MutableStateFlow<List<String>>(emptyList())
+    private var typersJob: Job? = null
+
+    /**
+     * Who types here now (XEP-0085): bare addresses in a 1:1 chat, nicks in a room. Empty for
+     * nobody. It clears by itself after [typersExpireMillis] without a new event, so a lost
+     * "stopped" event cannot leave the line on screen.
+     */
+    val typers: StateFlow<List<String>> = _typers.asStateFlow()
+
+    private val _newFrom = MutableStateFlow<String?>(null)
+
+    /** The id of the first unread message, where the "NEW" line goes, or null. */
+    val newFrom: StateFlow<String?> = _newFrom.asStateFlow()
+
+    private val peerKey = when (target) {
+        is TimelineTarget.Room -> target.jid
+        is TimelineTarget.Private -> "${target.room}/${target.nick}"
+    }
+
     init {
         ListBinding(
             scope = scope,
@@ -97,6 +122,36 @@ class TimelineViewModel(
                 if (it != null) _reachedStart.value = false
             },
         ) { a, t, sink -> a.timeline(t) { sink(it.toListDiff()) } }.start()
+        scope.launch {
+            events.collect { e ->
+                if (e is ClientEvent.Typing && e.peer == peerKey) setTypers(e.typers)
+            }
+        }
+    }
+
+    private fun setTypers(names: List<String>) {
+        typersJob?.cancel()
+        _typers.value = names
+        if (names.isNotEmpty()) {
+            typersJob = scope.launch {
+                delay(typersExpireMillis)
+                _typers.value = emptyList()
+            }
+        }
+    }
+
+    /**
+     * The chat opened with [unread] unread messages: put the "NEW" line at the first of them,
+     * as soon as the list is there. Call it again at each visit; 0 clears the line.
+     */
+    fun openWithUnread(unread: Int) {
+        _newFrom.value = null
+        if (unread <= 0) return
+        scope.launch {
+            list.loaded.first { it }
+            val ids = items.value.filter { !it.outgoing }.map { it.id }
+            _newFrom.value = firstUnreadId(ids, unread)
+        }
     }
 
     /**
@@ -266,5 +321,6 @@ class TimelineViewModel(
         const val PAGE_SIZE = 30
         const val GROW_WAIT_MILLIS = 2_000L
         const val TYPING_IDLE_MILLIS = 5_000L
+        const val TYPERS_EXPIRE_MILLIS = 30_000L
     }
 }
