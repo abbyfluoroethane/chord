@@ -118,6 +118,9 @@ fun MainScreen(
     val actions by joinVm.actions.collectAsState()
     val inbox by inboxVm.state.collectAsState()
     var inboxOpen by rememberSaveable { mutableStateOf(false) }
+    // The full-screen pages of Home: "" none, "find" Find or start a chat, "contacts" the contacts page.
+    var homePage by rememberSaveable { mutableStateOf("") }
+    val contactsVm: space.foid.chord.viewmodel.ContactsViewModel = viewModel(factory = space.foid.chord.viewmodel.ContactsViewModel.factory)
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboard.current
 
@@ -128,6 +131,7 @@ fun MainScreen(
                 selectedName = e.name
                 selectedDirect = e.direct
                 selectedUnread = 0
+                homePage = ""
                 scope.launch { drawer.close() }
             }
             is JoinEvent.OpenSpace -> scopeKey = scopeToString(ChannelScope.Space(e.service, e.node))
@@ -180,6 +184,9 @@ fun MainScreen(
                         onNew = { joinVm.show() },
                         onLongPress = { ch -> joinVm.openActions(ch.actionTarget()) },
                         onOpenSettings = onOpenSettings,
+                        pendingContacts = inbox.requests.size,
+                        onFind = { homePage = "find" },
+                        onContacts = { homePage = "contacts" },
                     )
                 },
                 right = {
@@ -215,6 +222,36 @@ fun MainScreen(
                             unreadOnOpen = selectedUnread,
                         )
                     }
+                }
+            }
+            if (homePage != "") {
+                // Start a direct chat with an address from the Home pages.
+                val openDirect: (String, String) -> Unit = { jid, name ->
+                    selectedJid = jid
+                    selectedName = name
+                    selectedDirect = true
+                    homePage = ""
+                    scope.launch { drawer.close() }
+                }
+                if (homePage == "find") {
+                    space.foid.chord.ui.home.FindChatScreen(
+                        scope = channelScope, joinVm = joinVm, contactsVm = contactsVm,
+                        onOpenChannel = { ch ->
+                            selectedJid = ch.jid
+                            selectedName = ch.name.ifBlank { bareJid(ch.jid) }
+                            selectedDirect = ch.kind is ChannelKind.Direct
+                            homePage = ""
+                            scope.launch { drawer.close() }
+                        },
+                        onOpenPerson = openDirect,
+                        onOpenSpace = { sp -> scopeKey = scopeToString(ChannelScope.Space(sp.service, sp.node)); homePage = "" },
+                        onBack = { homePage = "" },
+                    )
+                } else {
+                    space.foid.chord.ui.contacts.ContactsScreen(
+                        contactsVm = contactsVm, inboxVm = inboxVm,
+                        onBack = { homePage = "" }, onMessage = openDirect,
+                    )
                 }
             }
             NoticeSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
