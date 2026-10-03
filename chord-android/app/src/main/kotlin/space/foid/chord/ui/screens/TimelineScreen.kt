@@ -66,6 +66,13 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import space.foid.chord.ChordApp
+import space.foid.chord.R
+import space.foid.chord.ui.text.formatPalette
+import space.foid.chord.ui.timeline.ownMentionNames
 import space.foid.chord.data.TimelineTarget
 import space.foid.chord.data.stableKey
 import space.foid.chord.notify.ChordNotifications
@@ -127,13 +134,21 @@ fun TimelineScreen(
     onOpenChannels: () -> Unit,
     onOpenMembers: () -> Unit,
     modifier: Modifier = Modifier,
+    onXmppLink: ((String) -> Unit)? = null,
 ) {
     val vm: TimelineViewModel = viewModel(key = target.toString(), factory = ChordViewModels.timeline(target))
 
     // The core items become rows on a background thread, once per diff.
-    val rowsFlow = remember(vm) {
+    // The text is formatted here too, with the colours of the theme. A new theme builds the rows again.
+    val context = LocalContext.current
+    val palette = Chord.colors.formatPalette()
+    val rowsFlow = remember(vm, palette) {
+        val account = (context.applicationContext as? ChordApp)?.session?.client?.value?.account()
         vm.items
-            .mapLatest { list -> buildTimelineRows(list.map(TimelineItem::toMessageUi)) }
+            .mapLatest { list ->
+                val names = ownMentionNames(account, list)
+                buildTimelineRows(list.map { it.toMessageUi(palette = palette, ownNames = names) })
+            }
             .flowOn(Dispatchers.Default)
     }
     val rows by rowsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
@@ -152,7 +167,6 @@ fun TimelineScreen(
 
     // The system pickers need no storage permission. The result is a content URI that we read
     // for the upload; the reader runs off the main thread.
-    val context = LocalContext.current
     fun startUpload(uri: Uri?) {
         if (uri == null) return
         val name = AttachmentReader.info(context, uri).name
@@ -199,6 +213,12 @@ fun TimelineScreen(
 
     val clipboard = LocalClipboard.current
     val copyScope = androidx.compose.runtime.rememberCoroutineScope()
+    val copiedText = stringResource(R.string.xmpp_address_copied)
+    val xmppHandler: (String) -> Unit = onXmppLink ?: { uri ->
+        // The default: copy the address. A join flow can replace it with onXmppLink.
+        copyScope.launch { clipboard.setClipEntry(ClipData.newPlainText("xmpp", uri).toClipEntry()) }
+        Toast.makeText(context, copiedText, Toast.LENGTH_SHORT).show()
+    }
     val replying = (mode as? Compose.Reply)?.message
     val editing = (mode as? Compose.Edit)?.message
 
@@ -238,6 +258,7 @@ fun TimelineScreen(
         onOpenChannels = onOpenChannels,
         onOpenMembers = onOpenMembers,
         onLongPress = { actionsFor = it },
+        onXmppLink = xmppHandler,
         onReactionClick = { id, emoji -> vm.toggleReaction(id, emoji) },
         onRetry = { vm.send(it.body) },
         onImageClick = { viewing = it },
@@ -357,6 +378,7 @@ fun TimelineContent(
     uploads: List<UploadUi> = emptyList(),
     onRetryUpload: (Long) -> Unit = {},
     onDismissUpload: (Long) -> Unit = {},
+    onXmppLink: (String) -> Unit = {},
     onLoadOlder: () -> Unit = {},
     error: String? = null,
     listState: LazyListState = rememberLazyListState(),
@@ -405,7 +427,7 @@ fun TimelineContent(
                 modifier = Modifier.fillMaxSize().testTag("timeline"),
             ) {
                 items(rows, key = { it.message.id }, contentType = { "message" }) { row ->
-                    TimelineRow(row, onLongPress, onReactionClick, onRetry, onImageClick, onRowComposed)
+                    TimelineRow(row, onLongPress, onReactionClick, onRetry, onImageClick, onXmppLink, onRowComposed)
                 }
                 // After the rows: the top of the screen.
                 if (loadingOlder) {
@@ -469,6 +491,7 @@ private fun TimelineRow(
     onReactionClick: (String, String) -> Unit,
     onRetry: (MessageUi) -> Unit,
     onImageClick: (MessageUi) -> Unit,
+    onXmppLink: (String) -> Unit,
     onRowComposed: ((String) -> Unit)?,
 ) {
     if (onRowComposed != null) SideEffect { onRowComposed(row.message.id) }
@@ -482,6 +505,7 @@ private fun TimelineRow(
         onReactionClick = { emoji -> onReactionClick(m.id, emoji) },
         onRetryClick = { onRetry(m) },
         onImageClick = { onImageClick(m) },
+        onXmppLink = onXmppLink,
     )
 }
 

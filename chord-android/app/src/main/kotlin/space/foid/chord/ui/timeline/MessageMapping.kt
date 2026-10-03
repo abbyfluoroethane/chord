@@ -1,5 +1,7 @@
 package space.foid.chord.ui.timeline
 
+import space.foid.chord.ui.text.FormatPalette
+import space.foid.chord.ui.text.formatMessage
 import uniffi.chord_ffi.DeliveryStatus
 import uniffi.chord_ffi.TimelineItem
 import java.time.Instant
@@ -19,12 +21,24 @@ fun replySnippet(body: String, max: Int = 140): String {
 }
 
 /**
+ * The names that an `@mention` can use for the own account: the room nick, the local part of the
+ * address, the address. The room nick is the sender name of an own message in [items], if any.
+ */
+fun ownMentionNames(account: String?, items: List<TimelineItem>): List<String> {
+    val nick = items.lastOrNull { it.outgoing }?.senderName
+    val local = account?.substringBefore('@')
+    return listOfNotNull(nick, local, account).filter { it.isNotBlank() }.distinct()
+}
+
+/**
  * Pure mapping from the core's [TimelineItem]. It calls no FFI function, so it runs on the JVM
  * without the native library. [pending] is true for a local message the core did not confirm yet.
  */
 fun TimelineItem.toMessageUi(
     pending: Boolean = false,
     zone: ZoneId = ZoneId.systemDefault(),
+    palette: FormatPalette? = null,
+    ownNames: List<String> = emptyList(),
 ): MessageUi = MessageUi(
     id = id,
     senderId = sender,
@@ -45,4 +59,5 @@ fun TimelineItem.toMessageUi(
         pending -> SendState.PENDING
         else -> SendState.SENT
     },
+    formatted = if (palette != null && !retracted) formatMessage(body, palette, ownNames, senderName) else null,
 )
