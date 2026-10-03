@@ -6,6 +6,7 @@
 //! - Finds the services of our server at each new session: `State::services` lists each
 //!   item of the server with its disco#info. Other features use `find_feature`.
 
+use futures_channel::oneshot;
 use jid::{BareJid, Jid};
 use xmpp_parsers::caps::{self, Caps};
 use xmpp_parsers::disco::{
@@ -17,7 +18,10 @@ use xmpp_parsers::ns;
 
 use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
 
-use super::{Ctx, IqResponse, Pending as FeaturePending, error_reply, result_reply};
+use super::{
+    Ctx, FeatureCommand, IqResponse, Pending as FeaturePending, error_reply, result_reply,
+};
+use crate::actor::{ClientError, ClientHandle};
 
 /// The caps node: a URI for the Chord client.
 pub const CAPS_NODE: &str = "https://github.com/abbyfluoroethane/chord";
@@ -148,6 +152,43 @@ impl State {
             .flatten()
             .any(|info| info.features.contains(feature))
     }
+}
+
+/// A command from the public API.
+pub(crate) enum Command {
+    Features { reply: oneshot::Sender<Vec<String>> },
+}
+
+impl ClientHandle {
+    /// The features that the server and the account advertise in disco#info, sorted, with no
+    /// duplicates. The list is empty while the client is offline or before the answers come.
+    pub async fn server_features(&self) -> Result<Vec<String>, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Disco(Command::Features { reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)
+    }
+}
+
+pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
+    let Command::Features { reply } = command;
+    let _ = reply.send(server_feature_list(&ctx.state.disco));
+}
+
+pub(crate) fn offline(command: Command) {
+    let Command::Features { reply } = command;
+    let _ = reply.send(Vec::new());
+}
+
+/// The sorted union of the features of the server and of the account.
+fn server_feature_list(state: &State) -> Vec<String> {
+    let mut list: Vec<String> = [&state.server, &state.account]
+        .into_iter()
+        .flatten()
+        .flat_map(|info| info.features.iter().cloned())
+        .collect();
+    list.sort_unstable();
+    list.dedup();
+    list
 }
 
 #[derive(Debug)]
@@ -322,6 +363,38 @@ pub(crate) fn domain_of(jid: &BareJid) -> Jid {
 mod tests {
     use super::*;
     use crate::features::testing::Harness;
+
+    #[test]
+    fn the_server_feature_list_joins_server_and_account_with_no_duplicates() {
+        let mut h = Harness::new();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::Features { reply }));
+        assert_eq!(answer.try_recv().unwrap().unwrap(), Vec::<String>::new());
+
+        let with = |list: &[&str]| DiscoInfoResult {
+            node: None,
+            identities: vec![],
+            features: list.iter().map(|f| (*f).to_owned()).collect(),
+            extensions: vec![],
+        };
+        let server = with(&["urn:xmpp:mam:2", "urn:xmpp:push:0"]);
+        let account = with(&["urn:xmpp:push:0", "urn:xmpp:carbons:2"]);
+        h.state.disco.server = Some(server);
+        h.state.disco.account = Some(account);
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::Features { reply }));
+        assert_eq!(
+            answer.try_recv().unwrap().unwrap(),
+            ["urn:xmpp:carbons:2", "urn:xmpp:mam:2", "urn:xmpp:push:0"]
+        );
+    }
+
+    #[test]
+    fn the_server_feature_list_is_empty_offline() {
+        let (reply, mut answer) = oneshot::channel();
+        offline(Command::Features { reply });
+        assert!(answer.try_recv().unwrap().unwrap().is_empty());
+    }
 
     #[test]
     fn caps_hash_is_stable_and_matches_info() {

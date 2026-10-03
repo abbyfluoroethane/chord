@@ -197,6 +197,7 @@ pub(crate) enum FeatureCommand {
     Register(register::Command),
     OwnerForm(owner_form::Command),
     Profile(profile::Command),
+    Disco(disco::Command),
 }
 
 /// Everything a feature function can use.
@@ -536,6 +537,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::Register(c) => register::on_command(ctx, c),
         FeatureCommand::OwnerForm(c) => owner_form::on_command(ctx, c),
         FeatureCommand::Profile(c) => profile::on_command(ctx, c),
+        FeatureCommand::Disco(c) => disco::on_command(ctx, c),
     }
 }
 
@@ -586,6 +588,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::Register(c) => register::offline(c),
         FeatureCommand::OwnerForm(c) => owner_form::offline(c),
         FeatureCommand::Profile(c) => profile::offline(c),
+        FeatureCommand::Disco(c) => disco::offline(c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.
