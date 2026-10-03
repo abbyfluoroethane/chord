@@ -61,6 +61,7 @@ import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.ChannelKind
 import space.foid.chord.ui.components.ChannelListItem
 import space.foid.chord.ui.components.RailIconKind
+import space.foid.chord.ui.join.DrawerHeaderActions
 import space.foid.chord.ui.components.SpaceRailIcon
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordSize
@@ -128,6 +129,8 @@ private fun sameScope(a: ChannelScope, b: ChannelScope): Boolean = when {
  * @param connection the notice of the connection, for the dot on the account avatar. Null: connected.
  * @param onOpenSettings the \"Settings\" item of the account menu.
  * @param onSelect a tap on a channel row.
+ * @param onLongPress a long press on a channel row.
+ * @param inboxCount the number on the badge of the inbox button. [onInbox] and [onNew] are the header buttons.
  */
 @Composable
 fun ChannelDrawerContent(
@@ -145,6 +148,10 @@ fun ChannelDrawerContent(
     connection: ConnectionNotice? = null,
     spaceUnread: Map<String, Int> = emptyMap(),
     homeUnread: Int = 0,
+    inboxCount: Int = 0,
+    onInbox: () -> Unit = {},
+    onNew: () -> Unit = {},
+    onLongPress: (ChannelItem) -> Unit = {},
 ) {
     val c = Chord.colors
     val isHome = scope is ChannelScope.Home
@@ -179,12 +186,16 @@ fun ChannelDrawerContent(
             }
             // The channel list.
             Column(Modifier.weight(1f).fillMaxHeight()) {
-                Box(Modifier.fillMaxWidth().height(ChordSize.bar + 8.dp).statusBarsPadding(), contentAlignment = Alignment.CenterStart) {
+                Row(
+                    Modifier.fillMaxWidth().statusBarsPadding().height(ChordSize.bar + 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
                         if (isHome) "Home" else space?.name ?: "",
                         style = ChordType.title, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = ChordSpace.s4),
+                        modifier = Modifier.weight(1f).padding(start = ChordSpace.s4, end = ChordSpace.s2),
                     )
+                    DrawerHeaderActions(inboxCount, onInbox, onNew, Modifier.padding(end = ChordSpace.s1))
                 }
                 val sections = channelSections(scope, channels)
                 // The collapsed sections, per scope. They survive rotation and process death.
@@ -219,6 +230,7 @@ fun ChannelDrawerContent(
                                 name = ch.name.ifBlank { bareJid(ch.jid) },
                                 selected = ch.jid == selectedJid,
                                 onClick = { onSelect(ch) },
+                                onLongClick = { onLongPress(ch) },
                                 kind = ch.rowKind(!isHome),
                                 jid = bareJid(ch.jid),
                                 image = if (ch.kind is uniffi.chord_ffi.ChannelKind.PrivateMessage || ch.rowKind(!isHome) == ChannelKind.Room) null
@@ -245,7 +257,7 @@ private fun groupSubtitle(ch: ChannelItem): String? {
 
 /**
  * [ChannelDrawerContent] fed by the ViewModels. [scope] is hoisted: the container remembers it.
- * [onSelect] gets the tapped channel.
+ * [onSelect] gets the tapped channel, [onLongPress] the one with a long press.
  */
 @Composable
 fun ChannelDrawer(
@@ -257,6 +269,10 @@ fun ChannelDrawer(
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenSettings: () -> Unit = {},
+    inboxCount: Int = 0,
+    onInbox: () -> Unit = {},
+    onNew: () -> Unit = {},
+    onLongPress: (ChannelItem) -> Unit = {},
 ) {
     val spaceVm: SpaceListViewModel = viewModel(factory = ChordViewModels.spaceList)
     val channelVm: ChannelListViewModel = viewModel(factory = ChordViewModels.channelList(scope))
@@ -275,6 +291,7 @@ fun ChannelDrawer(
         homeUnread = if (scope is ChannelScope.Home && current) channels.sumOf { it.unread.toInt() } else 0,
         onOpenSettings = onOpenSettings,
         connection = rememberConnectionState().notice(),
+        inboxCount = inboxCount, onInbox = onInbox, onNew = onNew, onLongPress = onLongPress,
         modifier = modifier,
     )
 }

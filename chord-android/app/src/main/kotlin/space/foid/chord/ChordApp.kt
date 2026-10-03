@@ -13,6 +13,7 @@ import space.foid.chord.data.ChordSession
 import space.foid.chord.data.ChordSessionImpl
 import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.secure.KeystoreCredentialStore
+import space.foid.chord.ui.inbox.InboxEvents
 import space.foid.chord.service.ServiceControlImpl
 import space.foid.chord.ui.avatar.AvatarRepository
 import space.foid.chord.ui.sheets.EmojiCatalog
@@ -52,6 +53,8 @@ class ChordApp : Application() {
         startup = appScope.async {
             NativeInit.init(this@ChordApp)
             Startup.mark("native.init")
+            // Before the login: the core sends pending requests and invites right after it.
+            InboxEvents.attach(session.events, session.client)
             val opened = try {
                 session.restore()
             } catch (e: Exception) {

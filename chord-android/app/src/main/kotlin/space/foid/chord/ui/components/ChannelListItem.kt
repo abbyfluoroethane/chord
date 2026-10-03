@@ -3,6 +3,7 @@ package space.foid.chord.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +69,7 @@ enum class ChannelKind {
  * @param subtitle second line, for example the member line of a group chat.
  * @param presence DM only. Null shows no mark (the state is not known).
  * @param background colour behind the row, for the cut-out ring of the presence mark.
+ * @param onLongClick a long press on the row. Null for none.
  */
 @Composable
 fun ChannelListItem(
@@ -84,6 +86,7 @@ fun ChannelListItem(
     muted: Boolean = false,
     subtitle: String? = null,
     background: Color = Chord.colors.surfaceSide,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val c = Chord.colors
     val chat = kind != ChannelKind.Room
@@ -130,7 +133,7 @@ fun ChannelListItem(
                 .alpha(if (muted) 0.55f else 1f)
                 .clip(RoundedCornerShape(ChordRadius.sm))
                 .background(overlay)
-                .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
+                .combinedClickable(interactionSource = interaction, indication = null, role = Role.Button, onLongClick = onLongClick, onClick = onClick)
                 .padding(horizontal = ChordSpace.s2),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(ChordSpace.s2),
