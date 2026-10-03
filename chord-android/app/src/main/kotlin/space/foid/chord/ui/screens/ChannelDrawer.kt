@@ -342,6 +342,7 @@ private fun Chevron(color: Color, collapsed: Boolean) {
 private fun UserPanel(account: AccountUi, onSignOut: () -> Unit, onOpenSettings: () -> Unit, connection: ConnectionNotice?) {
     val c = Chord.colors
     var menu by remember { mutableStateOf(false) }
+    var confirmSignOut by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth().background(c.surfaceRail).navigationBarsPadding()) {
         Row(
             Modifier
@@ -371,8 +372,28 @@ private fun UserPanel(account: AccountUi, onSignOut: () -> Unit, onOpenSettings:
             )
             DropdownMenuItem(
                 text = { Text("Sign out") },
-                onClick = { menu = false; onSignOut() },
+                onClick = { menu = false; confirmSignOut = true },
                 modifier = Modifier.testTag("sign_out"),
+            )
+        }
+        if (confirmSignOut) {
+            // The same question as in the settings: a wrong tap must not sign the user out.
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmSignOut = false },
+                containerColor = c.surface300,
+                title = { Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_sign_out_title), style = ChordType.title, color = c.ink) },
+                text = { Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_sign_out_body), style = ChordType.body, color = c.inkMuted) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = { confirmSignOut = false; onSignOut() },
+                        modifier = Modifier.testTag("confirm_sign_out"),
+                    ) { Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_sign_out), style = ChordType.label, color = c.danger) }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { confirmSignOut = false }) {
+                        Text(androidx.compose.ui.res.stringResource(space.foid.chord.R.string.settings_cancel), style = ChordType.label, color = c.ink)
+                    }
+                },
             )
         }
     }
