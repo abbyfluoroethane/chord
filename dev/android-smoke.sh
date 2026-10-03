@@ -20,7 +20,9 @@
 #
 # THE TEST TAG CONTRACT. The UI sets testTagsAsResourceId = true at its root, so each
 # Modifier.testTag shows as a resource-id in uiautomator. This script needs these tags:
-#   login_jid, login_password, login_server, login_submit   the sign-in form
+#   login_jid, login_password, login_submit                 the sign-in form
+#   login_advanced                                          the "Advanced" expander. The field login_server
+#                                                           is in the tree only after a tap on the expander
 #   channel_list                                            the list of channels
 #   channel_item_<bare jid>                                 one row per channel
 #   timeline                                                the message list of a room
@@ -188,7 +190,11 @@ echo "3. sign in as $jid"
 wait_for 30 login_jid
 type_into login_jid "$jid"
 type_into login_password "$password"
-if [[ -n "$server_field" ]]; then type_into login_server "$server_field"; fi
+if [[ -n "$server_field" ]]; then
+  tap login_advanced # the server field is hidden until the expander opens
+  sleep 0.5
+  type_into login_server "$server_field"
+fi
 adb_ shell input keyevent KEYCODE_BACK # close the keyboard
 tap login_submit
 

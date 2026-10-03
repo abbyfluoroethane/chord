@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Compose draws the UI. This theme only sets the window before the first frame. -->
-    <style name="Theme.Chord" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.Chord" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/surface_100</item>
     </style>
-    <color name="surface_100">#111316</color>
+    <!-- The launch theme. The system splash shows the mark, then the activity switches to Theme.Chord. -->
+    <style name="Theme.Chord.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/surface_100</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/chord_splash</item>
+        <item name="postSplashScreenTheme">@style/Theme.Chord</item>
+    </style>
+    <color name="surface_100">#F6F4EF</color>
 </resources>
