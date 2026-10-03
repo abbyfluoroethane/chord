@@ -1,5 +1,7 @@
 package space.foid.chord.notify
 
+import space.foid.chord.ui.settings.PrefsSettingsStore
+import space.foid.chord.ui.settings.inQuietHours
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -97,8 +99,13 @@ object ChordNotifications {
     fun post(context: Context, n: uniffi.chord_ffi.Notification) {
         if (isSuppressed(n.peer, activePeer)) return
         val app = context.applicationContext
+        // The notification settings: quiet hours, and no message text.
+        val prefs = PrefsSettingsStore.get(app).prefs.value
+        val now = java.time.LocalTime.now()
+        if (inQuietHours(prefs, now.hour * 60 + now.minute)) return
         val lines = history.getOrPut(n.peer) { ArrayDeque() }
-        lines.addLast(Line(n.bodyPreview, System.currentTimeMillis(), n.sender, n.senderName))
+        val text = if (prefs.noticePreview) n.bodyPreview else app.getString(R.string.settings_notice_hidden)
+        lines.addLast(Line(text, System.currentTimeMillis(), n.sender, n.senderName))
         while (lines.size > MAX_LINES) lines.removeFirst()
         if (!canNotify(app)) return
 
