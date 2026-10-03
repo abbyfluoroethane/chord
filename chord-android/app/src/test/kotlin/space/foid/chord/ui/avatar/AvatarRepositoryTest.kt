@@ -21,15 +21,15 @@ import org.robolectric.annotation.GraphicsMode
 
 private class FakeSource : AvatarSource {
     val stored = HashMap<String, AvatarData>()
-    val occupants = HashMap<String, String>()
+    val asked = ArrayList<String>()
     var avatarCalls = 0
     val refreshed = ArrayList<String>()
-    override suspend fun avatar(owner: String): AvatarData? {
+    override suspend fun avatar(key: String): AvatarData? {
         avatarCalls++
-        return stored[owner]
+        asked += key
+        return stored[key] ?: stored.values.firstOrNull { it.hash == key && it.bytes != null }
     }
     override suspend fun refresh(owner: String) { refreshed += owner }
-    override suspend fun realJid(occupant: String): String? = occupants[occupant]
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -92,12 +92,12 @@ class AvatarRepositoryTest {
     @Test fun data_that_never_arrives_gives_up_after_the_retries() = env { e ->
         e.source.stored["a@x"] = AvatarData("h1", null)
         assertNull(e.repo.load("a@x", "h1", 40))
-        // First try plus three retries.
-        assertEquals(4, e.source.avatarCalls)
+        // First try plus three retries. Each try asks by hash, then by owner.
+        assertEquals(8, e.source.avatarCalls)
         assertEquals(1, e.source.refreshed.size)
         // Inside the miss time the core is not asked again.
         assertNull(e.repo.load("a@x", "h1", 40))
-        assertEquals(4, e.source.avatarCalls)
+        assertEquals(8, e.source.avatarCalls)
     }
 
     @Test fun no_avatar_and_no_hash_does_not_refresh() = env { e ->
@@ -113,11 +113,25 @@ class AvatarRepositoryTest {
         assertNull(e.repo.peek("a@x", "h1", 40))
     }
 
-    @Test fun an_occupant_loads_through_its_real_jid() = env { e ->
-        e.source.occupants["room@conf/bob"] = "bob@x"
-        e.source.stored["bob@x"] = AvatarData("h2", png)
+    @Test fun an_occupant_loads_by_its_hash_from_the_view() = env { e ->
+        e.source.stored["room@conf/bob"] = AvatarData("h2", png)
         assertNotNull(e.repo.load("room@conf/bob", "h2", 40))
-        assertNull(e.repo.load("room@conf/anon", "h3", 40))
+        assertEquals(listOf("h2"), e.source.asked)
+    }
+
+    @Test fun an_occupant_without_a_hash_or_a_space_loads_by_its_owner_key() = env { e ->
+        e.source.stored["room@conf/bob"] = AvatarData("h2", png)
+        e.source.stored["pubsub.x/node"] = AvatarData("h3", png)
+        assertNotNull(e.repo.load("room@conf/bob", null, 40))
+        assertNotNull(e.repo.load("pubsub.x/node", null, 40))
+        assertEquals(listOf("room@conf/bob", "pubsub.x/node"), e.source.asked)
+        assertNull(e.repo.load("room@conf/anon", null, 40))
+    }
+
+    @Test fun a_hash_that_the_core_does_not_find_falls_back_to_the_owner_key() = env { e ->
+        e.source.stored["room@conf/bob"] = AvatarData("h2", png)
+        assertNotNull(e.repo.load("room@conf/bob", "old-hash", 40))
+        assertEquals(listOf("old-hash", "room@conf/bob"), e.source.asked)
     }
 
     @Test fun clear_drops_the_cache() = env { e ->

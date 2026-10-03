@@ -165,10 +165,13 @@ fun ChannelDrawerContent(
                 }
                 items(spaces, key = { it.stableKey() }) { s ->
                     val n = spaceUnread[s.stableKey()] ?: 0
+                    // The avatar owner of a space is `service/node`.
+                    val image = rememberAvatarBitmap("${s.service}/${s.node}", s.avatar, 44.dp)
                     SpaceRailIcon(
                         name = s.name,
                         selected = scope is ChannelScope.Space && sameScope(scope, ChannelScope.Space(s.service, s.node)),
                         onClick = { onScope(ChannelScope.Space(s.service, s.node)) },
+                        image = image,
                         seed = s.stableKey(), unread = n, mentions = n,
                         modifier = Modifier.testTag("rail_space_${s.node}"),
                     )
