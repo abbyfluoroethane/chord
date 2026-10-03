@@ -14,7 +14,27 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.material3.SnackbarHostState
+import android.content.ClipData
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.toClipEntry
+import androidx.lifecycle.viewmodel.compose.viewModel
+import space.foid.chord.ui.inbox.InboxCallbacks
+import space.foid.chord.ui.inbox.InboxSheet
+import space.foid.chord.ui.inbox.NoticeSnackbarHost
+import space.foid.chord.ui.join.ChannelActionsSheet
+import space.foid.chord.ui.join.JoinCallbacks
+import space.foid.chord.ui.join.LocalOpenXmppUri
+import space.foid.chord.ui.join.NewConversationSheet
+import space.foid.chord.ui.join.XmppLinkInbox
+import space.foid.chord.ui.join.actionTarget
+import space.foid.chord.viewmodel.InboxViewModel
+import space.foid.chord.viewmodel.JoinEvent
+import space.foid.chord.viewmodel.JoinViewModel
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -75,40 +95,111 @@ fun MainScreen(onSignedOut: () -> Unit, openPeer: String?, modifier: Modifier = 
 
     val account = remember(session) { session.client.value?.let { AccountUi(it.account()) } }
 
-    DualDrawer(
-        state = drawer,
-        modifier = modifier,
-        left = {
-            ChannelDrawer(
-                scope = channelScope,
-                onScope = { scopeKey = scopeToString(it) },
-                selectedJid = selectedJid,
-                onSelect = { ch ->
-                    selectedJid = ch.jid
-                    selectedName = ch.name.ifBlank { bareJid(ch.jid) }
-                    scope.launch { drawer.close() }
-                },
-                account = account,
-                onSignOut = { scope.launch { session.signOut(); onSignedOut() } },
-            )
-        },
-        right = {
-            if (selectedJid.isNotEmpty()) MemberDrawer(memberRoomFor(selectedJid), selectedName)
-        },
-    ) {
-        if (selectedJid.isEmpty()) {
-            NoChannelSelected(onOpenChannels = { scope.launch { drawer.openLeft() } })
-        } else {
-            // A new key per channel: the screen starts fresh, with its own ViewModel.
-            androidx.compose.runtime.key(selectedJid) {
-                TimelineScreen(
-                    target = timelineTargetFor(selectedJid),
-                    title = selectedName,
-                    onOpenChannels = { scope.launch { drawer.openLeft() } },
-                    onOpenMembers = { scope.launch { drawer.openRight() } },
-                )
+    // Start, join and leave conversations; the inbox; notices.
+    val joinVm: JoinViewModel = viewModel(factory = JoinViewModel.factory)
+    val inboxVm: InboxViewModel = viewModel(factory = InboxViewModel.factory)
+    val join by joinVm.state.collectAsState()
+    val actions by joinVm.actions.collectAsState()
+    val inbox by inboxVm.state.collectAsState()
+    var inboxOpen by rememberSaveable { mutableStateOf(false) }
+    val snackbar = remember { SnackbarHostState() }
+    val clipboard = LocalClipboard.current
+
+    val onJoinEvent: (JoinEvent) -> Unit = { e ->
+        when (e) {
+            is JoinEvent.OpenChannel -> {
+                selectedJid = e.jid
+                selectedName = e.name
+                scope.launch { drawer.close() }
             }
+            is JoinEvent.OpenSpace -> scopeKey = scopeToString(ChannelScope.Space(e.service, e.node))
+            is JoinEvent.Left -> {
+                if (bareJid(selectedJid) == e.jid) {
+                    selectedJid = ""
+                    selectedName = ""
+                }
+                // With no channel open, the channel list stays in view.
+                if (selectedJid.isEmpty()) scope.launch { drawer.openLeft() }
+            }
+            JoinEvent.SpaceRequested -> inboxVm.refreshPending()
+            is JoinEvent.Message -> scope.launch { snackbar.showSnackbar(e.text) }
         }
+    }
+    val currentOnJoinEvent by rememberUpdatedState(onJoinEvent)
+    LaunchedEffect(joinVm) { joinVm.events.collect { currentOnJoinEvent(it) } }
+    LaunchedEffect(inboxVm) { inboxVm.events.collect { currentOnJoinEvent(it) } }
+
+    // A link from outside the app waits in XmppLinkInbox until this screen shows.
+    val pendingUri by XmppLinkInbox.pending.collectAsState()
+    LaunchedEffect(pendingUri) {
+        pendingUri?.let { uri ->
+            XmppLinkInbox.consume(uri)
+            joinVm.openXmppUri(uri)
+        }
+    }
+
+    CompositionLocalProvider(LocalOpenXmppUri provides joinVm::openXmppUri) {
+        Box(modifier) {
+            DualDrawer(
+                state = drawer,
+                modifier = Modifier.fillMaxSize(),
+                left = {
+                    ChannelDrawer(
+                        scope = channelScope,
+                        onScope = { scopeKey = scopeToString(it) },
+                        selectedJid = selectedJid,
+                        onSelect = { ch ->
+                            selectedJid = ch.jid
+                            selectedName = ch.name.ifBlank { bareJid(ch.jid) }
+                            scope.launch { drawer.close() }
+                        },
+                        account = account,
+                        onSignOut = { scope.launch { session.signOut(); onSignedOut() } },
+                        inboxCount = inbox.count,
+                        onInbox = { inboxVm.refreshPending(); inboxOpen = true },
+                        onNew = { joinVm.show() },
+                        onLongPress = { ch -> joinVm.openActions(ch.actionTarget()) },
+                    )
+                },
+                right = {
+                    if (selectedJid.isNotEmpty()) MemberDrawer(memberRoomFor(selectedJid), selectedName)
+                },
+            ) {
+                if (selectedJid.isEmpty()) {
+                    NoChannelSelected(onOpenChannels = { scope.launch { drawer.openLeft() } })
+                } else {
+                    // A new key per channel: the screen starts fresh, with its own ViewModel.
+                    androidx.compose.runtime.key(selectedJid) {
+                        TimelineScreen(
+                            target = timelineTargetFor(selectedJid),
+                            title = selectedName,
+                            onOpenChannels = { scope.launch { drawer.openLeft() } },
+                            onOpenMembers = { scope.launch { drawer.openRight() } },
+                        )
+                    }
+                }
+            }
+            NoticeSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        }
+    }
+
+    if (join.visible) {
+        NewConversationSheet(join, JoinCallbacks.of(joinVm), onDismiss = joinVm::dismiss)
+    }
+    if (inboxOpen) {
+        InboxSheet(inbox, InboxCallbacks.of(inboxVm), onDismiss = { inboxOpen = false; inboxVm.clearError() })
+    }
+    actions?.let { state ->
+        ChannelActionsSheet(
+            state = state,
+            onDismiss = joinVm::closeActions,
+            onMarkRead = joinVm::markRead,
+            onLevel = joinVm::setLevel,
+            onCopy = {
+                scope.launch { clipboard.setClipEntry(ClipData.newPlainText("address", state.target.address).toClipEntry()) }
+            },
+            onLeave = joinVm::leave,
+        )
     }
 }
 

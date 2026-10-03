@@ -21,6 +21,8 @@ import kotlinx.coroutines.launch
 import space.foid.chord.data.logWarn
 import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.ui.ChordNavHost
+import space.foid.chord.ui.inbox.InboxEvents
+import space.foid.chord.ui.join.XmppLinkInbox
 import space.foid.chord.ui.theme.ChordTheme
 
 /** The one activity. It restores the session behind the system splash, then shows the nav host. */
@@ -41,8 +43,11 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         openPeer = peerOf(intent)
+        // A link from outside the app. After a rotation the intent is the same one: skip it.
+        if (savedInstanceState == null) xmppUriOf(intent)?.let(XmppLinkInbox::offer)
 
         val session = (application as ChordApp).session
+        InboxEvents.attach(session.events, session.client)
         if (session.client.value != null) {
             startSignedIn = true
         } else {
@@ -69,7 +74,12 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         peerOf(intent)?.let { openPeer = it }
+        xmppUriOf(intent)?.let(XmppLinkInbox::offer)
     }
+
+    /** The `xmpp:` URI of a VIEW intent, or null. The main screen decides what it means. */
+    private fun xmppUriOf(intent: Intent?): String? =
+        intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data?.takeIf { it.scheme.equals("xmpp", ignoreCase = true) }?.toString()
 
     private fun peerOf(intent: Intent?): String? = intent?.getStringExtra(ChordNotifications.EXTRA_PEER)
 }
