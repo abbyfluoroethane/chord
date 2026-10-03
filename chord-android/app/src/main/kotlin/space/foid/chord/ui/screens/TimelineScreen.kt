@@ -135,6 +135,7 @@ fun TimelineScreen(
     onOpenMembers: () -> Unit,
     modifier: Modifier = Modifier,
     onXmppLink: ((String) -> Unit)? = null,
+    direct: Boolean? = null,
 ) {
     val vm: TimelineViewModel = viewModel(key = target.toString(), factory = ChordViewModels.timeline(target))
 
@@ -219,13 +220,18 @@ fun TimelineScreen(
         copyScope.launch { clipboard.setClipEntry(ClipData.newPlainText("xmpp", uri).toClipEntry()) }
         Toast.makeText(context, copiedText, Toast.LENGTH_SHORT).show()
     }
+    // A 1:1 chat shows no "#". When the caller does not know the kind (a notification tap),
+    // a room shows itself by its senders: they are room@service/nick.
+    val items by vm.items.collectAsStateWithLifecycle()
+    val isRoom = target is TimelineTarget.Room &&
+        (direct?.not() ?: (items.isEmpty() || items.any { '/' in it.sender }))
     val replying = (mode as? Compose.Reply)?.message
     val editing = (mode as? Compose.Edit)?.message
 
     TimelineContent(
         rows = rows,
         title = title,
-        isRoom = target is TimelineTarget.Room,
+        isRoom = isRoom,
         loaded = loaded,
         loadingOlder = loadingOlder,
         reachedStart = reachedStart,

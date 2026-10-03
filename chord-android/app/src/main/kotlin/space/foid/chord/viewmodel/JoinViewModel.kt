@@ -91,7 +91,7 @@ data class ActionsState(
 /** What the main screen must do after the ViewModel finished something. */
 sealed interface JoinEvent {
     /** Select this room or chat. */
-    data class OpenChannel(val jid: String, val name: String) : JoinEvent
+    data class OpenChannel(val jid: String, val name: String, val direct: Boolean? = null) : JoinEvent
 
     /** Select this space in the rail. */
     data class OpenSpace(val service: String, val node: String) : JoinEvent
@@ -245,7 +245,7 @@ class JoinViewModel(
                 val known = a.contacts().firstOrNull { it.jid.equals(jid, ignoreCase = true) }
                 if (known == null) a.addContact(jid, typed)
                 dismiss()
-                _events.tryEmit(JoinEvent.OpenChannel(jid, known?.name ?: typed ?: jid.substringBefore('@')))
+                _events.tryEmit(JoinEvent.OpenChannel(jid, known?.name ?: typed ?: jid.substringBefore('@'), direct = true))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

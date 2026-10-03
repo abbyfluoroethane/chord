@@ -181,7 +181,7 @@ class JoinViewModelTest {
         vm.messagePerson()
         runCurrent()
         assertEquals(listOf("contacts", "addContact chord-smoke2@chat.foid.space name=Two"), api.calls)
-        assertEquals(listOf<JoinEvent>(JoinEvent.OpenChannel("chord-smoke2@chat.foid.space", "Two")), got)
+        assertEquals(listOf<JoinEvent>(JoinEvent.OpenChannel("chord-smoke2@chat.foid.space", "Two", direct = true)), got)
         assertFalse(vm.state.value.visible)
     }
 
@@ -194,7 +194,7 @@ class JoinViewModelTest {
         vm.messagePerson()
         runCurrent()
         assertEquals(listOf("contacts"), api.calls)
-        assertEquals(listOf<JoinEvent>(JoinEvent.OpenChannel("bob@example.org", "Bobby")), got)
+        assertEquals(listOf<JoinEvent>(JoinEvent.OpenChannel("bob@example.org", "Bobby", direct = true)), got)
     }
 
     @Test

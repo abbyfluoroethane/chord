@@ -50,6 +50,7 @@ import space.foid.chord.ui.layout.rememberDualDrawerState
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordSpace
 import space.foid.chord.ui.theme.ChordType
+import uniffi.chord_ffi.ChannelKind
 import uniffi.chord_ffi.ChannelScope
 
 /** The timeline target of a channel jid. A private chat with an occupant has the jid `room/nick`. */
@@ -86,6 +87,8 @@ fun MainScreen(
 
     var selectedJid by rememberSaveable { mutableStateOf(openPeer.orEmpty()) }
     var selectedName by rememberSaveable { mutableStateOf(openPeer?.let(::bareJid)?.substringBefore('@').orEmpty()) }
+    // Null when the kind is not known, for example after a notification tap.
+    var selectedDirect by rememberSaveable { mutableStateOf<Boolean?>(null) }
     var scopeKey by rememberSaveable { mutableStateOf("") }
     val drawer = rememberDualDrawerState(if (selectedJid.isEmpty()) DrawerPane.Left else DrawerPane.Center)
     val channelScope = remember(scopeKey) { scopeFromString(scopeKey) }
@@ -94,6 +97,7 @@ fun MainScreen(
         if (openPeer != null && openPeer != selectedJid) {
             selectedJid = openPeer
             selectedName = bareJid(openPeer).substringBefore('@')
+            selectedDirect = null
             drawer.close()
         }
     }
@@ -115,6 +119,7 @@ fun MainScreen(
             is JoinEvent.OpenChannel -> {
                 selectedJid = e.jid
                 selectedName = e.name
+                selectedDirect = e.direct
                 scope.launch { drawer.close() }
             }
             is JoinEvent.OpenSpace -> scopeKey = scopeToString(ChannelScope.Space(e.service, e.node))
@@ -156,6 +161,7 @@ fun MainScreen(
                         onSelect = { ch ->
                             selectedJid = ch.jid
                             selectedName = ch.name.ifBlank { bareJid(ch.jid) }
+                            selectedDirect = ch.kind is ChannelKind.Direct
                             scope.launch { drawer.close() }
                         },
                         account = account,
@@ -182,6 +188,7 @@ fun MainScreen(
                             onOpenChannels = { scope.launch { drawer.openLeft() } },
                             onOpenMembers = { scope.launch { drawer.openRight() } },
                             onXmppLink = joinVm::openXmppUri,
+                            direct = selectedDirect,
                         )
                     }
                 }
