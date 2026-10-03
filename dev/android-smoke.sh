@@ -8,7 +8,8 @@
 # Servers:
 #   foid     (default) chat.foid.space, a real server with a real certificate. The
 #            emulator trusts the certificate. The server field stays empty (SRV lookup).
-#            Accounts chordtest and chordtest2. Passwords: dev/foid/.env.
+#            Accounts chordtest and chordtest2, or the CHORD_SMOKE_JID pair below.
+#            Passwords: dev/foid/.env.
 #   prosody  The local Docker server (dev/prosody/). The server field is
 #            starttls://10.0.2.2:5222 (10.0.2.2 is the host, seen from the emulator).
 #            Android does not trust the mkcert CA, so the sign-in fails until you
@@ -76,10 +77,11 @@ case "$server_choice" in
   foid)
     load_env dev/foid/.env
     server_field=""
-    jid=chordtest@chat.foid.space
-    password=${CHORDTEST_PASSWORD:?CHORDTEST_PASSWORD is not set in dev/foid/.env}
-    jid2=chordtest2@chat.foid.space
-    password2=${CHORDTEST2_PASSWORD:?CHORDTEST2_PASSWORD is not set in dev/foid/.env}
+    # CHORD_SMOKE_JID, CHORD_SMOKE_PASSWORD and the "2" pair select other accounts.
+    jid=${CHORD_SMOKE_JID:-chordtest@chat.foid.space}
+    password=${CHORD_SMOKE_PASSWORD:-${CHORDTEST_PASSWORD:?CHORDTEST_PASSWORD is not set in dev/foid/.env}}
+    jid2=${CHORD_SMOKE_JID2:-chordtest2@chat.foid.space}
+    password2=${CHORD_SMOKE_PASSWORD2:-${CHORDTEST2_PASSWORD:?CHORDTEST2_PASSWORD is not set in dev/foid/.env}}
     room=${CHORD_SMOKE_ROOM:-chord-smoke@conference.chat.foid.space}
     cli_server=""
     ;;
@@ -124,7 +126,7 @@ cli1() {
 }
 
 # ui_find <tag> [text]: print "x y" of the center of the first node with this resource-id.
-# With text, the node or one of its children must contain the text. Exit 1 if none.
+# With text, the node or one of its children must contain the text (any case). Exit 1 if none.
 ui_find() {
   adb_ shell uiautomator dump /sdcard/chord-ui.xml >/dev/null 2>&1 || return 1
   adb_ pull /sdcard/chord-ui.xml "$work/ui.xml" >/dev/null 2>&1 || return 1
@@ -138,7 +140,8 @@ for node in ET.parse(path).iter("node"):
     rid = node.get("resource-id", "")
     if rid != tag and not rid.endswith("/" + tag):
         continue
-    if text and text not in label(node):
+    # Ignore case: the keyboard may capitalise the first letter of a typed message.
+    if text and text.lower() not in label(node).lower():
         continue
     x1, y1, x2, y2 = map(int, re.findall(r"\d+", node.get("bounds")))
     print((x1 + x2) // 2, (y1 + y2) // 2)
@@ -180,6 +183,8 @@ if (( install )); then
 fi
 adb_ shell am force-stop space.foid.chord
 adb_ shell pm clear space.foid.chord >/dev/null
+# Grant the notification permission (API 33+) first. Its system dialog covers the app.
+adb_ shell pm grant space.foid.chord android.permission.POST_NOTIFICATIONS 2>/dev/null || true
 adb_ shell monkey -p space.foid.chord -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1
 
 echo "2. both accounts join $room"
@@ -213,8 +218,12 @@ sent="smoke app $n"
 type_into composer_input "$sent"
 tap composer_send
 wait_for 20 message_row "$sent"
-cli2 timeline "$room" --limit 10 | grep -qF "$sent" ||
-  fail "the second account does not see the message '$sent'"
+# The server delivers after a short time. Ignore case: the keyboard may capitalise.
+for ((i = 0; i < 10; i++)); do
+  if cli2 timeline "$room" --limit 10 | grep -qiF "$sent"; then break; fi
+  (( i < 9 )) || fail "the second account does not see the message '$sent'"
+  sleep 2
+done
 
 echo "6. the second account sends, and the app shows the message"
 received="smoke cli $n"
