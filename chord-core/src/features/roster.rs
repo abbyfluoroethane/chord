@@ -649,8 +649,13 @@ pub(crate) fn on_presence(ctx: &mut Ctx<'_>, presence: &Presence) {
         return;
     };
     let bare = from.to_bare();
-    // Our other resources are not contacts.
+    // Our other resources are not contacts. The store keeps their presence for `own_devices`.
     if bare == *ctx.account {
+        match presence.type_ {
+            Type::None => store_presence(ctx, from, presence),
+            Type::Unavailable => remove_presence(ctx, from),
+            _ => {}
+        }
         return;
     }
     match presence.type_ {

@@ -9,7 +9,7 @@ use chord_core::actor;
 use chord_core::actor::ClientEvent;
 use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomRole, RoomSettings};
 use chord_core::features::notify::{NotificationLevel, NotificationSetting};
-use chord_core::features::profile::Profile;
+use chord_core::features::profile::{Device, Profile, ProfileEdit};
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
 use chord_core::features::spaces::{
@@ -1000,6 +1000,18 @@ pub async fn set_nickname(state: State<'_, AppState>, nickname: Option<String>) 
 #[tauri::command]
 pub async fn profile(state: State<'_, AppState>, jid: String) -> Res<Profile> {
     Ok(state.handle()?.profile(bare(&jid)?).await?)
+}
+
+/// Write the vCard4 fields of our own profile: name, about, website and pronouns.
+#[tauri::command]
+pub async fn set_profile(state: State<'_, AppState>, edit: ProfileEdit) -> Res<()> {
+    Ok(state.handle()?.set_profile(edit).await?)
+}
+
+/// The resources of our own account that are online.
+#[tauri::command]
+pub async fn own_devices(state: State<'_, AppState>) -> Res<Vec<Device>> {
+    Ok(state.handle()?.own_devices().await?)
 }
 
 #[tauri::command]

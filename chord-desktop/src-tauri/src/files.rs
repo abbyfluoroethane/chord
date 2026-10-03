@@ -55,6 +55,12 @@ impl Dropped {
 /// The extensions that `save_image` writes. The save dialog can offer any name.
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg"];
 
+/// The extensions that `save_text` writes.
+const TEXT_EXTENSIONS: &[&str] = &["vcf", "txt", "csv"];
+
+/// The most text that `save_text` writes, in bytes.
+const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
+
 /// Open `path` and refuse a symlink. On Unix the open itself refuses it (`O_NOFOLLOW`),
 /// so no race is left. Elsewhere a check follows the open.
 fn open_no_follow(path: &Path, options: &mut OpenOptions) -> std::io::Result<File> {
@@ -104,14 +110,30 @@ fn open_picked(path: &Path) -> Res<File> {
 /// Write the image that the user chose a place for. Only an image extension, and never
 /// through a symlink at the target.
 fn write_image(path: &Path, data: &[u8]) -> Res<()> {
+    write_file(
+        path,
+        data,
+        IMAGE_EXTENSIONS,
+        "the file name must end in an image extension such as .png or .jpg",
+        "save the image",
+    )
+}
+
+/// Write a file that the user chose a place for. Only one of `extensions`, and never
+/// through a symlink at the target.
+fn write_file(
+    path: &Path,
+    data: &[u8],
+    extensions: &[&str],
+    wrong_extension: &str,
+    what: &str,
+) -> Res<()> {
     let ok = path
         .extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()));
+        .is_some_and(|e| extensions.contains(&e.to_ascii_lowercase().as_str()));
     if !ok {
-        return Err(ChordError::invalid(
-            "the file name must end in an image extension such as .png or .jpg",
-        ));
+        return Err(ChordError::invalid(wrong_extension));
     }
     if !path.is_absolute() {
         return Err(ChordError::invalid("the save path must be a file path"));
@@ -119,16 +141,14 @@ fn write_image(path: &Path, data: &[u8]) -> Res<()> {
     // Open without truncation, check the handle, then truncate: a device or a file behind a
     // symlink at the target must not be damaged.
     let mut file = open_no_follow(path, OpenOptions::new().write(true).create(true))
-        .map_err(|e| open_error(&e, "save the image"))?;
-    let meta = file
-        .metadata()
-        .map_err(|e| ChordError::io("save the image", e))?;
+        .map_err(|e| open_error(&e, what))?;
+    let meta = file.metadata().map_err(|e| ChordError::io(what, e))?;
     if !meta.is_file() {
         return Err(ChordError::invalid("the path is not a file"));
     }
     file.set_len(0)
         .and_then(|()| file.write_all(data))
-        .map_err(|e| ChordError::io("save the image", e))
+        .map_err(|e| ChordError::io(what, e))
 }
 
 /// Show the file dialog, let the user pick files, and upload each one (XEP-0363) to `to`.
@@ -355,6 +375,48 @@ pub async fn save_image(app: AppHandle, url: String, name: Option<String>) -> Re
     Ok(true)
 }
 
+/// Ask the user where to save `text`, and write it there. The page gives the text and a
+/// suggested name, never a path. Returns false if the user cancelled.
+#[tauri::command]
+pub async fn save_text(app: AppHandle, name: String, text: String) -> Res<bool> {
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(ChordError::invalid("the text is too big to save"));
+    }
+    let suggested = Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or("export.txt")
+        .to_owned();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Save file")
+            .set_file_name(suggested)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| ChordError::io("the file dialog failed", e))?;
+    let Some(path) = picked else {
+        return Ok(false);
+    };
+    let path = path
+        .into_path()
+        .map_err(|e| ChordError::io("cannot use the path", e))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        write_file(
+            &path,
+            text.as_bytes(),
+            TEXT_EXTENSIONS,
+            "the file name must end in .vcf, .csv or .txt",
+            "save the file",
+        )
+    })
+    .await
+    .map_err(|e| ChordError::io("save the file", e))??;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +553,25 @@ mod tests {
         std::fs::write(&file, b"old old old").unwrap();
         write_image(&file, b"new").unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"new");
+    }
+
+    #[test]
+    fn a_text_export_takes_only_text_names() {
+        let dir = Scratch::new("text");
+        let ok = |name: &str| {
+            write_file(
+                &dir.0.join(name),
+                b"x",
+                TEXT_EXTENSIONS,
+                "bad name",
+                "save the file",
+            )
+        };
+        assert!(ok("contacts.VCF").is_ok());
+        assert!(ok("contacts.csv").is_ok());
+        assert!(ok("contacts.png").is_err());
+        assert!(ok("contacts.sh").is_err());
+        assert!(!dir.0.join("contacts.sh").exists());
     }
 
     #[test]
