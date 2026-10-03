@@ -58,7 +58,7 @@ class SignInViewModelTest {
         vm.onPasswordChange("pw")
         vm.submit()
         runCurrent()
-        assertEquals("Your address must look like name@server.example.", vm.state.value.error)
+        assertEquals("Enter your address like you@example.com.", vm.state.value.error)
         assertTrue(session.signIns.isEmpty())
     }
 
@@ -97,7 +97,7 @@ class SignInViewModelTest {
     @Test
     fun aFailureShowsPlainEnglishAndAllowsARetry() = runTest {
         val session = FakeSession()
-        session.failure = ChordException.AuthFailed("not-authorized")
+        session.failure = ChordException.AuthFailed("wrong username or password")
         val vm = SignInViewModel(session, backgroundScope)
         vm.onJidChange("a@b.c")
         vm.onPasswordChange("pw")
@@ -106,14 +106,43 @@ class SignInViewModelTest {
         val s = vm.state.value
         assertFalse(s.submitting)
         assertFalse(s.signedIn)
-        assertEquals(describeFailure(ConnectFailure.AuthFailed("")), s.error)
-        assertTrue(s.error!!.contains("password"))
+        assertEquals("Wrong address or password.", s.error)
         vm.onPasswordChange("pw2")
         assertNull(vm.state.value.error)
         session.failure = null
         vm.submit()
         runCurrent()
         assertTrue(vm.state.value.signedIn)
+    }
+
+    @Test
+    fun signInErrorTextsUseTheDesktopWords() {
+        assertEquals("Can't reach x.org. Check the address and your connection.", signInErrorText(ChordException.Unreachable("dns"), "x.org"))
+        assertEquals("The certificate of x.org is not valid, so Chord did not connect.", signInErrorText(ChordException.TlsInvalid("c"), "x.org"))
+        assertEquals("x.org did not answer in time. Try again.", signInErrorText(ChordException.Timeout(), "x.org"))
+        assertEquals("This account is disabled. Ask the people who run your server.", signInErrorText(ChordException.AuthFailed("account disabled"), ""))
+        assertEquals("Your password has expired. Set a new one on your server, then sign in again.", signInErrorText(ChordException.AuthFailed("password expired"), ""))
+        assertEquals("The server refused the sign-in (temporary auth failure).", signInErrorText(ChordException.AuthFailed("server rejected the login: TemporaryAuthFailure"), ""))
+        assertEquals("The server offers no sign-in method that Chord can use.", signInErrorText(ChordException.AuthFailed("no common SASL mechanism"), ""))
+        assertEquals("the server did not answer in time. Try again.", signInErrorText(ChordException.Timeout(), ""))
+    }
+
+    @Test
+    fun theStatusLineNamesTheHost() {
+        assertEquals("foid.space", SignInState(jid = "a@foid.space").host)
+        assertEquals("chat.example.com", SignInState(jid = "a@foid.space", server = "starttls://chat.example.com:5222").host)
+        assertEquals("chat.example.com", SignInState(jid = "a@foid.space", server = "chat.example.com:5222").host)
+        assertEquals("", SignInState(jid = "a").host)
+    }
+
+    @Test
+    fun anEmptyPasswordGetsAMessage() = runTest {
+        val vm = SignInViewModel(FakeSession(), backgroundScope)
+        vm.onJidChange("a@b.c")
+        vm.submit()
+        runCurrent()
+        // canSubmit is false, but submit() itself still guards.
+        assertEquals("Enter your password.", vm.state.value.error)
     }
 
     @Test

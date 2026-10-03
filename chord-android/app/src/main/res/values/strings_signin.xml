@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sign-in. The words follow the desktop app. -->
+    <string name="signin_title">Sign in</string>
+    <string name="signin_address">Address</string>
+    <string name="signin_address_hint">you@example.com</string>
+    <string name="signin_password">Password</string>
+    <string name="signin_show">Show</string>
+    <string name="signin_hide">Hide</string>
+    <string name="signin_advanced">Advanced</string>
+    <string name="signin_server">Server (optional)</string>
+    <string name="signin_server_hint">chat.example.com:5222</string>
+    <string name="signin_server_help">Leave this empty. Chord finds your server from your address.</string>
+    <string name="signin_submit">Sign in</string>
+    <string name="signin_submitting">Connecting…</string>
+    <string name="signin_status">Connecting to %1$s…</string>
+    <string name="signin_status_default">your server</string>
+    <string name="signin_create_account">Create an account</string>
+
+    <!-- Registration -->
+    <string name="register_back">Back</string>
+    <string name="register_title">Create an account</string>
+    <string name="register_server">Server</string>
+    <string name="register_server_hint">example.com</string>
+    <string name="register_server_help">The address of the server that hosts your account.</string>
+    <string name="register_continue">Continue</string>
+    <string name="register_connecting">Connecting…</string>
+    <string name="register_create">Create account</string>
+    <string name="register_creating">Creating…</string>
+    <string name="register_signing_in">Signing in…</string>
+    <string name="register_oob_default">The server also has a web page for this.</string>
+    <string name="register_oob_open">Open the web page</string>
+    <string name="register_link_only">This server does not take new accounts in the app.</string>
+
+    <!-- Data forms -->
+    <string name="form_choose">Choose…</string>
+    <string name="form_one_address_per_line">One address on each line.</string>
+    <string name="form_media_not_loaded">This field has media that Chord does not load.</string>
+</resources>

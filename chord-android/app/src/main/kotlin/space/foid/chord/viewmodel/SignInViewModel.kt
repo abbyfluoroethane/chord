@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import space.foid.chord.data.ChordSession
 import space.foid.chord.data.logWarn
+import space.foid.chord.ui.register.hostOf
+import uniffi.chord_ffi.ChordException
 
 /** The state of the sign-in form. */
 data class SignInState(
@@ -24,6 +26,45 @@ data class SignInState(
     val signedIn: Boolean = false,
 ) {
     val canSubmit: Boolean get() = !submitting && jid.isNotBlank() && password.isNotEmpty()
+
+    /** The server to name in the status line: the "Server" field without scheme and port, or the part after "@". */
+    val host: String get() = hostOf(server, jid)
+}
+
+private val ADDRESS = Regex("""^[^@\s]+@[^@\s]+\.[^@\s]+$""")
+
+/**
+ * The text of a failed sign-in, in the words of the desktop app. [host] is the server that
+ * the person tried to reach, or "" when unknown.
+ */
+fun signInErrorText(error: Throwable, host: String): String {
+    val h = host.ifEmpty { "the server" }
+    return when (error) {
+        is ChordException.AuthFailed -> authFailedText(error.detail)
+        is ChordException.Unreachable -> "Can't reach $h. Check the address and your connection."
+        is ChordException.TlsInvalid -> "The certificate of $h is not valid, so Chord did not connect."
+        is ChordException.Timeout -> "$h did not answer in time. Try again."
+        is ChordException.NotConnected -> "You are offline. Try again when the connection is back."
+        is ChordException.Unsupported -> "Your server does not support this."
+        is ChordException.InvalidJid -> "Enter your address like you@example.com."
+        is ChordException.InvalidServer -> "The server setting is not valid. Leave it empty, or use host or starttls://host:port."
+        is ChordException.Store -> "Chord could not read its data."
+        else -> describeError(error)
+    }
+}
+
+/** The core words an auth failure with its `Display` text (chord-core `AuthFailure`). */
+private fun authFailedText(detail: String): String = when {
+    detail == "wrong username or password" -> "Wrong address or password."
+    detail == "account disabled" -> "This account is disabled. Ask the people who run your server."
+    detail == "password expired" -> "Your password has expired. Set a new one on your server, then sign in again."
+    detail == "no common SASL mechanism" -> "The server offers no sign-in method that Chord can use."
+    detail.startsWith("server rejected the login: ") -> {
+        val words = detail.removePrefix("server rejected the login: ")
+            .replace(Regex("([a-z])([A-Z])"), "$1 $2").lowercase()
+        "The server refused the sign-in ($words)."
+    }
+    else -> "Sign-in failed. $detail"
 }
 
 /** The form to sign in. It calls [ChordSession.signIn] and shows what went wrong. */
@@ -44,12 +85,12 @@ class SignInViewModel(
         if (s.submitting || s.signedIn) return
         val jid = s.jid.trim()
         when {
-            jid.isEmpty() || s.password.isEmpty() -> {
-                _state.update { it.copy(error = "Enter your address and your password.") }
+            !ADDRESS.matches(jid) -> {
+                _state.update { it.copy(error = "Enter your address like you@example.com.") }
                 return
             }
-            !jid.contains('@') -> {
-                _state.update { it.copy(error = "Your address must look like name@server.example.") }
+            s.password.isEmpty() -> {
+                _state.update { it.copy(error = "Enter your password.") }
                 return
             }
         }
@@ -62,7 +103,7 @@ class SignInViewModel(
                 throw e
             } catch (e: Exception) {
                 logWarn("SignInViewModel", "sign-in failed", e)
-                _state.update { it.copy(submitting = false, error = describeError(e)) }
+                _state.update { it.copy(submitting = false, error = signInErrorText(e, s.copy(jid = jid).host)) }
             }
         }
     }
