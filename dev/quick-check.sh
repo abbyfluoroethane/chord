@@ -16,7 +16,7 @@ if (( free_gb < min_free_gb )); then
   exit 1
 fi
 
-main=$(git worktree list --porcelain | awk '/^worktree / { print $2; exit }')
+main=$(git worktree list --porcelain | awk '/^worktree / && !done { print $2; done = 1 }')
 export CARGO_TARGET_DIR="${CHORD_TARGET_DIR:-$main/target}"
 export CARGO_BUILD_JOBS="${CHORD_JOBS:-4}"
 export CARGO_INCREMENTAL=0
