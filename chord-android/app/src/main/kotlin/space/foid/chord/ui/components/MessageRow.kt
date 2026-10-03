@@ -121,7 +121,8 @@ fun MessageRow(
                 if (message.retracted) {
                     Text("Message deleted.", style = ChordType.body.copy(fontStyle = FontStyle.Italic), color = colors.inkMuted)
                 } else {
-                    if (message.body.isNotEmpty()) MessageText(message)
+                    // A message whose body is only the attachment URL shows the attachment alone.
+                    if (message.body.isNotEmpty() && message.body.trim() != message.attachment) MessageText(message)
                     if (message.attachment != null) {
                         AttachmentView(message.attachment, outgoing = message.outgoing, onImageClick = onImageClick)
                     }
