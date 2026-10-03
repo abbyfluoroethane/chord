@@ -210,14 +210,14 @@
       <button class="btn btn-primary" disabled={!changed || saving} onclick={save}>Save</button>
     </div>
     {#if live}
-      <span class="meta">Your contacts whose apps read nicknames see this name.</span>
+      <span class="meta">Shown to your contacts.</span>
     {/if}
   </div>
 
   <div class="field">
     <label for="my-address">Address</label>
     <input id="my-address" class="input mono" readonly value={app.me.address} />
-    <span class="meta">This is how people find you. You cannot change it.</span>
+    <span class="meta">Cannot be changed.</span>
   </div>
 </section>
 
@@ -225,7 +225,6 @@
   <div class="row">
     <div class="text">
       <span class="label">Password</span>
-      <span class="meta">Choose a new password for your account.</span>
     </div>
     <button class="btn" onclick={() => (passwordOpen = true)}>Change password</button>
   </div>
@@ -234,11 +233,7 @@
 <section class="card" aria-label="Server certificate">
   <div class="text">
     <span class="label">Server certificate</span>
-    <span class="meta">
-      Pin the certificate of your server. Chord then stops before it sends your password if the
-      server shows another certificate. Without a pin, Chord trusts any certificate that your
-      system trusts.
-    </span>
+    <span class="meta">Stop signing in if the server certificate changes.</span>
   </div>
   {#if cert?.observed}
     <div class="print-row">
@@ -251,7 +246,7 @@
       <span class="meta">Pinned</span>
       <code class="print">{cert.pinned}</code>
       {#if cert.trustUntrusted}
-        <span class="meta">You chose to trust this certificate although your system does not.</span>
+        <span class="meta">Trusted by you, not by your system.</span>
       {/if}
     </div>
   {/if}
@@ -272,10 +267,7 @@
     <div class="row">
       <div class="text">
         <span class="label">Saved password</span>
-        <span class="meta">
-          Chord keeps your password in the system keychain so it can sign you in. To sign out and
-          forget it in one step, use Log out and tick the box.
-        </span>
+        <span class="meta">Stored in the system keychain.</span>
       </div>
       <button class="btn" onclick={() => void forgetSaved()}>Forget it now</button>
     </div>
@@ -286,7 +278,7 @@
   <div class="row">
     <div class="text">
       <span class="label">Delete account</span>
-      <span class="meta">Delete your account on the server. You cannot undo this.</span>
+      <span class="meta">This cannot be undone.</span>
     </div>
     <button class="btn btn-danger" onclick={() => (deleteOpen = true)}>Delete account</button>
   </div>

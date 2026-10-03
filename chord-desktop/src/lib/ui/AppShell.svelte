@@ -45,7 +45,6 @@
     prefs.load();
     drafts.load();
     app.loadLocal();
-    contactsStore.loadLocal();
     // Tell the server when nobody looks at the window (XEP-0352).
     if (live) {
       // Tell the contacts when nobody used Chord for a while (XEP-0319).

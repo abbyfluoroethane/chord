@@ -25,7 +25,7 @@
   ];
 </script>
 
-<SettingRow title="Mode" hint="System follows your device, and switches between your dark and light themes.">
+<SettingRow title="Mode" hint="System follows your device.">
   <Segmented label="Mode" value={theme.choice} options={themes} onchange={(v) => theme.set(v)} />
 </SettingRow>
 
@@ -39,7 +39,7 @@
 <div class="after-themes"></div>
 {#if importing}<ImportThemeModal onclose={() => (importing = false)} />{/if}
 
-<SettingRow title="Message display" hint="Compact hides avatars and puts times on the left.">
+<SettingRow title="Message display" hint="Compact hides avatars.">
   <Segmented
     label="Message display"
     value={prefs.display}
@@ -47,7 +47,7 @@
     onchange={(v) => prefs.set('display', v)}
   />
 </SettingRow>
-<SettingRow title="Font size" hint="Size of message text, from 12 to 20 px.">
+<SettingRow title="Font size" hint="Size of message text.">
   <div class="size">
     <input
       type="range"

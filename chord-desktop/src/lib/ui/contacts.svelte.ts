@@ -5,7 +5,6 @@ import * as fx from '$lib/fixtures/data';
 import { plainError, splitRoster, toContactItem } from './adapt';
 import { app, HOME } from './app.svelte';
 import { api, live } from './bridge';
-import { settings } from './local';
 import { prefs } from './prefs.svelte';
 import { ui } from './ui.svelte';
 import type { Affiliation, ContactItem, ContactsTab, MemberItem, Person } from './types';
@@ -24,8 +23,6 @@ class ContactsStore {
   incoming = $state<ContactItem[]>(live ? [] : clone(fx.incomingRequests));
   outgoing = $state<ContactItem[]>(live ? [] : clone(fx.outgoingRequests));
   blocked = $state<ContactItem[]>(live ? [] : clone(fx.blockedContacts));
-  /** Addresses whose requests are accepted before they arrive. */
-  preapproved = $state<string[]>([]);
 
   /** The number of the last read of the lists. */
   private readSeq = 0;
@@ -163,15 +160,11 @@ class ContactsStore {
     const address = jid.split('/')[0].toLowerCase();
     if (this.isBlocked(address) || this.isContact(address)) return;
     if (this.incoming.some((c) => c.address === address)) return;
-    if (prefs.autoApprove || this.preapproved.includes(address)) {
+    if (prefs.autoApprove) {
       this.act(async (b) => b.approveSubscription(address));
       return;
     }
     this.incoming.push(toContactItem(address, null, Date.now()));
-  }
-
-  loadLocal() {
-    if (live) this.preapproved = settings.get<string[]>('preapproved') ?? [];
   }
 
   /** Run a bridge call for an action, tell about a failure, and read the lists again. */
@@ -257,18 +250,6 @@ class ContactsStore {
     this.contacts = this.contacts.filter((c) => c.address !== address);
   }
 
-  /** Accept a request from this address before it arrives. Maps to api.preapproveSubscription(jid). */
-  preapprove(input: string): AddResult {
-    const address = input.trim().toLowerCase();
-    if (!ADDRESS.test(address)) {
-      return { ok: false, error: 'That does not look like an address. Try sam@chord.example.' };
-    }
-    if (this.preapproved.includes(address)) return { ok: false, error: 'That address is already approved.' };
-    this.act(async (b) => b.preapproveSubscription(address));
-    this.preapproved.push(address);
-    if (live) settings.set('preapproved', $state.snapshot(this.preapproved));
-    return { ok: true, message: `${address} is approved. Their request will be accepted.` };
-  }
 
   /** Maps to api.blockContact(jid). Also removes the contact. */
   block(address: string) {

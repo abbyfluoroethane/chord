@@ -8,16 +8,16 @@
   import { prefs } from './prefs.svelte';
 </script>
 
-<SettingRow title="Desktop notifications" hint="Show a system notice when a message arrives and Chord is in the background.">
+<SettingRow title="Desktop notifications" hint="Notify when Chord is in the background.">
   <Toggle
     checked={prefs.desktopNotifications}
     label="Desktop notifications"
     onchange={(v) => prefs.set('desktopNotifications', v)}
   />
 </SettingRow>
-<SettingRow title="Sound" hint="Play a short, quiet sound when a message arrives in a chat you do not read.">
+<SettingRow title="Sound" hint="Play a sound for new messages.">
   <Toggle checked={prefs.sound} label="Sound" onchange={(v) => prefs.set('sound', v)} />
 </SettingRow>
-<SettingRow title="Mute messages from people" hint="No notice and no sound for a message from a person until you turn this off. Channels still tell you.">
+<SettingRow title="Mute messages from people" hint="Silence direct messages. Channels still notify.">
   <Toggle checked={prefs.muteDms} label="Mute messages from people" onchange={(v) => prefs.set('muteDms', v)} />
 </SettingRow>

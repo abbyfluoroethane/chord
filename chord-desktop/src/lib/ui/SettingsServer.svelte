@@ -36,8 +36,7 @@
 
 <section class="card" aria-label="Server commands">
   <p class="meta">
-    These are the commands that {server || 'your server'} offers. A command can ask you for
-    information in several steps.
+    Commands that {server || 'your server'} offers.
   </p>
   {#if loading}
     <p class="meta" role="status">Loading…</p>

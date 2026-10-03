@@ -2,7 +2,7 @@
   import ShortcutTable from './ShortcutTable.svelte';
 </script>
 
-<p class="note">These shortcuts are fixed for now. You cannot change them yet.</p>
+<p class="note">Shortcuts cannot be changed yet.</p>
 <ShortcutTable />
 
 <style>
