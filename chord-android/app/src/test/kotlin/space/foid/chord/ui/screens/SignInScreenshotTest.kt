@@ -26,12 +26,15 @@ class SignInScreenshotTest {
     @Test fun empty_light() = shot(false, "empty", SignInState())
     @Test fun filled_dark() = shot(true, "filled", filled)
     @Test fun filled_light() = shot(false, "filled", filled)
-    @Test fun error_dark() = shot(true, "error", filled.copy(error = "The server refused this password. Check it and try again."))
-    @Test fun error_light() = shot(false, "error", filled.copy(error = "The server refused this password. Check it and try again."))
+    @Test fun error_dark() = shot(true, "error", filled.copy(error = "Wrong address or password."))
+    @Test fun error_light() = shot(false, "error", filled.copy(error = "Wrong address or password."))
     @Test fun submitting_dark() = shot(true, "submitting", filled.copy(submitting = true))
     @Test fun submitting_light() = shot(false, "submitting", filled.copy(submitting = true))
     @Test fun advanced_dark() = shot(true, "advanced", filled.copy(server = "starttls://chat.example:5222"), advanced = true)
     @Test fun advanced_light() = shot(false, "advanced", filled.copy(server = "starttls://chat.example:5222"), advanced = true)
+
+    @Test fun cantReach_dark() = shot(true, "cant_reach", filled.copy(jid = "alice@foid.space", error = "Can't reach foid.space. Check the address and your connection."))
+    @Test fun connecting_status_dark() = shot(true, "connecting_status", filled.copy(jid = "alice@foid.space", submitting = true))
 
     private fun shot(dark: Boolean, name: String, state: SignInState, advanced: Boolean = false) {
         compose.setContent { Content(dark, state, advanced) }

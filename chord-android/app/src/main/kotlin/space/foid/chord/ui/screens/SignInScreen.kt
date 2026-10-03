@@ -1,6 +1,7 @@
 package space.foid.chord.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,15 +19,9 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,15 +33,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.autofill.ContentType
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentType
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -57,21 +51,39 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import space.foid.chord.R
+import space.foid.chord.ui.forms.ChordTextField
+import space.foid.chord.ui.register.AuthButton
+import space.foid.chord.ui.register.AuthError
+import space.foid.chord.ui.register.AuthLink
+import space.foid.chord.ui.register.RegisterScreen
 import space.foid.chord.ui.theme.Chord
-import space.foid.chord.ui.theme.ChordRadius
 import space.foid.chord.ui.theme.ChordSpace
 import space.foid.chord.ui.theme.ChordType
 import space.foid.chord.viewmodel.ChordViewModels
 import space.foid.chord.viewmodel.SignInState
 import space.foid.chord.viewmodel.SignInViewModel
 
-/** The sign-in screen. [onSignedIn] runs once, after the sign-in succeeds. */
+/**
+ * The sign-in screen. [onSignedIn] runs once, after the sign-in succeeds, also after a new
+ * account signed in. "Create an account" swaps this screen for the registration.
+ */
 @Composable
 fun SignInScreen(onSignedIn: () -> Unit, modifier: Modifier = Modifier) {
     val vm: SignInViewModel = viewModel(factory = ChordViewModels.signIn)
     val state by vm.state.collectAsStateWithLifecycle()
+    var registering by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(state.signedIn) {
         if (state.signedIn) onSignedIn()
+    }
+    if (registering) {
+        RegisterScreen(
+            address = state.jid,
+            server = state.server,
+            onBack = { registering = false },
+            onSignedIn = onSignedIn,
+            modifier = modifier,
+        )
+        return
     }
     SignInContent(
         state = state,
@@ -79,6 +91,7 @@ fun SignInScreen(onSignedIn: () -> Unit, modifier: Modifier = Modifier) {
         onPasswordChange = vm::onPasswordChange,
         onServerChange = vm::onServerChange,
         onSubmit = vm::submit,
+        onCreateAccount = { registering = true },
         modifier = modifier,
     )
 }
@@ -92,6 +105,7 @@ fun SignInContent(
     onServerChange: (String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
+    onCreateAccount: () -> Unit = {},
     advancedInitiallyOpen: Boolean = false,
     passwordInitiallyVisible: Boolean = false,
 ) {
@@ -126,15 +140,16 @@ fun SignInContent(
                 Modifier.widthIn(max = 420.dp).fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(ChordSpace.s3),
             ) {
-                Text(stringResource(R.string.sign_in_title), style = ChordType.title, color = Chord.colors.ink)
-                Text(stringResource(R.string.sign_in_intro), style = ChordType.bodySmall, color = Chord.colors.inkMuted)
-                Field(
+                Text(stringResource(R.string.signin_title), style = ChordType.title, color = Chord.colors.ink)
+                ChordTextField(
                     value = state.jid,
                     onChange = onJidChange,
-                    label = stringResource(R.string.sign_in_address),
-                    placeholder = "name@server.example",
+                    label = stringResource(R.string.signin_address),
+                    placeholder = stringResource(R.string.signin_address_hint),
                     tag = "login_jid",
                     enabled = enabled,
+                    mono = true,
+                    isError = state.error != null,
                     contentType = ContentType.Username,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,
@@ -144,12 +159,13 @@ fun SignInContent(
                     ),
                     keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }),
                 )
-                Field(
+                ChordTextField(
                     value = state.password,
                     onChange = onPasswordChange,
-                    label = stringResource(R.string.sign_in_password),
+                    label = stringResource(R.string.signin_password),
                     tag = "login_password",
                     enabled = enabled,
+                    isError = state.error != null,
                     contentType = ContentType.Password,
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
@@ -164,7 +180,7 @@ fun SignInContent(
                     ),
                     trailing = {
                         Text(
-                            text = stringResource(if (passwordVisible) R.string.sign_in_hide else R.string.sign_in_show),
+                            text = stringResource(if (passwordVisible) R.string.signin_hide else R.string.signin_show),
                             style = ChordType.label,
                             color = Chord.colors.brandInk,
                             modifier = Modifier
@@ -176,13 +192,14 @@ fun SignInContent(
                 AdvancedToggle(open = advancedOpen, onToggle = { advancedOpen = !advancedOpen })
                 AnimatedVisibility(advancedOpen) {
                     Column(verticalArrangement = Arrangement.spacedBy(ChordSpace.s1)) {
-                        Field(
+                        ChordTextField(
                             value = state.server,
                             onChange = onServerChange,
-                            label = stringResource(R.string.sign_in_server),
-                            placeholder = stringResource(R.string.sign_in_server_hint),
+                            label = stringResource(R.string.signin_server),
+                            placeholder = stringResource(R.string.signin_server_hint),
                             tag = "login_server",
                             enabled = enabled,
+                            mono = true,
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.None,
                                 autoCorrectEnabled = false,
@@ -192,30 +209,42 @@ fun SignInContent(
                             keyboardActions = KeyboardActions(onDone = { submit() }),
                         )
                         Text(
-                            stringResource(R.string.sign_in_server_help),
+                            stringResource(R.string.signin_server_help),
                             style = ChordType.caption,
                             color = Chord.colors.inkMuted,
                         )
                     }
                 }
-                if (state.error != null) {
-                    Text(
-                        text = state.error,
-                        style = ChordType.bodySmall,
-                        color = Chord.colors.danger,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { liveRegion = LiveRegionMode.Polite }
-                            .testTag("login_error"),
-                    )
-                }
+                if (state.error != null) AuthError(state.error, "login_error")
             }
         }
-        Box(
+        Column(
             Modifier.fillMaxWidth().padding(horizontal = ChordSpace.s6, vertical = ChordSpace.s3),
-            contentAlignment = Alignment.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            SubmitButton(state = state, onClick = submit)
+            AuthButton(
+                label = stringResource(R.string.signin_submit),
+                busyLabel = stringResource(R.string.signin_submitting),
+                busy = state.submitting,
+                enabled = state.canSubmit,
+                onClick = submit,
+                tag = "login_submit",
+            )
+            if (state.submitting) {
+                val host = state.host.ifEmpty { stringResource(R.string.signin_status_default) }
+                Text(
+                    stringResource(R.string.signin_status, host),
+                    style = ChordType.caption,
+                    color = Chord.colors.inkMuted,
+                    modifier = Modifier.padding(top = ChordSpace.s2).testTag("login_status"),
+                )
+            }
+            AuthLink(
+                label = stringResource(R.string.signin_create_account),
+                onClick = onCreateAccount,
+                enabled = !state.submitting,
+                tag = "login_create_account",
+            )
         }
     }
 }
@@ -232,107 +261,31 @@ private fun Brand() {
     }
 }
 
+/** "Advanced" with a chevron that points down when open and right when closed (desktop: `.adv`). */
 @Composable
 private fun AdvancedToggle(open: Boolean, onToggle: () -> Unit) {
+    val color = Chord.colors.inkMuted
     Row(
         Modifier
-            .fillMaxWidth()
             .heightIn(min = 48.dp)
             .testTag("login_advanced")
             .clickable(role = Role.Button, onClick = onToggle),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ChordSpace.s1),
     ) {
-        Text(
-            text = stringResource(R.string.sign_in_advanced) + if (open) "  ▴" else "  ▾",
-            style = ChordType.label,
-            color = Chord.colors.inkMuted,
-        )
-    }
-}
-
-@Composable
-private fun SubmitButton(state: SignInState, onClick: () -> Unit) {
-    val c = Chord.colors
-    Button(
-        onClick = onClick,
-        enabled = state.canSubmit,
-        shape = RoundedCornerShape(ChordRadius.md),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = c.brand,
-            contentColor = c.onBrand,
-            // While it submits, the button keeps its colour so the progress state stays readable.
-            disabledContainerColor = if (state.submitting) c.brand else c.surface300,
-            disabledContentColor = if (state.submitting) c.onBrand else c.inkMuted,
-        ),
-        modifier = Modifier
-            .widthIn(max = 420.dp)
-            .fillMaxWidth()
-            .heightIn(min = 52.dp)
-            .testTag("login_submit"),
-    ) {
-        if (state.submitting) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                color = c.onBrand,
-                strokeWidth = 2.dp,
-            )
-            Spacer(Modifier.size(ChordSpace.s3))
-            Text(stringResource(R.string.sign_in_submitting), style = ChordType.name)
-        } else {
-            Text(stringResource(R.string.sign_in_submit), style = ChordType.name)
+        Canvas(Modifier.size(16.dp)) {
+            val w = 1.5.dp.toPx()
+            val cx = size.width / 2
+            val cy = size.height / 2
+            val r = size.width * 0.22f
+            if (open) {
+                drawLine(color, Offset(cx - r * 1.4f, cy - r * 0.6f), Offset(cx, cy + r * 0.8f), w, StrokeCap.Round)
+                drawLine(color, Offset(cx, cy + r * 0.8f), Offset(cx + r * 1.4f, cy - r * 0.6f), w, StrokeCap.Round)
+            } else {
+                drawLine(color, Offset(cx - r * 0.6f, cy - r * 1.4f), Offset(cx + r * 0.8f, cy), w, StrokeCap.Round)
+                drawLine(color, Offset(cx + r * 0.8f, cy), Offset(cx - r * 0.6f, cy + r * 1.4f), w, StrokeCap.Round)
+            }
         }
+        Text(stringResource(R.string.signin_advanced), style = ChordType.label, color = color)
     }
-}
-
-@Composable
-private fun Field(
-    value: String,
-    onChange: (String) -> Unit,
-    label: String,
-    tag: String,
-    enabled: Boolean,
-    keyboardOptions: KeyboardOptions,
-    placeholder: String? = null,
-    contentType: ContentType? = null,
-    visualTransformation: VisualTransformation = VisualTransformation.None,
-    keyboardActions: KeyboardActions = KeyboardActions.Default,
-    trailing: (@Composable () -> Unit)? = null,
-) {
-    val c = Chord.colors
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        enabled = enabled,
-        singleLine = true,
-        label = { Text(label, style = ChordType.bodySmall) },
-        placeholder = placeholder?.let { { Text(it, style = ChordType.body) } },
-        trailingIcon = trailing,
-        visualTransformation = visualTransformation,
-        keyboardOptions = keyboardOptions,
-        keyboardActions = keyboardActions,
-        textStyle = ChordType.body.copy(color = c.ink),
-        shape = RoundedCornerShape(ChordRadius.md),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = c.ink,
-            unfocusedTextColor = c.ink,
-            disabledTextColor = c.inkMuted,
-            focusedContainerColor = c.surface200,
-            unfocusedContainerColor = c.surface200,
-            disabledContainerColor = c.surface200,
-            focusedBorderColor = c.brand,
-            unfocusedBorderColor = c.lineStrong,
-            disabledBorderColor = c.line,
-            focusedLabelColor = c.brandInk,
-            unfocusedLabelColor = c.inkMuted,
-            disabledLabelColor = c.inkMuted,
-            cursorColor = c.brand,
-            focusedPlaceholderColor = c.inkMuted,
-            unfocusedPlaceholderColor = c.inkMuted,
-            disabledPlaceholderColor = c.inkMuted,
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag(tag)
-            .then(if (contentType != null) Modifier.semantics { this.contentType = contentType } else Modifier),
-    )
 }
