@@ -17,6 +17,7 @@
       label: 'App settings',
       pages: [
         { id: 'notifications', label: 'Notifications' },
+        { id: 'behaviour', label: 'App behaviour' },
         { id: 'appearance', label: 'Appearance' },
         { id: 'chat', label: 'Chat' },
         { id: 'keybinds', label: 'Keybinds' },

@@ -5,3 +5,4 @@ export * from './diff';
 export type * from './types';
 export * from './badge';
 export * from './notice';
+export * from './behaviour';

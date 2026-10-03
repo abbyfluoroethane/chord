@@ -53,6 +53,28 @@ describe('parsePrefs', () => {
     ).toEqual({ sendReadNotices: false, sendTypingNotices: false, shareIdle: false, idleMinutes: 30 });
     expect(parsePrefs({ sendReadNotices: 'no', shareIdle: 1, idleMinutes: 7 })).toEqual({});
   });
+  it('reads the app behaviour fields with their types', () => {
+    expect(
+      parsePrefs({
+        closeToBackground: true,
+        trayIcon: 1,
+        rememberWindow: false,
+        startMinimised: true,
+        autoAway: true,
+        autoAwayMinutes: 15
+      })
+    ).toEqual({
+      closeToBackground: true,
+      rememberWindow: false,
+      startMinimised: true,
+      autoAway: true,
+      autoAwayMinutes: 15
+    });
+  });
+  it('drops an auto-away time that the menu does not offer', () => {
+    expect(parsePrefs({ autoAwayMinutes: 7 })).toEqual({});
+    expect(parsePrefs({ autoAwayMinutes: '5' })).toEqual({});
+  });
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});

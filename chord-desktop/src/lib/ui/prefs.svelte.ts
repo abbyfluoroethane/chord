@@ -91,6 +91,14 @@ class Prefs {
   shareIdle = $state(true);
   idleMinutes = $state(5);
 
+  // App behaviour. Rust reads the first four from the settings file (behaviour.rs).
+  closeToBackground = $state(false);
+  trayIcon = $state(false);
+  rememberWindow = $state(false);
+  startMinimised = $state(false);
+  autoAway = $state(false);
+  autoAwayMinutes = $state(10);
+
   load() {
     let legacy: string | null = null;
     try {
@@ -155,7 +163,13 @@ class Prefs {
       sendReadNotices: this.sendReadNotices,
       sendTypingNotices: this.sendTypingNotices,
       shareIdle: this.shareIdle,
-      idleMinutes: this.idleMinutes
+      idleMinutes: this.idleMinutes,
+      closeToBackground: this.closeToBackground,
+      trayIcon: this.trayIcon,
+      rememberWindow: this.rememberWindow,
+      startMinimised: this.startMinimised,
+      autoAway: this.autoAway,
+      autoAwayMinutes: this.autoAwayMinutes
     };
   }
 

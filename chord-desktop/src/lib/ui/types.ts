@@ -194,6 +194,7 @@ export type SettingsPage =
   | 'account'
   | 'privacy'
   | 'notifications'
+  | 'behaviour'
   | 'appearance'
   | 'chat'
   | 'keybinds'

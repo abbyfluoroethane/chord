@@ -30,6 +30,7 @@
   import { watchClientState } from './clientstate';
   import { contactsStore } from './contacts.svelte';
   import { drafts } from './drafts.svelte';
+  import { useBehaviour } from './behaviour.svelte';
   import { watchIdle } from './idle';
   import { prefs } from './prefs.svelte';
   import { rail } from './rail.svelte';
@@ -39,6 +40,8 @@
   import { handleKey } from './keyactions';
   import { ui } from './ui.svelte';
   import { xmppLinks } from './xmpplinks.svelte';
+
+  useBehaviour();
 
   onMount(() => {
     ui.load();

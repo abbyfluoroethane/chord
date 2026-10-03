@@ -9,6 +9,7 @@
   import SettingsAccount from './SettingsAccount.svelte';
   import SettingsAppearance from './SettingsAppearance.svelte';
   import SettingsChat from './SettingsChat.svelte';
+  import SettingsBehaviour from './SettingsBehaviour.svelte';
   import SettingsKeybinds from './SettingsKeybinds.svelte';
   import SettingsNav from './SettingsNav.svelte';
   import SettingsNotifications from './SettingsNotifications.svelte';
@@ -23,6 +24,7 @@
     account: 'My account',
     privacy: 'Privacy',
     notifications: 'Notifications',
+    behaviour: 'App behaviour',
     appearance: 'Appearance',
     chat: 'Chat',
     keybinds: 'Keybinds',
@@ -63,6 +65,8 @@
           <SettingsPrivacy />
         {:else if ui.settingsPage === 'notifications'}
           <SettingsNotifications />
+        {:else if ui.settingsPage === 'behaviour'}
+          <SettingsBehaviour />
         {:else if ui.settingsPage === 'appearance'}
           <SettingsAppearance />
         {:else if ui.settingsPage === 'chat'}

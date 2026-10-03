@@ -48,6 +48,13 @@ export interface Saved {
   shareIdle: boolean;
   /** The minutes without input before Chord says "idle": 5, 10 or 30. */
   idleMinutes: number;
+  // App behaviour
+  closeToBackground: boolean;
+  trayIcon: boolean;
+  rememberWindow: boolean;
+  startMinimised: boolean;
+  autoAway: boolean;
+  autoAwayMinutes: number;
 }
 
 export type SendKey = 'enter' | 'mod-enter';
@@ -92,6 +99,9 @@ export type SoundId = (typeof SOUND_IDS)[number];
 
 /** The waits that the idle setting accepts. */
 export const IDLE_MINUTES = [5, 10, 30] as const;
+
+/** The minutes that the auto-away menu offers. */
+export const AUTO_AWAY_MINUTES = [1, 5, 10, 15, 30, 60] as const;
 
 /** The key in the settings file, and the old localStorage key of the same blob. */
 export const SETTINGS_KEY = 'prefs';
@@ -150,6 +160,17 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (typeof o.soundVolume === 'number' && Number.isFinite(o.soundVolume))
     out.soundVolume = Math.min(100, Math.max(0, Math.round(o.soundVolume)));
   if (typeof o.unreadBadge === 'boolean') out.unreadBadge = o.unreadBadge;
+  // App behaviour
+  if (typeof o.closeToBackground === 'boolean') out.closeToBackground = o.closeToBackground;
+  if (typeof o.trayIcon === 'boolean') out.trayIcon = o.trayIcon;
+  if (typeof o.rememberWindow === 'boolean') out.rememberWindow = o.rememberWindow;
+  if (typeof o.startMinimised === 'boolean') out.startMinimised = o.startMinimised;
+  if (typeof o.autoAway === 'boolean') out.autoAway = o.autoAway;
+  if (
+    typeof o.autoAwayMinutes === 'number' &&
+    (AUTO_AWAY_MINUTES as readonly number[]).includes(o.autoAwayMinutes)
+  )
+    out.autoAwayMinutes = o.autoAwayMinutes;
   return out;
 }
 
