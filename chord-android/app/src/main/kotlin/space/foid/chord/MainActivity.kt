@@ -9,6 +9,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -21,6 +24,7 @@ import kotlinx.coroutines.launch
 import space.foid.chord.data.logWarn
 import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.ui.ChordNavHost
+import space.foid.chord.ui.settings.PrefsSettingsStore
 import space.foid.chord.ui.theme.ChordTheme
 
 /** The one activity. It restores the session behind the system splash, then shows the nav host. */
@@ -56,8 +60,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val settings = PrefsSettingsStore.get(this)
         setContent {
-            ChordTheme {
+            val mode by settings.themeMode.collectAsState()
+            val dark = mode.isDark(isSystemInDarkTheme())
+            // The bar icons follow the chosen theme, not only the system one.
+            DisposableEffect(dark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                )
+                onDispose {}
+            }
+            ChordTheme(dark = dark) {
                 Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
                     startSignedIn?.let { signedIn -> ChordNavHost(startSignedIn = signedIn, openPeer = openPeer) }
                 }
