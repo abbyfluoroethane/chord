@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseLegacy, parsePrefs, resolvePrefs } from './prefsdata';
+import { CHAT_DEFAULTS, parseLegacy, parsePrefs, resolvePrefs } from './prefsdata';
 
 describe('parsePrefs', () => {
   it('keeps good fields and drops bad ones', () => {
@@ -38,5 +38,38 @@ describe('resolvePrefs', () => {
     expect(parseLegacy('{oops')).toEqual({});
     expect(resolvePrefs(undefined, '{oops')).toEqual({ prefs: {}, migrate: false });
     expect(resolvePrefs(undefined, null)).toEqual({ prefs: {}, migrate: false });
+  });
+});
+
+describe('Chat prefs', () => {
+  it('has defaults that keep the old behaviour', () => {
+    expect(CHAT_DEFAULTS).toEqual({
+      sendKey: 'enter',
+      inlineMedia: true,
+      gifs: 'always',
+      autoplayVideo: false,
+      showSpoilers: false,
+      emoticons: false,
+      spellcheck: true,
+      confirmDelete: true
+    });
+  });
+  it('keeps good Chat values', () => {
+    const v = {
+      sendKey: 'mod-enter',
+      inlineMedia: false,
+      gifs: 'hover',
+      autoplayVideo: true,
+      showSpoilers: true,
+      emoticons: true,
+      spellcheck: false,
+      confirmDelete: false
+    };
+    expect(parsePrefs(v)).toEqual(v);
+  });
+  it('drops bad Chat values', () => {
+    expect(
+      parsePrefs({ sendKey: 'tab', inlineMedia: 1, gifs: 'never', autoplayVideo: 'yes', confirmDelete: null })
+    ).toEqual({});
   });
 });

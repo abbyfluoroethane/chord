@@ -195,6 +195,7 @@ export type SettingsPage =
   | 'privacy'
   | 'notifications'
   | 'appearance'
+  | 'chat'
   | 'keybinds'
   | 'server'
   | 'about';

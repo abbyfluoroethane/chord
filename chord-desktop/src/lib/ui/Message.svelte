@@ -55,6 +55,8 @@
   const embeds = $derived(
     mayAutoLoad(item.sender, app.me.address, (a) => contactsStore.isContact(a), linkPreviews.strangers)
   );
+  // The Chat setting can turn off the photos and videos of attachments for everyone.
+  const showMedia = $derived(embeds && prefs.inlineMedia);
 
   // Up to three different links of the body. Code is not a link. The attachment has its own view.
   const candidates = $derived.by(() => {
@@ -108,7 +110,7 @@
 
   function openMenu(e: Event) {
     const { items, quick } = messageMenu(item, targetOf(e), (ev) =>
-      ev.shiftKey ? app.deleteMessage(item) : (deleting = true)
+      ev.shiftKey || !prefs.confirmDelete ? app.deleteMessage(item) : (deleting = true)
     );
     contextMenu.open(e, items, { label: 'Message menu', quick });
   }
@@ -209,7 +211,7 @@
         </div>
       {/if}
       {#if item.attachment}
-        <AttachmentView file={item.attachment} embed={embeds} />
+        <AttachmentView file={item.attachment} embed={showMedia} />
       {/if}
       {#if cards.length}
         <div class="previews">

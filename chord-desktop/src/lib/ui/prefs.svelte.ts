@@ -8,7 +8,7 @@ import type { DisplayMode } from './types';
 import type { EmojiPackId } from './emojipackids';
 import { live } from './bridge';
 import { settings } from './local';
-import { LEGACY_KEY, SETTINGS_KEY, resolvePrefs, type Saved } from './prefsdata';
+import { CHAT_DEFAULTS, LEGACY_KEY, SETTINGS_KEY, resolvePrefs, type GifPlay, type SendKey, type Saved } from './prefsdata';
 
 class Prefs {
   desktopNotifications = $state(true);
@@ -23,6 +23,16 @@ class Prefs {
   shareInfo = $state(true);
   /** The images for emoji. Twemoji ships with the app. */
   emojiPack = $state<EmojiPackId>('twemoji');
+
+  // Chat
+  sendKey = $state<SendKey>(CHAT_DEFAULTS.sendKey);
+  inlineMedia = $state<boolean>(CHAT_DEFAULTS.inlineMedia);
+  gifs = $state<GifPlay>(CHAT_DEFAULTS.gifs);
+  autoplayVideo = $state<boolean>(CHAT_DEFAULTS.autoplayVideo);
+  showSpoilers = $state<boolean>(CHAT_DEFAULTS.showSpoilers);
+  emoticons = $state<boolean>(CHAT_DEFAULTS.emoticons);
+  spellcheck = $state<boolean>(CHAT_DEFAULTS.spellcheck);
+  confirmDelete = $state<boolean>(CHAT_DEFAULTS.confirmDelete);
 
   load() {
     let legacy: string | null = null;
@@ -55,7 +65,16 @@ class Prefs {
       fontSize: this.fontSize,
       gifPicker: this.gifPicker,
       shareInfo: this.shareInfo,
-      emojiPack: this.emojiPack
+      emojiPack: this.emojiPack,
+      // Chat
+      sendKey: this.sendKey,
+      inlineMedia: this.inlineMedia,
+      gifs: this.gifs,
+      autoplayVideo: this.autoplayVideo,
+      showSpoilers: this.showSpoilers,
+      emoticons: this.emoticons,
+      spellcheck: this.spellcheck,
+      confirmDelete: this.confirmDelete
     };
   }
 

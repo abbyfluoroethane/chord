@@ -19,6 +19,7 @@
       pages: [
         { id: 'notifications', label: 'Notifications' },
         { id: 'appearance', label: 'Appearance' },
+        { id: 'chat', label: 'Chat' },
         { id: 'keybinds', label: 'Keybinds' }
       ]
     }

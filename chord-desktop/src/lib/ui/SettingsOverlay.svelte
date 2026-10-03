@@ -8,6 +8,7 @@
   import SettingsAbout from './SettingsAbout.svelte';
   import SettingsAccount from './SettingsAccount.svelte';
   import SettingsAppearance from './SettingsAppearance.svelte';
+  import SettingsChat from './SettingsChat.svelte';
   import SettingsKeybinds from './SettingsKeybinds.svelte';
   import SettingsNav from './SettingsNav.svelte';
   import SettingsNotifications from './SettingsNotifications.svelte';
@@ -23,6 +24,7 @@
     privacy: 'Privacy',
     notifications: 'Notifications',
     appearance: 'Appearance',
+    chat: 'Chat',
     keybinds: 'Keybinds',
     server: 'Server',
     about: 'About'
@@ -63,6 +65,8 @@
           <SettingsNotifications />
         {:else if ui.settingsPage === 'appearance'}
           <SettingsAppearance />
+        {:else if ui.settingsPage === 'chat'}
+          <SettingsChat />
         {:else if ui.settingsPage === 'keybinds'}
           <SettingsKeybinds />
         {:else if ui.settingsPage === 'server'}

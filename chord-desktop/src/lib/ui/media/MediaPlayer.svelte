@@ -47,7 +47,11 @@
   function loaded() {
     if (!media) return;
     if (startAt > 0) media.currentTime = startAt;
-    if (autoplay) void media.play().catch(() => undefined);
+    if (autoplay) {
+      // A video that starts by itself in the chat starts without sound.
+      if (surface === 'chat') media.muted = true;
+      void media.play().catch(() => undefined);
+    }
   }
 </script>
 

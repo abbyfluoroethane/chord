@@ -1,15 +1,18 @@
 <script lang="ts">
   // Hidden text. A click, or Enter or Space, shows it. It stays shown for this view.
   import type { Snippet } from 'svelte';
+  import { prefs } from './prefs.svelte';
 
   let { children }: { children: Snippet } = $props();
 
-  let shown = $state(false);
+  let clicked = $state(false);
+  // The Chat setting can show every spoiler.
+  const shown = $derived(clicked || prefs.showSpoilers);
 
   function key(e: KeyboardEvent) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      shown = true;
+      clicked = true;
     }
   }
 </script>
@@ -20,7 +23,7 @@
     role="button"
     tabindex="0"
     aria-label="Spoiler, press to show"
-    onclick={() => (shown = true)}
+    onclick={() => (clicked = true)}
     onkeydown={key}>{@render children()}</span
   >{/if}
 

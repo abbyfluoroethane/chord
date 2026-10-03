@@ -16,6 +16,7 @@
   import { preloadLightbox } from './lightbox';
   import MediaPlayer from './media/MediaPlayer.svelte';
   import { hostOf, isLocalHost } from './mediatrust';
+  import { prefs } from './prefs.svelte';
   import type { Attachment } from './types';
   import { ui } from './ui.svelte';
 
@@ -49,6 +50,19 @@
   });
   let media = $state<HTMLMediaElement>();
 
+  // With "Play GIFs" on hover, a still copy of the first frame covers the GIF until the
+  // pointer or the focus comes to it. Drawing a photo on a canvas needs no CORS.
+  const still = $derived(prefs.gifs === 'hover' && file.mime === 'image/gif');
+  let canvas = $state<HTMLCanvasElement>();
+  let hot = $state(false);
+  function freeze(e: Event) {
+    const img = e.currentTarget as HTMLImageElement;
+    if (!canvas || !img.naturalWidth) return;
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext('2d')?.drawImage(img, 0, 0);
+  }
+
   /** Open the video in the viewer where it is now, and continue here after. */
   function expand() {
     const playing = !!media && !media.paused;
@@ -81,8 +95,16 @@
     style:width={box ? `${box.w}px` : null}
     style:height={box ? `${box.h}px` : null}
     onclick={() => viewImage(file)}
-    onpointerenter={preloadLightbox}
-    onfocus={preloadLightbox}
+    onpointerenter={() => {
+      preloadLightbox();
+      hot = true;
+    }}
+    onpointerleave={() => (hot = false)}
+    onfocus={() => {
+      preloadLightbox();
+      hot = true;
+    }}
+    onblur={() => (hot = false)}
     aria-label="View {file.name}"
   >
     <img
@@ -90,8 +112,10 @@
       alt={file.name}
       loading="lazy"
       decoding="async"
+      onload={still ? freeze : undefined}
       onerror={() => (broken = true)}
     />
+    {#if still}<canvas bind:this={canvas} class="still" class:hide={hot} aria-hidden="true"></canvas>{/if}
   </button>
 {:else if kind === 'video'}
   <div class="video" style:aspect-ratio={ratio}>
@@ -99,6 +123,7 @@
       kind="video"
       src={file.url}
       name={file.name}
+      autoplay={prefs.autoplayVideo}
       bind:media
       onexpand={expand}
       onfail={() => (broken = true)}
@@ -145,7 +170,20 @@
     object-fit: cover;
   }
   .image {
+    position: relative;
     max-width: min(400px, 100%);
+  }
+  .still {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: var(--surface-200);
+    pointer-events: none;
+  }
+  .still.hide {
+    visibility: hidden;
   }
   .image.natural {
     display: inline-block;

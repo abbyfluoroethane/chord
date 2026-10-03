@@ -13,7 +13,41 @@ export interface Saved {
   gifPicker: boolean;
   shareInfo: boolean;
   emojiPack: EmojiPackId;
+  // Chat
+  sendKey: SendKey;
+  inlineMedia: boolean;
+  gifs: GifPlay;
+  autoplayVideo: boolean;
+  showSpoilers: boolean;
+  emoticons: boolean;
+  spellcheck: boolean;
+  confirmDelete: boolean;
 }
+
+export type SendKey = 'enter' | 'mod-enter';
+export type GifPlay = 'always' | 'hover';
+
+/** The Chat settings at first start. Each default keeps the behaviour from before the setting. */
+export const CHAT_DEFAULTS = {
+  sendKey: 'enter',
+  inlineMedia: true,
+  gifs: 'always',
+  autoplayVideo: false,
+  showSpoilers: false,
+  emoticons: false,
+  spellcheck: true,
+  confirmDelete: true
+} as const satisfies Pick<
+  Saved,
+  | 'sendKey'
+  | 'inlineMedia'
+  | 'gifs'
+  | 'autoplayVideo'
+  | 'showSpoilers'
+  | 'emoticons'
+  | 'spellcheck'
+  | 'confirmDelete'
+>;
 
 /** The key in the settings file, and the old localStorage key of the same blob. */
 export const SETTINGS_KEY = 'prefs';
@@ -33,6 +67,15 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (typeof o.shareInfo === 'boolean') out.shareInfo = o.shareInfo;
   if (typeof o.emojiPack === 'string' && (EMOJI_PACK_IDS as readonly string[]).includes(o.emojiPack))
     out.emojiPack = o.emojiPack as EmojiPackId;
+  // Chat
+  if (o.sendKey === 'enter' || o.sendKey === 'mod-enter') out.sendKey = o.sendKey;
+  if (typeof o.inlineMedia === 'boolean') out.inlineMedia = o.inlineMedia;
+  if (o.gifs === 'always' || o.gifs === 'hover') out.gifs = o.gifs;
+  if (typeof o.autoplayVideo === 'boolean') out.autoplayVideo = o.autoplayVideo;
+  if (typeof o.showSpoilers === 'boolean') out.showSpoilers = o.showSpoilers;
+  if (typeof o.emoticons === 'boolean') out.emoticons = o.emoticons;
+  if (typeof o.spellcheck === 'boolean') out.spellcheck = o.spellcheck;
+  if (typeof o.confirmDelete === 'boolean') out.confirmDelete = o.confirmDelete;
   if (typeof o.fontSize === 'number' && Number.isFinite(o.fontSize))
     out.fontSize = Math.min(20, Math.max(12, o.fontSize));
   return out;
