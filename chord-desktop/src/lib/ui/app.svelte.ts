@@ -18,6 +18,8 @@ import { pasteProblem } from './filetransfer';
 import type { TrayItem } from './traydata';
 import { linkPreviews } from './linkpreviews.svelte';
 import { settings } from './local';
+import { prefs } from './prefs.svelte';
+import { signInPresence } from './prefsdata';
 import { bumpReaction, topReactions, type ReactionUse } from './reactions';
 import type {
   ChannelItem,
@@ -62,6 +64,12 @@ class AppState {
     live
       ? { address: '', name: '', avatar: null, show: 'chat' as Show, status: null as string | null }
       : clone(fx.me)
+  );
+  /** The vCard4 fields of our own profile. The account settings edit them. */
+  myProfile = $state(
+    live
+      ? { fullName: '', about: '', website: '', pronouns: '' }
+      : { fullName: 'Abby F.', about: 'Rockets, Rust and tea.', website: 'https://foid.space', pronouns: 'she/her' }
   );
   spaces = $state<SpaceItem[]>(live ? [] : clone(fx.spaces));
   // The big lists are raw: Svelte does not wrap each row in a proxy. A change builds a new
@@ -1065,6 +1073,13 @@ class AppState {
       const own = await (await api()).ownPresence();
       this.me.show = fromAvailability(own.availability);
       this.me.status = own.status;
+      // The sign-in defaults of the account settings go over the stored presence.
+      const start = signInPresence(this.me, prefs);
+      if (start.show !== this.me.show || start.status !== this.me.status) {
+        this.me.show = start.show;
+        this.me.status = start.status;
+        await this.pushPresence();
+      }
     } catch {
       /* keep the defaults */
     }
@@ -1077,6 +1092,12 @@ class AppState {
       const p = await (await api()).profile(this.me.address);
       const name = p.nickname ?? p.fullName;
       if (name) this.me.name = name;
+      this.myProfile = {
+        fullName: p.fullName ?? '',
+        about: p.about ?? '',
+        website: p.website ?? '',
+        pronouns: p.pronouns ?? ''
+      };
     } catch {
       /* keep the name from the address */
     }

@@ -20,7 +20,8 @@ import {
   type Saved,
   type SendKey,
   type TimeFormat,
-  type SoundId
+  type SoundId,
+  type SignInShow
 } from './prefsdata';
 
 const GROUP_GAP = { small: '8px', normal: '20px', large: '32px' } as const;
@@ -99,6 +100,10 @@ class Prefs {
   autoAway = $state(false);
   autoAwayMinutes = $state(10);
 
+  // Account
+  signInShow = $state<SignInShow>('last');
+  signInStatus = $state('');
+
   load() {
     let legacy: string | null = null;
     try {
@@ -169,7 +174,10 @@ class Prefs {
       rememberWindow: this.rememberWindow,
       startMinimised: this.startMinimised,
       autoAway: this.autoAway,
-      autoAwayMinutes: this.autoAwayMinutes
+      autoAwayMinutes: this.autoAwayMinutes,
+      // Account
+      signInShow: this.signInShow,
+      signInStatus: this.signInStatus
     };
   }
 

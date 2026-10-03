@@ -55,6 +55,27 @@ export interface Saved {
   startMinimised: boolean;
   autoAway: boolean;
   autoAwayMinutes: number;
+  // Account
+  /** The availability to set at sign-in. "last" keeps the one from the last session. */
+  signInShow: SignInShow;
+  /** The status text to set at sign-in. Empty keeps the one from the last session. */
+  signInStatus: string;
+}
+
+export type SignInShow = 'last' | 'chat' | 'away' | 'dnd';
+export const SIGN_IN_SHOWS: readonly SignInShow[] = ['last', 'chat', 'away', 'dnd'];
+export const MAX_STATUS = 128;
+
+/** The presence to use after sign-in: the stored one, with the two defaults laid over it. */
+export function signInPresence<S extends string | null>(
+  stored: { show: S; status: string | null },
+  p: Pick<Saved, 'signInShow' | 'signInStatus'>
+): { show: S | Exclude<SignInShow, 'last'>; status: string | null } {
+  const text = p.signInStatus.trim();
+  return {
+    show: p.signInShow === 'last' ? stored.show : p.signInShow,
+    status: text ? text.slice(0, MAX_STATUS) : stored.status
+  };
 }
 
 export type SendKey = 'enter' | 'mod-enter';
@@ -135,6 +156,9 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (typeof o.shareIdle === 'boolean') out.shareIdle = o.shareIdle;
   if (typeof o.idleMinutes === 'number' && (IDLE_MINUTES as readonly number[]).includes(o.idleMinutes))
     out.idleMinutes = o.idleMinutes;
+  if (typeof o.signInShow === 'string' && (SIGN_IN_SHOWS as readonly string[]).includes(o.signInShow))
+    out.signInShow = o.signInShow as SignInShow;
+  if (typeof o.signInStatus === 'string') out.signInStatus = o.signInStatus.slice(0, MAX_STATUS);
   if (typeof o.fontSize === 'number' && Number.isFinite(o.fontSize))
     out.fontSize = Math.min(20, Math.max(12, o.fontSize));
   // Appearance

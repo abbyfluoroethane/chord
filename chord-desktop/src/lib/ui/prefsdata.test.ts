@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHAT_DEFAULTS, hourCycleOf, parseLegacy, parsePrefs, resolvePrefs } from './prefsdata';
+import { CHAT_DEFAULTS, hourCycleOf, parseLegacy, parsePrefs, resolvePrefs, signInPresence } from './prefsdata';
 
 describe('parsePrefs', () => {
   it('keeps good fields and drops bad ones', () => {
@@ -173,5 +173,31 @@ describe('Chat prefs', () => {
     expect(
       parsePrefs({ sendKey: 'tab', inlineMedia: 1, autoplayVideo: 'yes', confirmDelete: null })
     ).toEqual({});
+  });
+});
+
+describe('sign-in presence', () => {
+  it('reads the two defaults and drops bad ones', () => {
+    expect(parsePrefs({ signInShow: 'dnd', signInStatus: 'Back soon' })).toEqual({
+      signInShow: 'dnd',
+      signInStatus: 'Back soon'
+    });
+    expect(parsePrefs({ signInShow: 'invisible', signInStatus: 5 })).toEqual({});
+    expect(parsePrefs({ signInStatus: 'x'.repeat(300) }).signInStatus).toHaveLength(128);
+  });
+  it('keeps the stored presence with the default settings', () => {
+    const stored = { show: 'away' as const, status: 'Lunch' };
+    expect(signInPresence(stored, { signInShow: 'last', signInStatus: '' })).toEqual(stored);
+  });
+  it('lays the defaults over the stored presence', () => {
+    const stored = { show: 'away' as const, status: 'Lunch' };
+    expect(signInPresence(stored, { signInShow: 'chat', signInStatus: '  Hello ' })).toEqual({
+      show: 'chat',
+      status: 'Hello'
+    });
+    expect(signInPresence(stored, { signInShow: 'dnd', signInStatus: '' })).toEqual({
+      show: 'dnd',
+      status: 'Lunch'
+    });
   });
 });

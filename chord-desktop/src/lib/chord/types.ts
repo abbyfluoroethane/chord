@@ -364,6 +364,26 @@ export type Availability = 'available' | 'away' | 'dnd' | 'extendedAway' | 'invi
 export interface Profile {
   nickname: string | null;
   fullName: string | null;
+  /** The vCard4 note: the text "about me". */
+  about: string | null;
+  website: string | null;
+  pronouns: string | null;
+}
+
+/** The vCard4 fields that we write. An empty text removes the field. */
+export interface ProfileEdit {
+  fullName: string;
+  about: string;
+  website: string;
+  pronouns: string;
+}
+
+/** One online resource of our own account. `show` is null when it is available. */
+export interface Device {
+  resource: string;
+  show: 'chat' | 'away' | 'dnd' | 'xa' | null;
+  status: string | null;
+  priority: number;
 }
 
 export interface OwnPresence {

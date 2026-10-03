@@ -4,6 +4,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type {
   AppInfo,
+  Device,
   Availability,
   ChannelItem,
   ChannelScope,
@@ -31,6 +32,7 @@ import type {
   PendingJoin,
   Pin,
   Profile,
+  ProfileEdit,
   PushRegistration,
   RegistrationForm,
   RegistrationSubmission,
@@ -449,6 +451,12 @@ export const addContact = (jid: string, name?: string, preauth?: string) =>
 export const setNickname = (nickname: string | null) => invoke<void>('set_nickname', { nickname });
 /** The nickname and the vCard4 name of an account. Both can be null. */
 export const profile = (jid: Jid) => invoke<Profile>('profile', { jid });
+/** Write the vCard4 fields of our own profile. An empty text removes a field. */
+export const setProfile = (edit: ProfileEdit) => invoke<void>('set_profile', { edit });
+/** The resources of our own account that are online. */
+export const ownDevices = () => invoke<Device[]>('own_devices');
+/** Ask where to save the text, and write it there. False when the user cancelled. */
+export const saveText = (name: string, text: string) => invoke<boolean>('save_text', { name, text });
 export const removeContact = (jid: string) => invoke<void>('remove_contact', { jid });
 /** Rename a contact in the roster. An empty name or null clears it. The groups stay. */
 export const renameContact = (jid: string, name: string | null) =>
