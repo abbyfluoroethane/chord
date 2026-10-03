@@ -1,5 +1,14 @@
 package space.foid.chord.ui.components
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -85,6 +94,14 @@ fun ComposerBar(
 ) {
     val colors = Chord.colors
     val canSend = text.isNotBlank()
+    // The field keeps its own selection. When the text is set from outside (an edit starts), the
+    // cursor goes to the end, not to the start.
+    var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+    if (field.text != text) field = TextFieldValue(text, TextRange(text.length))
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(editing, replyingTo != null) {
+        if (editing || replyingTo != null) runCatching { focus.requestFocus() }
+    }
     Column(
         modifier
             .fillMaxWidth()
@@ -118,9 +135,12 @@ fun ComposerBar(
         ) {
             RoundButton(label = "Attach a file", onClick = onAttach, background = colors.surface300) { PlusGlyph(colors.inkMuted) }
             BasicTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier.weight(1f).then(inputModifier),
+                value = field,
+                onValueChange = {
+                    field = it
+                    if (it.text != text) onTextChange(it.text)
+                },
+                modifier = Modifier.weight(1f).focusRequester(focus).then(inputModifier),
                 textStyle = ChordType.body.copy(color = colors.ink),
                 cursorBrush = SolidColor(colors.brand),
                 maxLines = 6,
