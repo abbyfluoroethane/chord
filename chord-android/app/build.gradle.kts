@@ -167,7 +167,27 @@ tasks.register<Sync>("exportPrebuilt") {
     into((findProperty("chord.exportTo") as String?) ?: repoRoot.resolve("target/android-prebuilt").path)
 }
 
+// The Kotlin part of rustls-platform-verifier must have the same version as the Rust crate
+// rustls-platform-verifier-android. Read it from Cargo.lock, so that the two never differ.
+val rustlsPlatformVerifierVersion: String =
+    repoRoot.resolve("Cargo.lock").readLines().let { lines ->
+        val name = lines.indexOfFirst { it.trim() == "name = \"rustls-platform-verifier-android\"" }
+        check(name >= 0) { "rustls-platform-verifier-android is not in Cargo.lock" }
+        lines.drop(name + 1).first { it.trimStart().startsWith("version = ") }
+            .substringAfter('"').substringBefore('"')
+    }
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.rustls" && requested.name == "rustls-platform-verifier") {
+            useVersion(rustlsPlatformVerifierVersion)
+        }
+    }
+}
+
 dependencies {
+    // Certificate verification for HTTPS uploads on Android. See docs/android-tls.md.
+    implementation(libs.rustls.platform.verifier)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)

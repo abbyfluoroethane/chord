@@ -23,3 +23,13 @@ futures-core.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+# Android only: the JNI entry point that initialises rustls-platform-verifier (src/android.rs).
+# Both crates are already in the tree through reqwest. Keep the versions equal to its.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.22", default-features = false }
+rustls-platform-verifier = "0.7"
+# hickory-resolver (SRV lookups of tokio-xmpp) reads the Android DNS servers through it.
+ndk-context = "0.1"
+# The same HTTP client as the upload in chord-core. Only the diagnostic probe uses it.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }

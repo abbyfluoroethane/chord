@@ -194,6 +194,10 @@ features = [
     "io-util",
 ]
 
+# CHORD PATCH: the Android certificate verifier (tls_common.rs, server_verifier).
+[target.'cfg(target_os = "android")'.dependencies.rustls-platform-verifier]
+version = "0.7"
+
 [dependencies.tokio-native-tls]
 version = "0.3"
 optional = true
