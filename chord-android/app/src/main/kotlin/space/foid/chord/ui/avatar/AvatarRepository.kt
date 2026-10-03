@@ -98,8 +98,9 @@ class AvatarRepository(
     }
 
     /**
-     * The avatar of [owner]. [owner] is a bare JID, or an address with a slash, which the source
-     * resolves. [hash] is the hash that a view item carries, or null. Returns null if there is no
+     * The avatar of [owner]. [owner] is an owner key: a bare JID, `room@service/nick` for an
+     * occupant, or `service/node` for a space. [hash] is the hash that a view item carries, or
+     * null. The core takes both keys as they are. Returns null if there is no
      * usable image. Safe to call from any thread.
      */
     suspend fun load(owner: String, hash: String?, sizePx: Int): ImageBitmap? {
@@ -147,15 +148,14 @@ class AvatarRepository(
 
     private suspend fun fetchUncached(key: Key, hashKnown: Boolean): ImageBitmap? {
         val src = source.value ?: return null
-        val owner = when {
-            '/' in key.owner -> src.realJid(key.owner)
-            '@' in key.owner -> key.owner
-            else -> null
-        } ?: return null
+        val owner = key.owner
+        val hash = key.hash.ifEmpty { null }
         var refreshed = false
         var attempt = 0
         while (true) {
-            val stored = guarded { src.avatar(owner) }
+            // The hash from the view comes first: the core shows it only when the image is
+            // stored. The owner key is the fallback, and the only key of an item with no hash.
+            val stored = guarded { hash?.let { src.avatar(it) } } ?: guarded { src.avatar(owner) }
             val bytes = stored?.bytes
             if (bytes != null) {
                 return withContext(decodeDispatcher) { guarded { decoder.decode(bytes, key.px) } }

@@ -6,6 +6,7 @@ use core::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use chord_core::actor::{self, ClientError, ClientHandle};
+use chord_core::features::avatars;
 use chord_core::session::native::NativeSession;
 use chord_core::session::{ServerAddr, SessionConfig};
 use chord_core::store::Store;
@@ -173,6 +174,24 @@ pub(crate) fn parse_server(s: &str) -> Result<ServerAddr, ChordError> {
     } else {
         ServerAddr::StartTls { host, port }
     })
+}
+
+/// Check an avatar key and return it as it is. Allowed: a hash, or a JID with or without a
+/// resource. `service/node` of a space is a JID with a domain and a resource. Whitespace
+/// and control characters are never part of a key.
+pub(crate) fn parse_avatar_key(s: &str) -> Result<String, ChordError> {
+    if avatars::is_hash(s) {
+        return Ok(s.to_owned());
+    }
+    if s.chars()
+        .any(|c| c.is_control() || (c.is_whitespace() && c != ' '))
+    {
+        return Err(ChordError::InvalidJid {
+            detail: format!("bad avatar key: {s:?}"),
+        });
+    }
+    parse_jid(s)?;
+    Ok(s.to_owned())
 }
 
 // ---- The client ----
@@ -1135,18 +1154,32 @@ impl ChordClient {
             .await
     }
 
-    /// The stored avatar of an account, a contact, or a room.
+    /// The stored avatar for `key`, or `None`. `key` is one of:
+    ///  - an avatar hash, 40 hex digits: the `avatar` of a `TimelineItem` or `MemberItem`
+    ///    (the best key for a view item: it never changes, and it is set only when the
+    ///    image is stored);
+    ///  - a bare JID: an account, a contact, or a room;
+    ///  - `room@service/nick`: an occupant of a room;
+    ///  - `service/node`: a space.
+    ///
+    /// Any other string is `InvalidJid`. It reads the store, so it needs a session
+    /// (`NotConnected` offline).
     pub async fn avatar(&self, owner: String) -> Result<Option<Avatar>, ChordError> {
-        let owner = parse_bare(&owner)?;
+        let key = parse_avatar_key(&owner)?;
         let avatar = self
-            .call(move |h| async move { h.avatar(owner).await })
+            .call(move |h| async move { h.avatar_by_key(key).await })
             .await?;
         Ok(avatar.map(Into::into))
     }
 
-    /// Fetch the avatar of `owner` from the server again.
+    /// Fetch the avatar of `owner` from the server again. A bare JID is fetched. An
+    /// occupant key, a space key and a hash are valid, but give no request: the core gets
+    /// those avatars from presence and space events. Other strings are `InvalidJid`.
     pub async fn refresh_avatar(&self, owner: String) -> Result<(), ChordError> {
-        let owner = parse_bare(&owner)?;
+        parse_avatar_key(&owner)?;
+        let Ok(owner) = parse_bare(&owner) else {
+            return Ok(());
+        };
         self.call(move |h| async move { h.refresh_avatar(owner).await })
             .await
     }
@@ -1271,6 +1304,33 @@ mod tests {
 
     fn client() -> Arc<ChordClient> {
         ChordClient::new(":memory:".into(), "alice@example.org".into()).unwrap()
+    }
+
+    #[test]
+    fn avatar_keys_are_checked() {
+        let hash = "0123456789abcdef0123456789abcdef01234567";
+        for ok in [
+            hash,
+            "bob@example.org",
+            "room@conference.example.org/Some Nick",
+            "pubsub.example.org/space-node",
+        ] {
+            assert_eq!(parse_avatar_key(ok).unwrap(), ok);
+        }
+        for bad in [
+            "",
+            "/",
+            "@",
+            "a@b@c",
+            "bob@example.org/\u{0}x",
+            "a b@example.org",
+            "x\ny@z",
+        ] {
+            assert!(
+                matches!(parse_avatar_key(bad), Err(ChordError::InvalidJid { .. })),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
