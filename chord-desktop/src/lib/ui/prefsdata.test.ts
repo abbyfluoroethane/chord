@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CHAT_DEFAULTS, parseLegacy, parsePrefs, resolvePrefs } from './prefsdata';
+import { CHAT_DEFAULTS, hourCycleOf, parseLegacy, parsePrefs, resolvePrefs } from './prefsdata';
 
 describe('parsePrefs', () => {
   it('keeps good fields and drops bad ones', () => {
@@ -14,6 +14,46 @@ describe('parsePrefs', () => {
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});
+  });
+});
+
+describe('parsePrefs, appearance', () => {
+  it('keeps good appearance fields', () => {
+    const v = {
+      timeFormat: '12h',
+      groupSpacing: 'large',
+      jumboEmoji: false,
+      animateGifs: 'hover',
+      zoom: 125,
+      motion: 'reduce',
+      showPresence: false,
+      linkUnderline: 'hover'
+    };
+    expect(parsePrefs(v)).toEqual(v);
+  });
+  it('drops bad appearance fields', () => {
+    const bad = {
+      timeFormat: '13h',
+      groupSpacing: 3,
+      jumboEmoji: 'no',
+      animateGifs: true,
+      zoom: 'big',
+      motion: 'on',
+      showPresence: 1,
+      linkUnderline: 'never'
+    };
+    expect(parsePrefs(bad)).toEqual({});
+  });
+  it('keeps the zoom in range and whole', () => {
+    expect(parsePrefs({ zoom: 400 })).toEqual({ zoom: 150 });
+    expect(parsePrefs({ zoom: 10 })).toEqual({ zoom: 80 });
+    expect(parsePrefs({ zoom: 112.6 })).toEqual({ zoom: 113 });
+    expect(parsePrefs({ zoom: NaN })).toEqual({});
+  });
+  it('maps the time format to an hour cycle', () => {
+    expect(hourCycleOf('12h')).toBe('h12');
+    expect(hourCycleOf('24h')).toBe('h23');
+    expect(hourCycleOf('system')).toBeUndefined();
   });
 });
 
@@ -46,7 +86,6 @@ describe('Chat prefs', () => {
     expect(CHAT_DEFAULTS).toEqual({
       sendKey: 'enter',
       inlineMedia: true,
-      gifs: 'always',
       autoplayVideo: false,
       showSpoilers: false,
       emoticons: false,
@@ -58,7 +97,6 @@ describe('Chat prefs', () => {
     const v = {
       sendKey: 'mod-enter',
       inlineMedia: false,
-      gifs: 'hover',
       autoplayVideo: true,
       showSpoilers: true,
       emoticons: true,
@@ -69,7 +107,7 @@ describe('Chat prefs', () => {
   });
   it('drops bad Chat values', () => {
     expect(
-      parsePrefs({ sendKey: 'tab', inlineMedia: 1, gifs: 'never', autoplayVideo: 'yes', confirmDelete: null })
+      parsePrefs({ sendKey: 'tab', inlineMedia: 1, autoplayVideo: 'yes', confirmDelete: null })
     ).toEqual({});
   });
 });

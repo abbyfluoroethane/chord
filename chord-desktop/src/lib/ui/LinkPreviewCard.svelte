@@ -6,6 +6,7 @@
   import type { LinkPreview } from '$lib/chord/types';
   import { openLightbox, preloadLightbox } from './lightbox';
   import { linkPreviews } from './linkpreviews.svelte';
+  import { mayMove, still } from './still.svelte';
 
   let { preview }: { preview: LinkPreview } = $props();
 
@@ -37,7 +38,7 @@
       onfocus={preloadLightbox}
       aria-label="View image"
     >
-      <img src={image} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
+      <img src={image} alt="" use:still={{ moving: mayMove(image) }} loading="lazy" decoding="async" onerror={() => (broken = true)} />
     </button>
   {/if}
 {:else}
@@ -51,11 +52,11 @@
       {/if}
       {#if preview.description}<p class="desc">{preview.description}</p>{/if}
       {#if large && image}
-        <img class="large" src={image} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
+        <img class="large" src={image} alt="" use:still={{ moving: mayMove(image) }} loading="lazy" decoding="async" onerror={() => (broken = true)} />
       {/if}
     </div>
     {#if thumb && image}
-      <img class="small" src={image} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
+      <img class="small" src={image} alt="" use:still={{ moving: mayMove(image) }} loading="lazy" decoding="async" onerror={() => (broken = true)} />
     {/if}
   </div>
 {/if}

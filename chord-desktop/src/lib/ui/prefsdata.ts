@@ -16,22 +16,29 @@ export interface Saved {
   // Chat
   sendKey: SendKey;
   inlineMedia: boolean;
-  gifs: GifPlay;
   autoplayVideo: boolean;
   showSpoilers: boolean;
   emoticons: boolean;
   spellcheck: boolean;
   confirmDelete: boolean;
+  // Appearance
+  timeFormat: TimeFormat;
+  groupSpacing: GroupSpacing;
+  jumboEmoji: boolean;
+  animateGifs: AnimateGifs;
+  /** The zoom of the whole app, in percent. */
+  zoom: number;
+  motion: MotionMode;
+  showPresence: boolean;
+  linkUnderline: LinkUnderline;
 }
 
 export type SendKey = 'enter' | 'mod-enter';
-export type GifPlay = 'always' | 'hover';
 
 /** The Chat settings at first start. Each default keeps the behaviour from before the setting. */
 export const CHAT_DEFAULTS = {
   sendKey: 'enter',
   inlineMedia: true,
-  gifs: 'always',
   autoplayVideo: false,
   showSpoilers: false,
   emoticons: false,
@@ -41,13 +48,26 @@ export const CHAT_DEFAULTS = {
   Saved,
   | 'sendKey'
   | 'inlineMedia'
-  | 'gifs'
   | 'autoplayVideo'
   | 'showSpoilers'
   | 'emoticons'
   | 'spellcheck'
   | 'confirmDelete'
 >;
+export type TimeFormat = 'system' | '12h' | '24h';
+export type GroupSpacing = 'small' | 'normal' | 'large';
+export type AnimateGifs = 'always' | 'hover' | 'never';
+/** `system` follows the device. `reduce` always cuts motion. `full` never cuts it. */
+export type MotionMode = 'system' | 'reduce' | 'full';
+export type LinkUnderline = 'always' | 'hover';
+
+/** The Intl hour cycle for a time format. System gives none, so the locale decides. */
+export function hourCycleOf(f: TimeFormat): 'h12' | 'h23' | undefined {
+  return f === '12h' ? 'h12' : f === '24h' ? 'h23' : undefined;
+}
+
+export const ZOOM_MIN = 80;
+export const ZOOM_MAX = 150;
 
 /** The key in the settings file, and the old localStorage key of the same blob. */
 export const SETTINGS_KEY = 'prefs';
@@ -70,7 +90,6 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   // Chat
   if (o.sendKey === 'enter' || o.sendKey === 'mod-enter') out.sendKey = o.sendKey;
   if (typeof o.inlineMedia === 'boolean') out.inlineMedia = o.inlineMedia;
-  if (o.gifs === 'always' || o.gifs === 'hover') out.gifs = o.gifs;
   if (typeof o.autoplayVideo === 'boolean') out.autoplayVideo = o.autoplayVideo;
   if (typeof o.showSpoilers === 'boolean') out.showSpoilers = o.showSpoilers;
   if (typeof o.emoticons === 'boolean') out.emoticons = o.emoticons;
@@ -78,6 +97,19 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (typeof o.confirmDelete === 'boolean') out.confirmDelete = o.confirmDelete;
   if (typeof o.fontSize === 'number' && Number.isFinite(o.fontSize))
     out.fontSize = Math.min(20, Math.max(12, o.fontSize));
+  // Appearance
+  if (o.timeFormat === 'system' || o.timeFormat === '12h' || o.timeFormat === '24h')
+    out.timeFormat = o.timeFormat;
+  if (o.groupSpacing === 'small' || o.groupSpacing === 'normal' || o.groupSpacing === 'large')
+    out.groupSpacing = o.groupSpacing;
+  if (typeof o.jumboEmoji === 'boolean') out.jumboEmoji = o.jumboEmoji;
+  if (o.animateGifs === 'always' || o.animateGifs === 'hover' || o.animateGifs === 'never')
+    out.animateGifs = o.animateGifs;
+  if (typeof o.zoom === 'number' && Number.isFinite(o.zoom))
+    out.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(o.zoom)));
+  if (o.motion === 'system' || o.motion === 'reduce' || o.motion === 'full') out.motion = o.motion;
+  if (typeof o.showPresence === 'boolean') out.showPresence = o.showPresence;
+  if (o.linkUnderline === 'always' || o.linkUnderline === 'hover') out.linkUnderline = o.linkUnderline;
   return out;
 }
 

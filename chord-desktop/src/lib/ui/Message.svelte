@@ -256,7 +256,7 @@
     grid-template-columns: 40px minmax(0, 1fr);
     column-gap: var(--space-4);
     padding: 2px var(--space-4) 2px var(--space-4);
-    margin-top: 20px;
+    margin-top: var(--group-gap, 20px);
     transition: background var(--dur-fast);
   }
   .msg:focus {
@@ -346,6 +346,7 @@
     min-width: 0;
   }
   .hover-time {
+    white-space: nowrap;
     opacity: 0;
     align-self: center;
     font-size: 11px;
@@ -403,7 +404,7 @@
 
   /* Compact: times on the left, no avatars, tight rows */
   .msg.compact {
-    grid-template-columns: 48px minmax(0, 1fr);
+    grid-template-columns: var(--time-col, 48px) minmax(0, 1fr);
     column-gap: var(--space-2);
     margin-top: 0;
     padding-top: 1px;

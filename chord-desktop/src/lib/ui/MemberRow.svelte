@@ -4,6 +4,7 @@
   import Avatar from './Avatar.svelte';
   import Icon from './Icon.svelte';
   import { app } from './app.svelte';
+  import { prefs } from './prefs.svelte';
   import { tooltip } from './tooltip';
   import { presenceKind, type MemberItem } from './types';
   import { ui } from './ui.svelte';
@@ -29,7 +30,7 @@
     name={member.name}
     src={member.avatar}
     size={32}
-    presence={presenceKind(member.online, member.show)}
+    presence={prefs.showPresence ? presenceKind(member.online, member.show) : null}
     cut="var(--surface-side)"
   />
   <span class="text">

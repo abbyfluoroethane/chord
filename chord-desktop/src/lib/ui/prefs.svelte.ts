@@ -8,7 +8,36 @@ import type { DisplayMode } from './types';
 import type { EmojiPackId } from './emojipackids';
 import { live } from './bridge';
 import { settings } from './local';
-import { CHAT_DEFAULTS, LEGACY_KEY, SETTINGS_KEY, resolvePrefs, type GifPlay, type SendKey, type Saved } from './prefsdata';
+import {
+  LEGACY_KEY,
+  SETTINGS_KEY,
+  CHAT_DEFAULTS,
+  resolvePrefs,
+  type AnimateGifs,
+  type GroupSpacing,
+  type LinkUnderline,
+  type MotionMode,
+  type Saved,
+  type SendKey,
+  type TimeFormat
+} from './prefsdata';
+
+const GROUP_GAP = { small: '8px', normal: '20px', large: '32px' } as const;
+
+/** The webview zooms the whole page, so popups and scroll stay exact. The preview uses CSS zoom. */
+async function applyZoom(percent: number) {
+  const factor = percent / 100;
+  if (live) {
+    try {
+      const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+      await getCurrentWebview().setZoom(factor);
+    } catch {
+      /* no zoom: the page keeps its size */
+    }
+    return;
+  }
+  document.documentElement.style.zoom = factor === 1 ? '' : String(factor);
+}
 
 class Prefs {
   desktopNotifications = $state(true);
@@ -23,11 +52,19 @@ class Prefs {
   shareInfo = $state(true);
   /** The images for emoji. Twemoji ships with the app. */
   emojiPack = $state<EmojiPackId>('twemoji');
+  // Appearance. The defaults keep the look of the first version.
+  timeFormat = $state<TimeFormat>('24h');
+  groupSpacing = $state<GroupSpacing>('normal');
+  jumboEmoji = $state(true);
+  animateGifs = $state<AnimateGifs>('always');
+  zoom = $state(100);
+  motion = $state<MotionMode>('system');
+  showPresence = $state(true);
+  linkUnderline = $state<LinkUnderline>('always');
 
   // Chat
   sendKey = $state<SendKey>(CHAT_DEFAULTS.sendKey);
   inlineMedia = $state<boolean>(CHAT_DEFAULTS.inlineMedia);
-  gifs = $state<GifPlay>(CHAT_DEFAULTS.gifs);
   autoplayVideo = $state<boolean>(CHAT_DEFAULTS.autoplayVideo);
   showSpoilers = $state<boolean>(CHAT_DEFAULTS.showSpoilers);
   emoticons = $state<boolean>(CHAT_DEFAULTS.emoticons);
@@ -46,6 +83,8 @@ class Prefs {
     // Live, the file is the home. A migrated value goes there now.
     if (live && migrate) this.save();
     this.applyFont();
+    this.applyLook();
+    if (this.zoom !== 100) void applyZoom(this.zoom);
   }
 
   /** Change one setting, save all, and apply the font size. */
@@ -53,6 +92,8 @@ class Prefs {
     (this as unknown as Saved)[key] = value;
     this.save();
     if (key === 'fontSize') this.applyFont();
+    this.applyLook();
+    if (key === 'zoom') void applyZoom(this.zoom);
   }
 
   private snapshot(): Saved {
@@ -69,12 +110,20 @@ class Prefs {
       // Chat
       sendKey: this.sendKey,
       inlineMedia: this.inlineMedia,
-      gifs: this.gifs,
       autoplayVideo: this.autoplayVideo,
       showSpoilers: this.showSpoilers,
       emoticons: this.emoticons,
       spellcheck: this.spellcheck,
-      confirmDelete: this.confirmDelete
+      confirmDelete: this.confirmDelete,
+      // Appearance
+      timeFormat: this.timeFormat,
+      groupSpacing: this.groupSpacing,
+      jumboEmoji: this.jumboEmoji,
+      animateGifs: this.animateGifs,
+      zoom: this.zoom,
+      motion: this.motion,
+      showPresence: this.showPresence,
+      linkUnderline: this.linkUnderline
     };
   }
 
@@ -89,6 +138,22 @@ class Prefs {
     } catch {
       /* ignore */
     }
+  }
+
+  /** True when motion must be cut: the choice, or the device when the choice is system. */
+  get reduceMotion(): boolean {
+    if (this.motion !== 'system') return this.motion === 'reduce';
+    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  /** Put the look prefs on the root element. The style sheets read them there. */
+  private applyLook() {
+    const root = document.documentElement;
+    root.dataset.motion = this.motion;
+    root.dataset.links = this.linkUnderline;
+    // A 12-hour time needs a wider column in the compact view.
+    root.style.setProperty('--time-col', this.timeFormat === '24h' ? '48px' : '68px');
+    root.style.setProperty('--group-gap', GROUP_GAP[this.groupSpacing]);
   }
 
   private applyFont() {

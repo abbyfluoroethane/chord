@@ -10,6 +10,7 @@
   import RoundButton from './RoundButton.svelte';
   import { contactsStore } from './contacts.svelte';
   import { idleLabel } from './idle';
+  import { prefs } from './prefs.svelte';
   import { presenceKind, presenceLabel, type ContactItem } from './types';
   import { ui } from './ui.svelte';
 
@@ -52,7 +53,7 @@
     name={item.name}
     src={item.avatar}
     size={32}
-    presence={kind === 'contact' ? presence : null}
+    presence={kind === 'contact' && prefs.showPresence ? presence : null}
     cut="var(--surface-100)"
   />
   <div class="text">

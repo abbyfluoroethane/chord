@@ -6,15 +6,11 @@
   import SettingRow from './SettingRow.svelte';
   import Toggle from './Toggle.svelte';
   import { prefs } from './prefs.svelte';
-  import type { GifPlay, SendKey } from './prefsdata';
+  import type { SendKey } from './prefsdata';
 
   const sendKeys: { value: SendKey; label: string }[] = [
     { value: 'enter', label: 'Enter' },
     { value: 'mod-enter', label: 'Ctrl+Enter' }
-  ];
-  const gifModes: { value: GifPlay; label: string }[] = [
-    { value: 'always', label: 'Always' },
-    { value: 'hover', label: 'On hover' }
   ];
 </script>
 
@@ -41,9 +37,6 @@
     label="Show photos and videos"
     onchange={(v) => prefs.set('inlineMedia', v)}
   />
-</SettingRow>
-<SettingRow title="Play GIFs" hint="Animate a GIF only while the pointer is on it.">
-  <Segmented label="Play GIFs" value={prefs.gifs} options={gifModes} onchange={(v) => prefs.set('gifs', v)} />
 </SettingRow>
 <SettingRow title="Autoplay videos" hint="Videos start without sound when they load.">
   <Toggle

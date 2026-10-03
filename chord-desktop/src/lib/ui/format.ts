@@ -1,10 +1,19 @@
 // Time and text helpers. Wording follows the style guide: short and lower case.
+import { hourCycleOf } from './prefsdata';
+import { prefs } from './prefs.svelte';
 
-const pad = (n: number) => String(n).padStart(2, '0');
+const clocks = new Map<string, Intl.DateTimeFormat>();
 
+/** The time of day in the chosen format: 24-hour, 12-hour, or the system way. */
 export function clock(ts: number): string {
-  const d = new Date(ts);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const hourCycle = hourCycleOf(prefs.timeFormat);
+  const key = hourCycle ?? 'system';
+  let f = clocks.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(undefined, { hour: hourCycle === 'h23' ? '2-digit' : 'numeric', minute: '2-digit', hourCycle });
+    clocks.set(key, f);
+  }
+  return f.format(ts);
 }
 
 function startOfDay(ts: number): number {
