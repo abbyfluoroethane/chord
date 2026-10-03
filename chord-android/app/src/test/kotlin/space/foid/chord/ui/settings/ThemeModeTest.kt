@@ -36,6 +36,7 @@ class ThemeModeTest {
         assertEquals(ConnectionNotice.SignedOut, ConnectionState.AuthFailed("no").notice())
         assertEquals(null, ConnectionState.Connected("a@b.c/r", false).notice())
         assertEquals(null, ConnectionState.Disconnected.notice())
-        assertEquals(null, ConnectionState.LoginFailed(ConnectFailure.Timeout).notice())
+        assertEquals(ConnectionNotice.Offline, ConnectionState.LoginFailed(ConnectFailure.Timeout).notice())
+        assertEquals(ConnectionNotice.SignedOut, ConnectionState.LoginFailed(ConnectFailure.AuthFailed("no")).notice())
     }
 }

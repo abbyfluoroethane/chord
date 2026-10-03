@@ -74,7 +74,8 @@ class ChordConnectionService : LifecycleService() {
         if (session.client.value == null) {
             lifecycleScope.launch {
                 val restored = try {
-                    session.restore()
+                    // The same offline-first start as the activity: wait for ChordApp.startup.
+                    (application as ChordApp).startup.await()
                 } catch (_: Exception) {
                     false
                 }
@@ -120,7 +121,8 @@ class ChordConnectionService : LifecycleService() {
             ConnectionState.Connecting, null -> "Connecting…"
             ConnectionState.Suspended -> "Offline, retrying"
             is ConnectionState.AuthFailed -> "Sign-in needed"
-            is ConnectionState.LoginFailed -> "Sign-in failed"
+            is ConnectionState.LoginFailed ->
+                if (state.failure is uniffi.chord_ffi.ConnectFailure.AuthFailed) "Sign-in failed" else "Offline, retrying"
             ConnectionState.Disconnected -> "Offline"
         }
     }

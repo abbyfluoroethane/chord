@@ -1,6 +1,14 @@
 package space.foid.chord.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import uniffi.chord_ffi.ChordException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -11,6 +19,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import uniffi.chord_ffi.ChordClient
 import uniffi.chord_ffi.ClientEvent
@@ -27,6 +36,10 @@ import java.io.File
  * state or event of the login is missed. The client is published only after the login
  * succeeded. A failed login closes the client again and rethrows the error.
  *
+ * [restore] works offline first: it opens the store of the saved account, publishes the client
+ * and starts the service at once, then logs in in the background. A network failure retries
+ * with a growing delay. Only a real auth failure ends the session (see [authFailed]).
+ *
  * @param accountsDir the directory with one store `<jid>.db` for each account
  * @param clientFactory opens a client for a database path and an account. A test replaces it.
  */
@@ -35,11 +48,13 @@ class ChordSessionImpl(
     private val credentials: CredentialStore,
     private val service: ServiceControl,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val clientFactory: (dbPath: String, account: String) -> ChordClient =
         { path, account -> ChordClient(path, account) },
 ) : ChordSession {
     private val mutex = Mutex()
     private var eventSub: Subscription? = null
+    private var connectJob: Job? = null
 
     private val _client = MutableStateFlow<ChordClient?>(null)
     override val client: StateFlow<ChordClient?> = _client.asStateFlow()
@@ -92,8 +107,53 @@ class ChordSessionImpl(
 
     override suspend fun restore(): Boolean {
         val saved = withContext(io) { credentials.load() } ?: return false
-        signIn(saved.jid, saved.password, saved.server)
+        mutex.withLock {
+            if (_client.value != null) return true
+            val newClient = withContext(io) {
+                val db = dbFile(saved.jid)
+                db.parentFile?.mkdirs()
+                clientFactory(db.absolutePath, saved.jid)
+            }
+            eventSub = newClient.subscribeEvents(listener)
+            _client.value = newClient
+            service.start()
+            connectJob = scope.launch { connectInBackground(newClient, saved) }
+        }
         return true
+    }
+
+    /** Log in until it works. A network failure waits and retries. An auth failure ends the session. */
+    private suspend fun connectInBackground(client: ChordClient, saved: Credentials) {
+        var wait = RETRY_FIRST_MS
+        while (currentCoroutineContext().isActive && _client.value === client) {
+            try {
+                client.login(saved.jid, saved.password, saved.server)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ChordException.AuthFailed) {
+                logWarn(TAG, "the saved credentials are not valid", e)
+                authFailed(client)
+                return
+            } catch (e: Exception) {
+                logWarn(TAG, "background login failed, retry in ${wait}ms", e)
+            }
+            delay(wait)
+            wait = minOf(wait * 2, RETRY_MAX_MS)
+        }
+    }
+
+    /** The server rejected the saved credentials: forget them, close the client and stop the service. */
+    private suspend fun authFailed(client: ChordClient) {
+        withContext(NonCancellable) {
+            mutex.withLock {
+                if (_client.value !== client) return@withLock
+                teardown(logout = false)
+                runCatching { withContext(io) { credentials.clear() } }
+                    .onFailure { logWarn(TAG, "could not clear the credentials", it) }
+                service.stop()
+            }
+        }
     }
 
     override suspend fun signOut() {
@@ -111,6 +171,8 @@ class ChordSessionImpl(
     private suspend fun teardown(logout: Boolean) {
         val old = _client.value
         val sub = eventSub
+        connectJob?.cancel()
+        connectJob = null
         eventSub = null
         _client.value = null
         if (old != null && logout) {
@@ -127,6 +189,8 @@ class ChordSessionImpl(
     private companion object {
         const val TAG = "ChordSession"
         const val EVENT_BUFFER = 256
+        const val RETRY_FIRST_MS = 2_000L
+        const val RETRY_MAX_MS = 20_000L
         val UNSAFE_FILE_CHARS = Regex("[^A-Za-z0-9@._-]")
     }
 }

@@ -33,7 +33,14 @@ interface ChordSession {
      */
     suspend fun signIn(jid: String, password: String, server: String)
 
-    /** Sign in again with the saved credentials, if there are any. Returns false if none. */
+    /**
+     * Offline-first start with the saved credentials. It opens the store of the saved account,
+     * publishes [client] and starts the service at once, with no network. The login runs in the
+     * background and retries after a network failure; [connection] shows the state. Returns false
+     * if there are no saved credentials, or true at once if a client is already open.
+     * A real auth failure of the background login clears the credentials, closes the client
+     * and sets [client] to null: the UI then shows the sign-in screen.
+     */
     suspend fun restore(): Boolean
 
     /** Log out, delete the saved credentials, close the client, and stop the service. */

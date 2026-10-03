@@ -3,6 +3,8 @@ package space.foid.chord.data
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,7 +44,7 @@ class RecordingServiceControl : ServiceControl {
 }
 
 /** A client without the native library: no handle, and every call that the session makes is overridden. */
-private class FakeClient(val log: MutableList<String>, val failLogin: Exception? = null) : ChordClient(NoHandle) {
+private class FakeClient(val log: MutableList<String>, val failLogin: () -> Exception? = { null }) : ChordClient(NoHandle) {
     var listener: ClientEventListener? = null
 
     override fun subscribeEvents(listener: ClientEventListener): Subscription {
@@ -54,7 +56,7 @@ private class FakeClient(val log: MutableList<String>, val failLogin: Exception?
     override suspend fun login(jid: String, password: String, server: String) {
         log += "login $jid $server"
         listener?.onEvent(ClientEvent.ConnectionState(ConnectionState.Connecting))
-        failLogin?.let { throw it }
+        failLogin()?.let { throw it }
         listener?.onEvent(ClientEvent.ConnectionState(ConnectionState.Connected("$jid/res", false)))
     }
 
@@ -67,6 +69,7 @@ private class FakeClient(val log: MutableList<String>, val failLogin: Exception?
     }
 }
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ChordSessionImplTest {
     @get:Rule val tmp = TemporaryFolder()
 
@@ -75,15 +78,17 @@ class ChordSessionImplTest {
     private val service = RecordingServiceControl()
     private var paths = ArrayList<String>()
     private var failLogin: Exception? = null
+    private var loginFailures: () -> Exception? = { failLogin }
 
-    private fun session() = ChordSessionImpl(
+    private fun session(scope: CoroutineScope = CoroutineScope(Dispatchers.Unconfined)) = ChordSessionImpl(
         accountsDir = tmp.root.resolve("accounts"),
         credentials = store,
         service = service,
         io = Dispatchers.Unconfined,
+        scope = scope,
         clientFactory = { path, _ ->
             paths += path
-            FakeClient(log, failLogin)
+            FakeClient(log, loginFailures)
         },
     )
 
@@ -145,12 +150,76 @@ class ChordSessionImplTest {
     }
 
     @Test
-    fun restoreSignsInWithTheSavedCredentials() = runTest {
+    fun restoreOpensTheClientAtOnceAndLogsInInTheBackground() = runTest {
         store.saved = Credentials("bob@x.org", "secret", "starttls://h:5222")
-        val s = session()
+        val s = session(backgroundScope)
         assertTrue(s.restore())
-        assertTrue(log.contains("login bob@x.org starttls://h:5222"))
+        // Published before any login ran: the cached data shows with no network.
         assertNotNull(s.client.value)
+        assertEquals(listOf("subscribe"), log)
+        assertEquals(listOf("start"), service.calls)
+        runCurrent()
+        assertTrue(log.contains("login bob@x.org starttls://h:5222"))
+        assertEquals(ConnectionState.Connected("bob@x.org/res", false), s.connection.value)
+    }
+
+    @Test
+    fun aNetworkFailureKeepsTheUserInAndRetries() = runTest {
+        store.saved = Credentials("bob@x.org", "secret", "")
+        var tries = 0
+        loginFailures = { if (tries++ < 2) ChordException.Unreachable("no network") else null }
+        val s = session(backgroundScope)
+        assertTrue(s.restore())
+        runCurrent()
+        assertNotNull(s.client.value)
+        assertEquals(1, tries)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals(3, tries)
+        assertNotNull(s.client.value)
+        assertNotNull(store.saved)
+        assertEquals(ConnectionState.Connected("bob@x.org/res", false), s.connection.value)
+        assertEquals(listOf("start"), service.calls)
+    }
+
+    @Test
+    fun anAuthFailureSendsTheUserToSignIn() = runTest {
+        store.saved = Credentials("bob@x.org", "secret", "")
+        loginFailures = { ChordException.AuthFailed("bad password") }
+        val s = session(backgroundScope)
+        assertTrue(s.restore())
+        runCurrent()
+        assertNull(s.client.value)
+        assertNull(store.saved)
+        assertEquals(listOf("start", "stop"), service.calls)
+        assertEquals("close", log.last())
+    }
+
+    @Test
+    fun restoreTwiceKeepsTheSameClient() = runTest {
+        store.saved = Credentials("bob@x.org", "secret", "")
+        val s = session(backgroundScope)
+        assertTrue(s.restore())
+        val first = s.client.value
+        assertTrue(s.restore())
+        assertTrue(first === s.client.value)
+        assertEquals(listOf("start"), service.calls)
+    }
+
+    @Test
+    fun signOutStopsTheBackgroundLogin() = runTest {
+        store.saved = Credentials("bob@x.org", "secret", "")
+        var tries = 0
+        loginFailures = { tries++; ChordException.Unreachable("no network") }
+        val s = session(backgroundScope)
+        s.restore()
+        runCurrent()
+        s.signOut()
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertEquals(1, tries)
+        assertNull(s.client.value)
+        assertNull(store.saved)
     }
 
     @Test

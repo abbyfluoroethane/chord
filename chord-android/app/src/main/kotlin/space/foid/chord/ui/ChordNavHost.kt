@@ -2,6 +2,7 @@ package space.foid.chord.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
@@ -28,6 +29,16 @@ private const val SETTINGS = "settings"
 fun ChordNavHost(startSignedIn: Boolean, openPeer: String?) {
     val nav = rememberNavController()
     val notificationPermission = rememberNotificationPermission()
+    // A real auth failure of the background login closes the client: go to sign-in.
+    val appSession = (LocalContext.current.applicationContext as? ChordApp)?.session
+    LaunchedEffect(appSession) {
+        appSession?.client?.collect { client ->
+            val route = nav.currentDestination?.route
+            if (client == null && route != null && route != SIGN_IN && nav.currentBackStackEntry != null) {
+                nav.navigate(SIGN_IN) { popUpTo(0) { inclusive = true }; launchSingleTop = true }
+            }
+        }
+    }
     NavHost(
         navController = nav,
         startDestination = if (startSignedIn) MAIN else SIGN_IN,

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private var openPeer by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Startup.mark("activity.onCreate")
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
         splash.setKeepOnScreenCondition { startSignedIn == null }
@@ -46,18 +48,16 @@ class MainActivity : ComponentActivity() {
         )
         openPeer = peerOf(intent)
 
-        val session = (application as ChordApp).session
-        if (session.client.value != null) {
-            startSignedIn = true
-        } else {
-            lifecycleScope.launch {
-                startSignedIn = try {
-                    session.restore()
-                } catch (e: Exception) {
-                    logWarn("MainActivity", "restore failed", e)
-                    false
-                }
+        // The saved account opens offline (ChordApp.startup). The login runs in the background.
+        val app = application as ChordApp
+        lifecycleScope.launch {
+            startSignedIn = try {
+                app.startup.await()
+            } catch (e: Exception) {
+                logWarn("MainActivity", "restore failed", e)
+                false
             }
+            Startup.mark("activity.startSignedIn=$startSignedIn")
         }
 
         val settings = PrefsSettingsStore.get(this)
@@ -74,7 +74,14 @@ class MainActivity : ComponentActivity() {
             }
             ChordTheme(dark = dark) {
                 Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-                    startSignedIn?.let { signedIn -> ChordNavHost(startSignedIn = signedIn, openPeer = openPeer) }
+                    startSignedIn?.let { signedIn ->
+                        ChordNavHost(startSignedIn = signedIn, openPeer = openPeer)
+                        // The splash ends with the first frame of real content.
+                        LaunchedEffect(Unit) {
+                            Startup.mark("content.firstFrame")
+                            reportFullyDrawn()
+                        }
+                    }
                 }
             }
         }

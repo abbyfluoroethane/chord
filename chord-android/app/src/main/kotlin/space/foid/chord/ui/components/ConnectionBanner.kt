@@ -65,7 +65,10 @@ fun ConnectionState.notice(): ConnectionNotice? = when (this) {
     is ConnectionState.Connecting -> ConnectionNotice.Connecting
     is ConnectionState.Suspended -> ConnectionNotice.Offline
     is ConnectionState.AuthFailed -> ConnectionNotice.SignedOut
-    // Connected: all is well. LoginFailed and Disconnected belong to the sign-in screen.
+    // The background login after an offline start: the session retries by itself.
+    is ConnectionState.LoginFailed ->
+        if (failure is uniffi.chord_ffi.ConnectFailure.AuthFailed) ConnectionNotice.SignedOut else ConnectionNotice.Offline
+    // Connected: all is well. Disconnected means nobody is signed in.
     else -> null
 }
 
