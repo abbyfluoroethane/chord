@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import space.foid.chord.data.ChatApi
@@ -22,7 +23,9 @@ import space.foid.chord.data.logWarn
 import space.foid.chord.data.stableKey
 import space.foid.chord.data.toListDiff
 import uniffi.chord_ffi.TimelineItem
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The messages of a room, a 1:1 chat, or the private chat with a room occupant ([TimelineTarget]).
@@ -70,6 +73,13 @@ class TimelineViewModel(
 
     /** Plain-English text of the last failure to follow the timeline, or null. */
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _uploads = MutableStateFlow<List<UploadUi>>(emptyList())
+    private val uploadSources = ConcurrentHashMap<Long, suspend () -> UploadFile>()
+    private val nextUploadId = AtomicLong(1)
+
+    /** The attachments that are not sent yet or failed, oldest first. */
+    val uploads: StateFlow<List<UploadUi>> = _uploads.asStateFlow()
 
     private var typingJob: Job? = null
     private var typing = false
@@ -135,6 +145,55 @@ class TimelineViewModel(
     fun retract(itemId: String) = act { it.retract(itemId) }
 
     fun toggleReaction(itemId: String, emoji: String) = act { it.toggleReaction(itemId, emoji) }
+
+    /**
+     * Send a file. The row shows in [uploads] at once. [prepare] reads the file (and shrinks a
+     * photo): it must move the work off the main thread itself. The core sends the message
+     * when the upload is done. A failure keeps the row as FAILED, with [retryUpload].
+     */
+    fun upload(name: String, prepare: suspend () -> UploadFile): Long {
+        val id = nextUploadId.getAndIncrement()
+        uploadSources[id] = prepare
+        _uploads.update { it + UploadUi(id, name, UploadStage.PREPARING) }
+        runUpload(id)
+        return id
+    }
+
+    /** Try a failed upload again. */
+    fun retryUpload(id: Long) {
+        val row = _uploads.value.firstOrNull { it.id == id } ?: return
+        if (row.stage != UploadStage.FAILED) return
+        setUpload(id) { it.copy(stage = UploadStage.PREPARING, error = null) }
+        runUpload(id)
+    }
+
+    /** Remove a failed upload row. */
+    fun dismissUpload(id: Long) {
+        uploadSources.remove(id)
+        _uploads.update { list -> list.filterNot { it.id == id } }
+    }
+
+    private fun setUpload(id: Long, change: (UploadUi) -> UploadUi) =
+        _uploads.update { list -> list.map { if (it.id == id) change(it) else it } }
+
+    private fun runUpload(id: Long) {
+        val prepare = uploadSources[id] ?: return
+        scope.launch {
+            try {
+                val file = prepare()
+                setUpload(id) { it.copy(name = file.name, stage = UploadStage.UPLOADING) }
+                val a = api.first() ?: throw UploadException("You are not signed in.")
+                a.upload(target, file.name, file.contentType, file.bytes)
+                dismissUpload(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn(TAG, "upload failed", e)
+                val text = describeUploadError(e)
+                setUpload(id) { it.copy(stage = UploadStage.FAILED, error = text) }
+            }
+        }
+    }
 
     /** Mark the chat as read, and tell the peer. A failure is only logged. */
     fun markRead() {

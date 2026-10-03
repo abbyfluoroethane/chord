@@ -262,6 +262,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     // Installs the baseline profiles that the libraries bring, for a faster start.
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.androidx.exifinterface)
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)

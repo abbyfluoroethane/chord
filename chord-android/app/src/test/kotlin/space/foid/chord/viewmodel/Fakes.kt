@@ -101,4 +101,13 @@ class FakeChatApi : ChatApi {
     override suspend fun toggleReaction(itemId: String, emoji: String) = record("react $itemId $emoji")
     override suspend fun markRead(target: TimelineTarget) = record("markRead")
     override suspend fun setTyping(target: TimelineTarget, typing: Boolean) = record("typing $typing")
+
+    /** Set to suspend an upload, for example to see the pending state. */
+    var onUpload: suspend () -> Unit = {}
+
+    override suspend fun upload(target: TimelineTarget, filename: String, contentType: String, data: ByteArray): String {
+        onUpload()
+        record("upload $filename $contentType ${data.size}")
+        return "https://upload.example/$filename"
+    }
 }

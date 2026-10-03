@@ -48,6 +48,13 @@ interface ChatApi {
     suspend fun toggleReaction(itemId: String, emoji: String)
     suspend fun markRead(target: TimelineTarget)
     suspend fun setTyping(target: TimelineTarget, typing: Boolean)
+
+    /**
+     * Upload a file to the upload service of the server (XEP-0363) and send it to [target]. The
+     * core sends the message too: the body is the URL, with a link (XEP-0066) and file details
+     * (XEP-0447) for other clients. Returns the URL. The core has no progress for it.
+     */
+    suspend fun upload(target: TimelineTarget, filename: String, contentType: String, data: ByteArray): String
 }
 
 /** [ChatApi] on a [ChordClient]. */
@@ -105,6 +112,17 @@ class ClientChatApi(private val client: ChordClient) : ChatApi {
         is TimelineTarget.Room -> client.setTyping(target.jid, typing)
         is TimelineTarget.Private -> client.setTyping("${target.room}/${target.nick}", typing)
     }
+
+    override suspend fun upload(target: TimelineTarget, filename: String, contentType: String, data: ByteArray): String =
+        client.upload(
+            when (target) {
+                is TimelineTarget.Room -> target.jid
+                is TimelineTarget.Private -> "${target.room}/${target.nick}"
+            },
+            filename,
+            contentType,
+            data,
+        )
 
     private fun handle(onClose: () -> Unit) = object : ViewHandle {
         override fun close() = onClose()
