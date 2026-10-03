@@ -65,6 +65,8 @@ import space.foid.chord.ui.theme.ChordType
  * @param editing true while the user edits an own message: shows the "Editing message" strip.
  *   [onCancelEdit] must clear the text too, the bar does not touch it.
  * @param onAttach opens the file picker. The bar only calls it.
+ * @param inputModifier extra modifier of the text field (for example a test tag).
+ * @param sendModifier extra modifier of the send button.
  */
 @Composable
 fun ComposerBar(
@@ -78,6 +80,8 @@ fun ComposerBar(
     editing: Boolean = false,
     onCancelEdit: () -> Unit = {},
     onAttach: () -> Unit = {},
+    inputModifier: Modifier = Modifier,
+    sendModifier: Modifier = Modifier,
 ) {
     val colors = Chord.colors
     val canSend = text.isNotBlank()
@@ -116,7 +120,7 @@ fun ComposerBar(
             BasicTextField(
                 value = text,
                 onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).then(inputModifier),
                 textStyle = ChordType.body.copy(color = colors.ink),
                 cursorBrush = SolidColor(colors.brand),
                 maxLines = 6,
@@ -141,6 +145,7 @@ fun ComposerBar(
                 onClick = { if (canSend) onSend() },
                 background = if (canSend) colors.brand else colors.surface300,
                 enabled = canSend,
+                modifier = sendModifier,
             ) { SendGlyph(if (canSend) colors.onBrand else colors.inkMuted) }
         }
     }
@@ -175,10 +180,11 @@ private fun RoundButton(
     onClick: () -> Unit,
     background: Color,
     enabled: Boolean = true,
+    modifier: Modifier = Modifier,
     glyph: @Composable () -> Unit,
 ) {
     Box(
-        Modifier
+        modifier
             .size(ChordSize.avatar)
             .background(background, CircleShape)
             .semantics { contentDescription = label; role = Role.Button }
