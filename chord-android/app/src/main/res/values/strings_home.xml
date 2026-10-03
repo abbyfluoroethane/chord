@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Home list -->
+    <string name="home_find">Find or start a chat</string>
+    <string name="home_contacts">Contacts</string>
+    <plurals name="home_contacts_pending">
+        <item quantity="one">Contacts, %d request</item>
+        <item quantity="other">Contacts, %d requests</item>
+    </plurals>
+    <string name="home_messages">Messages</string>
+    <string name="home_empty">No chats yet. Tap Find or start a chat.</string>
+    <string name="home_loading">Loading</string>
+    <plurals name="home_members">
+        <item quantity="one">%d Member</item>
+        <item quantity="other">%d Members</item>
+    </plurals>
+
+    <!-- Find or start a chat -->
+    <string name="find_title">Find or start a chat</string>
+    <string name="find_back">Back</string>
+    <string name="find_placeholder">Where would you like to go?</string>
+    <string name="find_clear">Clear</string>
+    <string name="find_tip">Tip: start with # for rooms, or @ for people.</string>
+    <string name="find_empty">Nothing matches that.</string>
+    <string name="find_group_chat">Group chat</string>
+    <string name="find_message">Message</string>
+    <string name="find_room">Room</string>
+    <string name="find_space">Space</string>
+    <string name="find_message_address">Message %s</string>
+    <string name="find_message_address_hint">Person</string>
+    <string name="find_join_address">Join the room %s</string>
+    <string name="find_join_address_hint">Room</string>
+    <string name="find_open_link">Open %s</string>
+    <string name="find_open_link_hint">xmpp: link</string>
+</resources>

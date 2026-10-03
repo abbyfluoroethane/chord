@@ -61,6 +61,7 @@ import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.ChannelKind
 import space.foid.chord.ui.components.ChannelListItem
 import space.foid.chord.ui.components.RailIconKind
+import space.foid.chord.ui.home.HomeListContent
 import space.foid.chord.ui.join.DrawerHeaderActions
 import space.foid.chord.ui.components.SpaceRailIcon
 import space.foid.chord.ui.theme.Chord
@@ -152,6 +153,10 @@ fun ChannelDrawerContent(
     onInbox: () -> Unit = {},
     onNew: () -> Unit = {},
     onLongPress: (ChannelItem) -> Unit = {},
+    contacts: List<uniffi.chord_ffi.Contact> = emptyList(),
+    pendingContacts: Int = 0,
+    onFind: () -> Unit = {},
+    onContacts: () -> Unit = {},
 ) {
     val c = Chord.colors
     val isHome = scope is ChannelScope.Home
@@ -203,7 +208,14 @@ fun ChannelDrawerContent(
                 val collapsed = rememberSaveable(
                     saver = listSaver<SnapshotStateList<String>, String>(save = { it.toList() }, restore = { it.toMutableStateList() }),
                 ) { mutableStateListOf<String>() }
-                LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("channel_list")) {
+                if (isHome) {
+                    // Home is its own list: search, contacts, then the messages (ui/home/HomeList.kt).
+                    HomeListContent(
+                        channels = channels, loaded = loaded, selectedJid = selectedJid, contacts = contacts,
+                        pending = pendingContacts, onFind = onFind, onContacts = onContacts,
+                        onSelect = onSelect, onLongPress = onLongPress, modifier = Modifier.weight(1f),
+                    )
+                } else LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("channel_list")) {
                     if (sections.isEmpty()) {
                         item(key = "empty") {
                             Text(
@@ -273,7 +285,12 @@ fun ChannelDrawer(
     onInbox: () -> Unit = {},
     onNew: () -> Unit = {},
     onLongPress: (ChannelItem) -> Unit = {},
+    pendingContacts: Int = 0,
+    onFind: () -> Unit = {},
+    onContacts: () -> Unit = {},
 ) {
+    val contactsVm: space.foid.chord.viewmodel.ContactsViewModel = viewModel(factory = space.foid.chord.viewmodel.ContactsViewModel.factory)
+    val contactsState by contactsVm.state.collectAsState()
     val spaceVm: SpaceListViewModel = viewModel(factory = ChordViewModels.spaceList)
     val channelVm: ChannelListViewModel = viewModel(factory = ChordViewModels.channelList(scope))
     LaunchedEffect(scope) { channelVm.setScope(scope) }
@@ -292,6 +309,7 @@ fun ChannelDrawer(
         onOpenSettings = onOpenSettings,
         connection = rememberConnectionState().notice(),
         inboxCount = inboxCount, onInbox = onInbox, onNew = onNew, onLongPress = onLongPress,
+        contacts = contactsState.contacts, pendingContacts = pendingContacts, onFind = onFind, onContacts = onContacts,
         modifier = modifier,
     )
 }
