@@ -97,6 +97,26 @@ import space.foid.chord.ui.theme.ChordSize
 import space.foid.chord.ui.theme.ChordSpace
 import space.foid.chord.ui.theme.ChordType
 import space.foid.chord.ui.timeline.MessageUi
+import space.foid.chord.ui.timeline.DateSeparator
+import space.foid.chord.ui.timeline.JumpToPresent
+import space.foid.chord.ui.timeline.NewDivider
+import space.foid.chord.ui.timeline.RowChrome
+import space.foid.chord.ui.timeline.StartOfHistory
+import space.foid.chord.ui.timeline.TimelineHeaderContent
+import space.foid.chord.ui.timeline.TypingLine
+import space.foid.chord.ui.timeline.UnreadBar
+import space.foid.chord.ui.timeline.rowChrome
+import space.foid.chord.ui.timeline.typerNames
+import space.foid.chord.ui.timeline.typingText
+import space.foid.chord.ui.timeline.unreadBarText
+import space.foid.chord.ui.timeline.unreadCount
+import space.foid.chord.ui.timeline.unreadSince
+import space.foid.chord.ui.timeline.clockLabel
+import space.foid.chord.ui.components.Presence
+import space.foid.chord.viewmodel.MemberListViewModel
+import java.time.ZoneId
+import java.util.Locale
+import kotlinx.coroutines.flow.combine
 import space.foid.chord.ui.timeline.continuesGroup
 import space.foid.chord.ui.timeline.toMessageUi
 import space.foid.chord.viewmodel.ChordViewModels
@@ -105,17 +125,28 @@ import uniffi.chord_ffi.TimelineItem
 
 /** A message with the decision whether it continues the group above it. Built once per list change. */
 @Immutable
-data class TimelineRowUi(val message: MessageUi, val grouped: Boolean)
+data class TimelineRowUi(
+    val message: MessageUi,
+    val grouped: Boolean,
+    /** The chrome above this message: a date separator and the NEW line. */
+    val chrome: RowChrome = RowChrome(),
+)
 
 /**
  * Newest first, with the grouping flags. [oldestFirst] is the order of the core. This runs once
  * per list change, never in a row.
  */
-fun buildTimelineRows(oldestFirst: List<MessageUi>): List<TimelineRowUi> {
+fun buildTimelineRows(
+    oldestFirst: List<MessageUi>,
+    firstUnreadId: String? = null,
+    zone: ZoneId = ZoneId.systemDefault(),
+    locale: Locale = Locale.getDefault(),
+): List<TimelineRowUi> {
+    val chrome = rowChrome(oldestFirst, firstUnreadId, zone, locale)
     val out = ArrayList<TimelineRowUi>(oldestFirst.size)
     for (i in oldestFirst.indices.reversed()) {
         val prev = if (i > 0) oldestFirst[i - 1] else null
-        out.add(TimelineRowUi(oldestFirst[i], continuesGroup(prev, oldestFirst[i])))
+        out.add(TimelineRowUi(oldestFirst[i], continuesGroup(prev, oldestFirst[i], chrome[i].newDivider, zone), chrome[i]))
     }
     return out
 }
@@ -136,6 +167,10 @@ fun TimelineScreen(
     modifier: Modifier = Modifier,
     onXmppLink: ((String) -> Unit)? = null,
     direct: Boolean? = null,
+    /** How many messages were unread when the chat was opened. The NEW line goes at the first. */
+    unreadOnOpen: Int = 0,
+    /** The room subject. The core has no call to read it yet, so callers pass null. */
+    topic: String? = null,
 ) {
     val vm: TimelineViewModel = viewModel(key = target.toString(), factory = ChordViewModels.timeline(target))
 
@@ -145,10 +180,16 @@ fun TimelineScreen(
     val palette = Chord.colors.formatPalette()
     val rowsFlow = remember(vm, palette) {
         val account = (context.applicationContext as? ChordApp)?.session?.client?.value?.account()
-        vm.items
-            .mapLatest { list ->
+        combine(vm.items, vm.newFrom) { list, newFrom -> list to newFrom }
+            .mapLatest { (list, newFrom) ->
                 val names = ownMentionNames(account, list)
-                buildTimelineRows(list.map { it.toMessageUi(palette = palette, ownNames = names) })
+                val inRoom = target is TimelineTarget.Private ||
+                    (direct?.not() ?: (list.isEmpty() || list.any { '/' in it.sender }))
+                val now = System.currentTimeMillis()
+                buildTimelineRows(
+                    list.map { it.toMessageUi(palette = palette, ownNames = names, now = now, account = account, inRoom = inRoom) },
+                    firstUnreadId = newFrom,
+                )
             }
             .flowOn(Dispatchers.Default)
     }
@@ -179,6 +220,10 @@ fun TimelineScreen(
     LaunchedEffect(vm) {
         vm.errors.collect { error = it }
     }
+    LaunchedEffect(vm, unreadOnOpen) { vm.openWithUnread(unreadOnOpen) }
+    val newFrom by vm.newFrom.collectAsStateWithLifecycle()
+    var barGone by remember(vm, unreadOnOpen) { mutableStateOf(false) }
+    val typers by vm.typers.collectAsStateWithLifecycle()
     LaunchedEffect(error) {
         if (error != null) {
             delay(4_000)
@@ -225,6 +270,21 @@ fun TimelineScreen(
     val items by vm.items.collectAsStateWithLifecycle()
     val isRoom = target is TimelineTarget.Room &&
         (direct?.not() ?: (items.isEmpty() || items.any { '/' in it.sender }))
+    val unreadBar = remember(rows, newFrom) {
+        val oldestFirst = rows.map { it.message }.asReversed()
+        val count = unreadCount(oldestFirst, newFrom)
+        val since = unreadSince(oldestFirst, newFrom)
+        if (count > 0 && since != null) unreadBarText(count, clockLabel(since)) else null
+    }
+    // The presence of the other person in a 1:1 chat: the member list has both people.
+    val peerPresence = if (!isRoom && target is TimelineTarget.Room) {
+        val members by viewModel<MemberListViewModel>(
+            key = "dm-presence/${target.jid}",
+            factory = ChordViewModels.memberList(bareJid(target.jid)),
+        ).members.collectAsStateWithLifecycle()
+        val account = remember { (context.applicationContext as? ChordApp)?.session?.client?.value?.account() }
+        dmPeerPresence(members, account)
+    } else null
     val replying = (mode as? Compose.Reply)?.message
     val editing = (mode as? Compose.Edit)?.message
 
@@ -232,6 +292,14 @@ fun TimelineScreen(
         rows = rows,
         title = title,
         isRoom = isRoom,
+        topic = topic,
+        presence = peerPresence,
+        unreadBar = unreadBar.takeIf { !barGone },
+        onMarkRead = {
+            barGone = true
+            vm.markRead()
+        },
+        typing = typingText(typerNames(typers, if (isRoom) null else title)),
         loaded = loaded,
         loadingOlder = loadingOlder,
         reachedStart = reachedStart,
@@ -338,6 +406,13 @@ fun TimelineScreen(
     }
 }
 
+/** The presence of the other person in a 1:1 chat: the member that is not the own account. Null if unknown. */
+fun dmPeerPresence(members: List<uniffi.chord_ffi.MemberItem>, account: String?): Presence? {
+    val own = account?.let(::bareJid)
+    val peer = members.firstOrNull { m -> m.jid?.let(::bareJid) != own } ?: return null
+    return memberPresence(peer)
+}
+
 /** True when the newest row (index 0 of the reversed list) is at its resting place, bottom edge. */
 private fun LazyListState.isAtBottom(): Boolean = firstVisibleItemIndex == 0 && firstVisibleItemScrollOffset < 24
 
@@ -364,6 +439,13 @@ fun TimelineContent(
     title: String,
     modifier: Modifier = Modifier,
     isRoom: Boolean = true,
+    topic: String? = null,
+    presence: Presence? = null,
+    /** "13 new messages since 12:14" for the bar at the top, or null for no bar. */
+    unreadBar: String? = null,
+    onMarkRead: () -> Unit = {},
+    /** The typing line, "Bay is typing…", or empty. */
+    typing: String = "",
     loaded: Boolean = true,
     loadingOlder: Boolean = false,
     reachedStart: Boolean = false,
@@ -392,7 +474,14 @@ fun TimelineContent(
 ) {
     val colors = Chord.colors
     Column(modifier.fillMaxSize().background(colors.surface100)) {
-        TopBar(title = title, isRoom = isRoom, onOpenChannels = onOpenChannels, onOpenMembers = onOpenMembers)
+        TimelineHeaderContent(
+            title = title,
+            isRoom = isRoom,
+            onOpenChannels = onOpenChannels,
+            onOpenMembers = onOpenMembers,
+            topic = topic,
+            presence = presence,
+        )
         ConnectionBanner()
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val newestKey = rows.firstOrNull()?.message?.id
@@ -439,31 +528,23 @@ fun TimelineContent(
                 if (loadingOlder) {
                     item(key = "loading-older", contentType = "loading") { LoadingRow() }
                 }
-                if (reachedStart) {
-                    item(key = "beginning", contentType = "beginning") { BeginningHeader(title, isRoom) }
+                if (reachedStart && rows.isNotEmpty()) {
+                    item(key = "beginning", contentType = "beginning") { StartOfHistory(title, isRoom) }
                 }
             }
 
+            // An empty chat shows the start of the history at the top, as the desktop does.
             if (loaded && rows.isEmpty()) {
-                Column(
-                    Modifier.fillMaxSize().padding(ChordSpace.s6),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text("No messages yet", style = ChordType.name, color = colors.ink)
-                    Text(
-                        "Say hello in ${if (isRoom) "#" else ""}$title.",
-                        style = ChordType.body,
-                        color = colors.inkMuted,
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                StartOfHistory(title, isRoom, Modifier.align(Alignment.TopStart))
+            }
+            if (unreadBar != null) {
+                UnreadBar(unreadBar, onMarkRead, Modifier.align(Alignment.TopCenter))
             }
 
             val away by remember(listState) { derivedStateOf { listState.firstVisibleItemIndex >= 2 } }
             if (away) {
                 val scope = androidx.compose.runtime.rememberCoroutineScope()
-                JumpPill(
+                JumpToPresent(
                     onClick = { scope.launch { listState.animateScrollToItem(0) } },
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = ChordSpace.s3),
                 )
@@ -473,6 +554,7 @@ fun TimelineContent(
             }
         }
         PendingUploads(uploads, onRetry = onRetryUpload, onDismiss = onDismissUpload)
+        TypingLine(typing)
         ComposerBar(
             text = composerText,
             onTextChange = onComposerChange,
@@ -502,128 +584,29 @@ private fun TimelineRow(
 ) {
     if (onRowComposed != null) SideEffect { onRowComposed(row.message.id) }
     val m = row.message
-    MessageRow(
-        message = m,
-        grouped = row.grouped,
-        avatar = { JidAvatar(owner = m.senderId, name = m.senderName, hash = m.avatarUrl) },
-        modifier = Modifier.testTag("message_row"),
-        onLongPress = { onLongPress(m) },
-        onReactionClick = { emoji -> onReactionClick(m.id, emoji) },
-        onRetryClick = { onRetry(m) },
-        onImageClick = { onImageClick(m) },
-        onXmppLink = onXmppLink,
-    )
-}
-
-@Composable
-private fun TopBar(title: String, isRoom: Boolean, onOpenChannels: () -> Unit, onOpenMembers: () -> Unit) {
-    val colors = Chord.colors
-    Column(Modifier.fillMaxWidth().background(colors.surface100).statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().height(ChordSize.bar), verticalAlignment = Alignment.CenterVertically) {
-            BarButton("Channels", onOpenChannels, Modifier.testTag("drawer_open_channels")) { MenuGlyph(colors.ink) }
-            if (isRoom) {
-                Text("#", style = ChordType.title, color = colors.inkMuted)
-                Text(
-                    title,
-                    style = ChordType.title,
-                    color = colors.ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(start = ChordSpace.s1),
-                )
-            } else {
-                JidAvatar(owner = title, name = title, size = 28.dp)
-                Text(
-                    title,
-                    style = ChordType.title,
-                    color = colors.ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(start = ChordSpace.s2),
-                )
-            }
-            BarButton("Members", onOpenMembers, Modifier.testTag("drawer_open_members")) { MembersGlyph(colors.ink) }
-        }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
+    Column {
+        // The chrome is part of the row, so the list keys and the scroll position stay as they are.
+        // The list is reversed, but a row draws top down: the chrome is above its message.
+        row.chrome.dayLabel?.let { DateSeparator(it) }
+        if (row.chrome.newDivider) NewDivider()
+        MessageRow(
+            message = m,
+            grouped = row.grouped,
+            avatar = { JidAvatar(owner = m.senderId, name = m.senderName, hash = m.avatarUrl) },
+            modifier = Modifier.testTag("message_row"),
+            onLongPress = { onLongPress(m) },
+            onReactionClick = { emoji -> onReactionClick(m.id, emoji) },
+            onRetryClick = { onRetry(m) },
+            onImageClick = { onImageClick(m) },
+            onXmppLink = onXmppLink,
+        )
     }
-}
-
-@Composable
-private fun BarButton(label: String, onClick: () -> Unit, modifier: Modifier, glyph: @Composable () -> Unit) {
-    Box(
-        modifier
-            .size(ChordSize.bar)
-            .semantics { contentDescription = label; role = Role.Button }
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { glyph() }
-}
-
-@Composable
-private fun MenuGlyph(color: Color) {
-    Box(
-        Modifier.size(20.dp).drawBehind {
-            val w = 2.dp.toPx()
-            for (f in listOf(0.2f, 0.5f, 0.8f)) {
-                drawLine(color, Offset(0f, size.height * f), Offset(size.width, size.height * f), w, StrokeCap.Round)
-            }
-        },
-    )
-}
-
-@Composable
-private fun MembersGlyph(color: Color) {
-    // A head and shoulders.
-    Box(
-        Modifier.size(22.dp).drawBehind {
-            val w = 2.dp.toPx()
-            drawCircle(color, radius = size.width * 0.19f, center = Offset(size.width / 2, size.height * 0.32f), style = Stroke(w))
-            drawArc(
-                color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
-                topLeft = Offset(size.width * 0.12f, size.height * 0.58f),
-                size = Size(size.width * 0.76f, size.height * 0.7f),
-                style = Stroke(w, cap = StrokeCap.Round),
-            )
-        },
-    )
 }
 
 @Composable
 private fun LoadingRow() {
     Box(Modifier.fillMaxWidth().padding(ChordSpace.s4), contentAlignment = Alignment.Center) {
-        Text("Loading older messages…", style = ChordType.bodySmall, color = Chord.colors.inkMuted)
-    }
-}
-
-@Composable
-private fun BeginningHeader(title: String, isRoom: Boolean) {
-    val colors = Chord.colors
-    Column(Modifier.fillMaxWidth().padding(horizontal = ChordSpace.s4, vertical = ChordSpace.s6)) {
-        Text(
-            "Beginning of ${if (isRoom) "#" else ""}$title",
-            style = ChordType.title,
-            color = colors.ink,
-        )
-        Text(
-            "This is the start of the conversation.",
-            style = ChordType.bodySmall,
-            color = colors.inkMuted,
-            modifier = Modifier.padding(top = ChordSpace.s1),
-        )
-    }
-}
-
-@Composable
-private fun JumpPill(onClick: () -> Unit, modifier: Modifier) {
-    val colors = Chord.colors
-    Box(
-        modifier
-            .background(colors.brand, CircleShape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = ChordSpace.s4, vertical = ChordSpace.s2)
-            .testTag("jump_to_latest"),
-    ) {
-        Text("Jump to latest", style = ChordType.label, color = colors.onBrand)
+        Text(stringResource(R.string.timeline_loading_older), style = ChordType.bodySmall, color = Chord.colors.inkMuted)
     }
 }
 

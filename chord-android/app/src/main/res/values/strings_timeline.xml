@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="timeline_open_channels">Channels</string>
+    <string name="timeline_open_members">Members</string>
+    <string name="timeline_open_profile">Profile</string>
+    <string name="timeline_topic_expand">Show the whole topic</string>
+    <string name="timeline_topic_collapse">Hide the topic</string>
+    <string name="timeline_new_divider">New</string>
+    <string name="timeline_new_divider_description">New messages</string>
+    <string name="timeline_mark_read">Mark as read</string>
+    <string name="timeline_jump_to_present">Jump to present</string>
+    <string name="timeline_older_messages">You are viewing older messages.</string>
+    <string name="timeline_loading_older">Loading older messages…</string>
+    <string name="timeline_typing_description">Typing</string>
+</resources>

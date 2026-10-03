@@ -89,6 +89,8 @@ fun MainScreen(
     var selectedName by rememberSaveable { mutableStateOf(openPeer?.let(::bareJid)?.substringBefore('@').orEmpty()) }
     // Null when the kind is not known, for example after a notification tap.
     var selectedDirect by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    // The unread count of the chat when it was picked. The timeline puts its NEW line there.
+    var selectedUnread by remember { mutableStateOf(0) }
     var scopeKey by rememberSaveable { mutableStateOf("") }
     val drawer = rememberDualDrawerState(if (selectedJid.isEmpty()) DrawerPane.Left else DrawerPane.Center)
     val channelScope = remember(scopeKey) { scopeFromString(scopeKey) }
@@ -98,6 +100,7 @@ fun MainScreen(
             selectedJid = openPeer
             selectedName = bareJid(openPeer).substringBefore('@')
             selectedDirect = null
+            selectedUnread = 0
             drawer.close()
         }
     }
@@ -120,6 +123,7 @@ fun MainScreen(
                 selectedJid = e.jid
                 selectedName = e.name
                 selectedDirect = e.direct
+                selectedUnread = 0
                 scope.launch { drawer.close() }
             }
             is JoinEvent.OpenSpace -> scopeKey = scopeToString(ChannelScope.Space(e.service, e.node))
@@ -162,6 +166,7 @@ fun MainScreen(
                             selectedJid = ch.jid
                             selectedName = ch.name.ifBlank { bareJid(ch.jid) }
                             selectedDirect = ch.kind is ChannelKind.Direct
+                            selectedUnread = ch.unread.toInt()
                             scope.launch { drawer.close() }
                         },
                         account = account,
@@ -189,6 +194,7 @@ fun MainScreen(
                             onOpenMembers = { scope.launch { drawer.openRight() } },
                             onXmppLink = joinVm::openXmppUri,
                             direct = selectedDirect,
+                            unreadOnOpen = selectedUnread,
                         )
                     }
                 }
