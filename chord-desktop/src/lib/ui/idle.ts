@@ -29,9 +29,15 @@ export const browserEnv: Env = {
 /**
  * Call `send(sinceMs)` when the user goes idle, with the time of the last input (ms since
  * epoch), and `send(null)` when the user is back. `resend` sends the current state again,
- * for a new session (the server forgets it). `stop` ends the watch.
+ * for a new session (the server forgets it). `stop` ends the watch. `after` gives the wait
+ * in ms, or null when Chord must not share the idle time. Call `retune` when its answer
+ * changes.
  */
-export function watchIdle(send: (sinceMs: number | null) => void, env: Env = browserEnv) {
+export function watchIdle(
+  send: (sinceMs: number | null) => void,
+  env: Env = browserEnv,
+  after: () => number | null = () => IDLE_AFTER
+) {
   let last = env.now();
   let idle = false;
   let timer: unknown = null;
@@ -40,10 +46,16 @@ export function watchIdle(send: (sinceMs: number | null) => void, env: Env = bro
     if (timer !== null) env.clearTimeout(timer);
     timer = env.setTimeout(check, ms);
   };
+  const disarm = () => {
+    if (timer !== null) env.clearTimeout(timer);
+    timer = null;
+  };
   // One timer for the whole wait: a mouse move only stores the time.
   function check() {
     timer = null;
-    const left = IDLE_AFTER - (env.now() - last);
+    const wait = after();
+    if (wait === null) return;
+    const left = wait - (env.now() - last);
     if (left > 0) return arm(left);
     idle = true;
     send(last);
@@ -54,19 +66,31 @@ export function watchIdle(send: (sinceMs: number | null) => void, env: Env = bro
       idle = false;
       send(null);
     }
-    if (timer === null) arm(IDLE_AFTER);
+    const wait = after();
+    if (timer === null && wait !== null) arm(wait);
   };
 
   const stopListening = env.listen(activity);
-  arm(IDLE_AFTER);
+  const first = after();
+  if (first !== null) arm(first);
   return {
     resend() {
       if (idle) send(last);
     },
+    /** The wait or the switch changed: end an idle state that no longer holds, then wait again. */
+    retune() {
+      const wait = after();
+      if (idle && (wait === null || env.now() - last < wait)) {
+        idle = false;
+        send(null);
+      }
+      if (idle) return;
+      if (wait === null) return disarm();
+      arm(Math.max(0, wait - (env.now() - last)));
+    },
     stop() {
       stopListening();
-      if (timer !== null) env.clearTimeout(timer);
-      timer = null;
+      disarm();
     }
   };
 }

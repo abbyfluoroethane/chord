@@ -70,7 +70,7 @@ fn pack(id: &str) -> Option<&'static Pack> {
 /// The marker file of a complete install. It holds the tarball URL.
 const DONE: &str = ".installed";
 
-fn packs_dir(app: &AppHandle) -> Res<PathBuf> {
+pub(crate) fn packs_dir(app: &AppHandle) -> Res<PathBuf> {
     app.path()
         .app_data_dir()
         .map(|d| d.join("emoji"))
@@ -440,7 +440,7 @@ const DRAWN_PX: u32 = 96;
 /// An SVG above this size is drawn to a PNG, like an SVG with a filter.
 const HEAVY_SVG_BYTES: usize = 16 * 1024;
 /// The folder of drawn emoji inside the pack folder. A new install of the pack drops it.
-const DRAWN_DIR: &str = ".drawn";
+pub(crate) const DRAWN_DIR: &str = ".drawn";
 
 /// WebKit draws an SVG image on the main thread, and an SVG filter on the CPU. Most
 /// Fluent emoji have filters, so a picker full of them hung the app. Such an SVG is drawn

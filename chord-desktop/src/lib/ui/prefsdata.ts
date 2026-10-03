@@ -39,6 +39,15 @@ export interface Saved {
   soundChoice: SoundId;
   soundVolume: number;
   unreadBadge: boolean;
+  // Privacy
+  /** Send read markers and delivery receipts. Rust reads it at open. */
+  sendReadNotices: boolean;
+  /** Send typing notices. Rust reads it at open. */
+  sendTypingNotices: boolean;
+  /** Tell the contacts when nobody used Chord for a while. */
+  shareIdle: boolean;
+  /** The minutes without input before Chord says "idle": 5, 10 or 30. */
+  idleMinutes: number;
 }
 
 export type SendKey = 'enter' | 'mod-enter';
@@ -81,6 +90,9 @@ export const ZOOM_MAX = 150;
 export const SOUND_IDS = ['chime', 'pop', 'ping', 'drop'] as const;
 export type SoundId = (typeof SOUND_IDS)[number];
 
+/** The waits that the idle setting accepts. */
+export const IDLE_MINUTES = [5, 10, 30] as const;
+
 /** The key in the settings file, and the old localStorage key of the same blob. */
 export const SETTINGS_KEY = 'prefs';
 export const LEGACY_KEY = 'chord.prefs';
@@ -107,6 +119,12 @@ export function parsePrefs(v: unknown): Partial<Saved> {
   if (typeof o.emoticons === 'boolean') out.emoticons = o.emoticons;
   if (typeof o.spellcheck === 'boolean') out.spellcheck = o.spellcheck;
   if (typeof o.confirmDelete === 'boolean') out.confirmDelete = o.confirmDelete;
+  // Privacy
+  if (typeof o.sendReadNotices === 'boolean') out.sendReadNotices = o.sendReadNotices;
+  if (typeof o.sendTypingNotices === 'boolean') out.sendTypingNotices = o.sendTypingNotices;
+  if (typeof o.shareIdle === 'boolean') out.shareIdle = o.shareIdle;
+  if (typeof o.idleMinutes === 'number' && (IDLE_MINUTES as readonly number[]).includes(o.idleMinutes))
+    out.idleMinutes = o.idleMinutes;
   if (typeof o.fontSize === 'number' && Number.isFinite(o.fontSize))
     out.fontSize = Math.min(20, Math.max(12, o.fontSize));
   // Appearance

@@ -21,6 +21,7 @@ mod links;
 mod navigation;
 mod notify;
 mod pins;
+mod privacy;
 mod settings;
 mod state;
 mod theme_fetch;
@@ -129,6 +130,11 @@ pub fn run() {
             commands::invisible_method,
             commands::set_idle,
             commands::set_share_info,
+            commands::set_notices,
+            commands::archive_default,
+            commands::set_archive_default,
+            privacy::privacy_cache_info,
+            privacy::clear_privacy_cache,
             commands::set_avatar,
             commands::remove_avatar,
             commands::set_room_affiliation,

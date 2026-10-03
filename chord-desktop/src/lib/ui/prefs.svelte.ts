@@ -85,6 +85,12 @@ class Prefs {
   /** The unread count in the window title and on the dock icon. */
   unreadBadge = $state(true);
 
+  // Privacy
+  sendReadNotices = $state(true);
+  sendTypingNotices = $state(true);
+  shareIdle = $state(true);
+  idleMinutes = $state(5);
+
   load() {
     let legacy: string | null = null;
     try {
@@ -144,7 +150,12 @@ class Prefs {
       quietTo: this.quietTo,
       soundChoice: this.soundChoice,
       soundVolume: this.soundVolume,
-      unreadBadge: this.unreadBadge
+      unreadBadge: this.unreadBadge,
+      // Privacy
+      sendReadNotices: this.sendReadNotices,
+      sendTypingNotices: this.sendTypingNotices,
+      shareIdle: this.shareIdle,
+      idleMinutes: this.idleMinutes
     };
   }
 

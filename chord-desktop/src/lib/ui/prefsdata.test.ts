@@ -47,6 +47,12 @@ describe('parsePrefs', () => {
     expect(parsePrefs({ quietFrom: 7.5, soundVolume: -5 })).toEqual({ soundVolume: 0 });
     expect(parsePrefs({ soundVolume: Infinity })).toEqual({});
   });
+  it('reads the privacy fields with their types', () => {
+    expect(
+      parsePrefs({ sendReadNotices: false, sendTypingNotices: false, shareIdle: false, idleMinutes: 30 })
+    ).toEqual({ sendReadNotices: false, sendTypingNotices: false, shareIdle: false, idleMinutes: 30 });
+    expect(parsePrefs({ sendReadNotices: 'no', shareIdle: 1, idleMinutes: 7 })).toEqual({});
+  });
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});

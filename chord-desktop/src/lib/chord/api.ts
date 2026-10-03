@@ -319,6 +319,25 @@ export const invisibleMethod = () => invoke<InvisibleMethod | null>('invisible_m
 export const setIdle = (since: number | null) => invoke<void>('set_idle', { since });
 /** Answer version (XEP-0092) and time (XEP-0202) queries, or not. A new presence follows. */
 export const setShareInfo = (share: boolean) => invoke<void>('set_share_info', { share });
+/** Send read markers and receipts (`read`) and typing notices (`typing`), or not. */
+export const setNotices = (read: boolean, typing: boolean) =>
+  invoke<void>('set_notices', { read, typing });
+/** Which messages the server archives (XEP-0313). */
+export type ArchiveDefault = 'always' | 'roster' | 'never';
+/** The server default, or null when the server has no archive. Fails offline. */
+export const archiveDefault = () => invoke<ArchiveDefault | null>('archive_default');
+export const setArchiveDefault = (value: ArchiveDefault) =>
+  invoke<ArchiveDefault | null>('set_archive_default', { default: value });
+/** What the local caches hold: link preview answers, and the drawn emoji files. */
+export interface PrivacyCacheInfo {
+  previewEntries: number;
+  emojiFiles: number;
+  emojiBytes: number;
+}
+export const privacyCacheInfo = () => invoke<PrivacyCacheInfo>('privacy_cache_info');
+/** Clear one local cache: `previews` or `emoji`. */
+export const clearPrivacyCache = (kind: 'previews' | 'emoji') =>
+  invoke<void>('clear_privacy_cache', { kind });
 /** The room service of the server (for example conference.example.org), or null. */
 export const roomService = () => invoke<string | null>('room_service');
 export const sendPrivate = (room: string, nick: string, body: string) =>

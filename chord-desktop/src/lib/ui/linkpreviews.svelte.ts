@@ -68,6 +68,14 @@ class LinkPreviews {
     }
   }
 
+  /** Forget all answers and images. The next `request` asks again. */
+  clearCache() {
+    this.entries = {};
+    this.started = new Set();
+    this.images = {};
+    this.imagesStarted = new Set();
+  }
+
   /** The answer for `url` so far. Call `request` to get it. */
   get(url: string): Entry {
     return this.entries[url];

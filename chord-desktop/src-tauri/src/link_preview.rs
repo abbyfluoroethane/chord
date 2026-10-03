@@ -280,6 +280,11 @@ fn fetch_permits() -> &'static tokio::sync::Semaphore {
     PERMITS.get_or_init(|| tokio::sync::Semaphore::new(MAX_PARALLEL_FETCHES))
 }
 
+/// How many answers the cache holds now.
+pub(crate) fn cache_len() -> usize {
+    shared().cache.lock().map_or(0, |c| c.map.len())
+}
+
 fn cached(key: &str) -> Option<Option<LinkPreview>> {
     shared().cache.lock().ok()?.get(key, Instant::now())
 }
