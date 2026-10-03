@@ -1,4 +1,5 @@
 import org.gradle.process.ExecOperations
+import java.util.Properties
 import javax.inject.Inject
 
 plugins {
@@ -9,6 +10,32 @@ plugins {
 
 // The Rust workspace is the parent of chord-android.
 val repoRoot: File = rootDir.parentFile
+
+// Version: versionCode is the commit count, versionName is 0.1.0-<short sha>.
+// providers.exec is configuration-cache safe. Without git (a source archive) it falls back to 1 and "0.1.0".
+fun gitOutput(vararg args: String): Provider<String> =
+    providers.exec {
+        commandLine("git", *args)
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { it.trim() }
+val gitCommitCount: Int = gitOutput("rev-list", "--count", "HEAD").orNull?.toIntOrNull() ?: 1
+val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD").orNull.orEmpty()
+
+// Release signing. Read keystore.properties (gitignored) or the CHORD_KEYSTORE_* variables for CI.
+// Without either, the release build stays unsigned.
+val keystoreProps = Properties().apply {
+    file("../keystore.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+fun signingValue(prop: String, env: String): String? =
+    keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+val releaseStoreFile: String? = signingValue("storeFile", "CHORD_KEYSTORE_FILE")
+val releaseStorePassword: String? = signingValue("storePassword", "CHORD_KEYSTORE_PASSWORD")
+val releaseKeyAlias: String? = signingValue("keyAlias", "CHORD_KEY_ALIAS")
+val releaseKeyPassword: String? = signingValue("keyPassword", "CHORD_KEY_PASSWORD")
+val canSignRelease: Boolean =
+    listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null } &&
+        File(releaseStoreFile!!).isFile
 
 // ABIs for the native core. Override with -Pchord.abis=x86_64 for a fast emulator-only build.
 val rustAbis: List<String> =
@@ -111,14 +138,45 @@ android {
         // Open question in the spec. 26 is the proposal.
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-        ndk { abiFilters += rustAbis }
+        versionCode = gitCommitCount
+        versionName = if (gitShortSha.isEmpty()) "0.1.0" else "0.1.0-$gitShortSha"
+    }
+
+    // One APK per ABI and a universal one. This replaces ndk.abiFilters, which conflicts with splits.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*rustAbis.toTypedArray())
+            isUniversalApk = true
+        }
+    }
+
+    signingConfigs {
+        if (canSignRelease) {
+            create("release") {
+                storeFile = File(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (canSignRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "WARNING: no release signing config. The release APKs are unsigned and cannot be installed. " +
+                        "Run dev/android-keystore.sh, or set the CHORD_KEYSTORE_FILE, CHORD_KEYSTORE_PASSWORD, " +
+                        "CHORD_KEY_ALIAS and CHORD_KEY_PASSWORD variables.",
+                )
+            }
         }
     }
 
@@ -202,6 +260,8 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
+    // Installs the baseline profiles that the libraries bring, for a faster start.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)

@@ -94,3 +94,19 @@ Testers get sideloaded APKs. Send the debug APK from `app/build/outputs/apk/debu
 **`--prebuilt` says that no prebuilt core exists.** Run `./gradlew exportPrebuilt`.
 
 **The screenshot check fails after a UI change.** Look at the `_compare.png` files. If the change is planned, run `recordRoborazziDebug`.
+
+## Release build
+
+The release build is for testers. It uses R8 (shrink and obfuscate) and a signing key. The rules are in `app/proguard-rules.pro`.
+
+1. Run `./dev/android-keystore.sh` one time. It makes a key in `~/.config/chord/android-release.jks` and writes `chord-android/keystore.properties`. Both are private and not in the repository. Keep the same key for all builds, or testers must uninstall before an update.
+2. Run `./dev/android-release.sh`. Add `--install` to install the right APK on the connected device.
+3. The script prints the path, size and SHA-256 of each APK in `app/build/outputs/apk/release/`: `app-universal-release.apk`, `app-arm64-v8a-release.apk` and `app-x86_64-release.apk`. Give testers the arm64 APK for a phone.
+
+CI can set `CHORD_KEYSTORE_FILE`, `CHORD_KEYSTORE_PASSWORD`, `CHORD_KEY_ALIAS` and `CHORD_KEY_PASSWORD` instead of the file. With neither, the release APKs are unsigned and Gradle prints a warning. The debug build is not affected.
+
+versionCode is the number of commits. versionName is `0.1.0-<short sha>`.
+
+A debug build and a release build have different signatures. Uninstall one before you install the other.
+
+`profileinstaller` is on, so the baseline profiles of the libraries (Compose) are used. There is no profile of our own yet.
