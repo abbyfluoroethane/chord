@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reply_not_loaded">Original message not loaded</string>
+    <string name="xmpp_address_copied">Address copied</string>
+</resources>

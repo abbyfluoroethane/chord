@@ -13,10 +13,33 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.ui.composed
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventTimeoutCancellationException
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.sp
+import space.foid.chord.R
+import space.foid.chord.ui.text.TextBlock
+import space.foid.chord.ui.text.formatMessage
+import space.foid.chord.ui.text.formatPalette
+import space.foid.chord.ui.text.isXmppUri
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,6 +81,7 @@ import space.foid.chord.ui.timeline.SendState
  * @param onReactionClick toggles one reaction: gets the emoji.
  * @param onReplyPreviewClick jumps to the quoted message: gets its id, or null if unknown.
  * @param onRetryClick the "Try again" link of a failed message.
+ * @param onXmppLink a tap on an xmpp: link in the text: gets the URI. http(s) links open in the browser.
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -70,8 +94,21 @@ fun MessageRow(
     onReactionClick: (String) -> Unit = {},
     onReplyPreviewClick: (String?) -> Unit = {},
     onRetryClick: () -> Unit = {},
+    onXmppLink: (String) -> Unit = {},
 ) {
     val colors = Chord.colors
+    // The row and the text both detect a long press. Whoever fires first wins.
+    val lastLong = remember { longArrayOf(0L) }
+    val longPress = rememberUpdatedState(onLongPress)
+    val fireLongPress = remember {
+        {
+            val now = System.nanoTime()
+            if (now - lastLong[0] > 600_000_000L) {
+                lastLong[0] = now
+                longPress.value()
+            }
+        }
+    }
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val gutter = ChordSize.avatar
@@ -80,7 +117,7 @@ fun MessageRow(
         modifier
             .fillMaxWidth()
             .background(if (pressed) colors.hover else Color.Transparent)
-            .combinedClickable(interactionSource = source, indication = null, onClick = {}, onLongClick = onLongPress)
+            .combinedClickable(interactionSource = source, indication = null, onClick = {}, onLongClick = fireLongPress)
             .padding(top = if (grouped) 1.dp else ChordSpace.s3, bottom = 1.dp, start = ChordSpace.s4, end = ChordSpace.s4)
             .alpha(if (message.state == SendState.PENDING) 0.6f else 1f),
     ) {
@@ -118,7 +155,7 @@ fun MessageRow(
                 if (message.retracted) {
                     Text("Message deleted.", style = ChordType.body.copy(fontStyle = FontStyle.Italic), color = colors.inkMuted)
                 } else {
-                    if (message.body.isNotEmpty()) MessageText(message)
+                    if (message.body.isNotEmpty()) MessageText(message, onXmppLink, fireLongPress)
                     if (message.attachment != null) {
                         Text(
                             message.attachment,
@@ -157,22 +194,86 @@ fun MessageRow(
     }
 }
 
+/**
+ * The message text: the blocks of the formatted body. A tap on an http(s) link opens it with
+ * [LocalUriHandler]. A tap on an xmpp: link calls [onXmppLink]. The text has no pointer input of
+ * its own beyond the link taps, so a long press reaches the row.
+ */
 @Composable
-private fun MessageText(message: MessageUi) {
+private fun MessageText(message: MessageUi, onXmppLink: (String) -> Unit, onLongPress: () -> Unit) {
     val colors = Chord.colors
-    // The edited marker sits at the end of the text, as on the desktop.
+    val formatted = message.formatted ?: remember(message.body, message.senderName, colors) {
+        formatMessage(message.body, colors.formatPalette(), actor = message.senderName)
+    }
+    val uriHandler = LocalUriHandler.current
+    val onXmpp by rememberUpdatedState(onXmppLink)
+    val routed = remember(uriHandler) {
+        object : UriHandler {
+            override fun openUri(uri: String) {
+                if (isXmppUri(uri)) onXmpp(uri) else uriHandler.openUri(uri)
+            }
+        }
+    }
     val muted = colors.inkMuted
-    val text = remember(message.body, message.edited, muted) {
-        buildAnnotatedString {
-            append(message.body)
-            if (message.edited) {
+    val edited = if (message.edited) {
+        remember(muted) {
+            buildAnnotatedString {
                 pushStyle(SpanStyle(color = muted, fontSize = ChordType.caption.fontSize))
                 append(" (edited)")
                 pop()
             }
         }
+    } else null
+    val base = when {
+        formatted.jumbo -> ChordType.body.copy(fontSize = 40.sp, lineHeight = 48.sp)
+        formatted.action -> ChordType.body.copy(fontStyle = FontStyle.Italic)
+        else -> ChordType.body
     }
-    Text(text, style = ChordType.body, color = colors.ink)
+    val color = if (formatted.action) colors.inkMuted else colors.ink
+    CompositionLocalProvider(LocalUriHandler provides routed) {
+        Column(Modifier.longPressBeforeLinks(onLongPress)) {
+            TextBlocks(formatted.blocks, base, color, edited)
+        }
+    }
+}
+
+@Composable
+private fun TextBlocks(blocks: List<TextBlock>, base: TextStyle, color: Color, suffix: AnnotatedString?) {
+    val colors = Chord.colors
+    blocks.forEachIndexed { i, block ->
+        val last = i == blocks.lastIndex
+        when (block) {
+            is TextBlock.Paragraph -> {
+                val text = if (last && suffix != null) {
+                    remember(block, suffix) { buildAnnotatedString { append(block.text); append(suffix) } }
+                } else block.text
+                Text(text, style = base, color = color)
+            }
+            is TextBlock.Quote -> Row(Modifier.padding(vertical = 2.dp).height(IntrinsicSize.Min)) {
+                Box(Modifier.width(4.dp).fillMaxHeight().background(colors.line, RoundedCornerShape(2.dp)))
+                Column(Modifier.padding(start = ChordSpace.s3)) {
+                    TextBlocks(block.blocks, base, color, if (last) suffix else null)
+                }
+            }
+            is TextBlock.Code -> {
+                val shape = RoundedCornerShape(ChordRadius.sm)
+                Text(
+                    block.code,
+                    style = ChordType.code,
+                    color = colors.ink,
+                    modifier = Modifier
+                        .padding(vertical = 2.dp)
+                        .fillMaxWidth()
+                        .background(colors.surface300, shape)
+                        .border(1.dp, colors.line, shape)
+                        .padding(horizontal = ChordSpace.s2, vertical = 6.dp),
+                )
+            }
+        }
+        if (last && suffix != null && block !is TextBlock.Paragraph && block !is TextBlock.Quote) {
+            Text(suffix, style = base, color = color)
+        }
+    }
 }
 
 @Composable
@@ -207,14 +308,25 @@ private fun ReplyPreview(reply: ReplyUi, gutter: Dp, onClick: () -> Unit) {
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = gutter + ChordSpace.s3).weight(1f, fill = false),
         )
-        Text(
-            reply.snippet,
-            style = ChordType.bodySmall,
-            color = colors.inkMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = ChordSpace.s2).weight(1f, fill = true),
-        )
+        if (reply.snippet.isEmpty()) {
+            Text(
+                stringResource(R.string.reply_not_loaded),
+                style = ChordType.bodySmall.copy(fontStyle = FontStyle.Italic),
+                color = colors.inkMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = ChordSpace.s2).widthIn(max = 220.dp),
+            )
+        } else {
+            Text(
+                reply.snippet,
+                style = ChordType.bodySmall,
+                color = colors.inkMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = ChordSpace.s2).weight(1f, fill = true),
+            )
+        }
     }
 }
 
@@ -238,5 +350,41 @@ private fun ReactionChip(reaction: ReactionUi, onClick: () -> Unit) {
             style = ChordType.label.copy(fontSize = ChordType.bodySmall.fontSize),
             color = if (reaction.mine) colors.brandInk else colors.inkMuted,
         )
+    }
+}
+
+/**
+ * Detects a long press in the initial pass, before a link under the finger can take the touch.
+ * A tap or a drag passes through, so link taps and scrolling work as before. After a long press
+ * the rest of the touch is consumed, so the link does not open when the finger lifts.
+ */
+private fun Modifier.longPressBeforeLinks(onLongPress: () -> Unit): Modifier = composed {
+    val current = rememberUpdatedState(onLongPress)
+    pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            var fired = false
+            try {
+                withTimeout(viewConfiguration.longPressTimeoutMillis) {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: return@withTimeout
+                        if (!change.pressed || (change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                            return@withTimeout
+                        }
+                    }
+                }
+            } catch (e: PointerEventTimeoutCancellationException) {
+                fired = true
+            }
+            if (fired) {
+                current.value()
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    event.changes.forEach { it.consume() }
+                    if (event.changes.none { it.pressed }) break
+                }
+            }
+        }
     }
 }

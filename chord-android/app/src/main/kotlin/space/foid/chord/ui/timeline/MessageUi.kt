@@ -1,6 +1,7 @@
 package space.foid.chord.ui.timeline
 
 import androidx.compose.runtime.Immutable
+import space.foid.chord.ui.text.FormattedMessage
 
 /** How far a message got. PENDING is local only: the core has no state for a message in flight. */
 enum class SendState { SENT, PENDING, FAILED }
@@ -50,4 +51,9 @@ data class MessageUi(
     /** The URL of an attachment, if any. */
     val attachment: String? = null,
     val state: SendState = SendState.SENT,
+    /**
+     * The body, parsed once in the mapping step (see `formatMessage`). Null when the mapping had
+     * no palette, for example in a test. MessageRow then formats the body itself, once.
+     */
+    val formatted: FormattedMessage? = null,
 )
