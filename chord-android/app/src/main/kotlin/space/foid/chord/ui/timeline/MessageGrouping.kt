@@ -23,11 +23,20 @@ fun continuesGroup(
     if (previous == null || dividerBefore) return false
     if (!current.sameSenderAsPrevious) return false
     if (current.reply != null) return false
-    if (previous.senderId != current.senderId) return false
+    if (!samePerson(previous, current)) return false
     val gap = current.timestamp - previous.timestamp
     if (gap < 0 || gap >= GROUP_GAP_MS) return false
     return sameDay(previous.timestamp, current.timestamp, zone)
 }
+
+/**
+ * The same full address, or, in a 1:1 chat where the resource changes on each reconnect, the
+ * same bare address with the same name. In a room the resource is the nick, so two people in
+ * one room have different names.
+ */
+internal fun samePerson(a: MessageUi, b: MessageUi): Boolean =
+    a.senderId == b.senderId ||
+        (a.senderId.substringBefore('/') == b.senderId.substringBefore('/') && a.senderName == b.senderName)
 
 internal fun sameDay(a: Long, b: Long, zone: ZoneId): Boolean =
     Instant.ofEpochMilli(a).atZone(zone).toLocalDate() == Instant.ofEpochMilli(b).atZone(zone).toLocalDate()

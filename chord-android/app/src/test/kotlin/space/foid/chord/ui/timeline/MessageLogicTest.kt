@@ -35,6 +35,24 @@ class MessageLogicTest {
     @Test fun gap_of_five_minutes_breaks() =
         assertFalse(continuesGroup(ui(ts = at(10, 0)), ui(ts = at(10, 5)), zone = utc))
 
+    @Test fun new_resource_of_one_peer_groups() =
+        assertTrue(
+            continuesGroup(
+                ui(sender = "bob@x/phone-1").copy(senderName = "bob"),
+                ui(sender = "bob@x/phone-2", ts = at(10, 1)).copy(senderName = "bob"),
+                zone = utc,
+            ),
+        )
+
+    @Test fun two_nicks_in_one_room_break() =
+        assertFalse(
+            continuesGroup(
+                ui(sender = "room@conf/ann").copy(senderName = "ann"),
+                ui(sender = "room@conf/bob", ts = at(10, 1)).copy(senderName = "bob"),
+                zone = utc,
+            ),
+        )
+
     @Test fun other_sender_breaks() =
         assertFalse(continuesGroup(ui(sender = "a@x"), ui(sender = "b@x", ts = at(10, 1)), zone = utc))
 
