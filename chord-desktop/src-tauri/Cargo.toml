@@ -51,6 +51,10 @@ base64 = "0.22"
 # Shrinks a big avatar or preview image before it reaches the webview (src/thumb.rs). Only
 # the png and jpeg codecs: a gif or webp may be animated, so the code passes those through.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# Draws a heavy emoji SVG (filters, big gradients) to a PNG once (src/emoji.rs). WebKit draws
+# SVG filters on the main thread, so a picker full of Fluent emoji hung the app. No text and
+# no system fonts: emoji SVGs have only shapes.
+resvg = { version = "0.48", default-features = false }
 
 # One running app. On Windows and Linux the OS starts a second copy for an xmpp: link. The
 # `deep-link` feature passes the link to the first copy, which then gets the link event.

@@ -407,20 +407,80 @@ pub fn respond(dir: &Path, path: &str) -> Response<Vec<u8>> {
     if !is_installed(dir, p) && (p.bundled.is_none() || install_bundled(dir, p).is_err()) {
         return status(StatusCode::NOT_FOUND);
     }
-    match std::fs::read(dir.join(p.id).join(format!("{key}.svg"))) {
-        Ok(data) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "image/svg+xml")
-            .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
-            .header("X-Content-Type-Options", "nosniff")
-            .header(
-                "Content-Security-Policy",
-                "default-src 'none'; style-src 'unsafe-inline'",
-            )
-            .body(data)
-            .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR)),
-        Err(_) => status(StatusCode::NOT_FOUND),
+    let Ok(svg) = std::fs::read(dir.join(p.id).join(format!("{key}.svg"))) else {
+        return status(StatusCode::NOT_FOUND);
+    };
+    if is_heavy(&svg)
+        && let Some(png) = drawn(&dir.join(p.id), key, &svg)
+    {
+        return image_response("image/png", png);
     }
+    image_response("image/svg+xml", svg)
+}
+
+fn image_response(content_type: &str, data: Vec<u8>) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+        .header("X-Content-Type-Options", "nosniff")
+        .header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'",
+        )
+        .body(data)
+        .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR))
+}
+
+// ---------------------------------------------------------------- drawn emoji
+
+/// The side of a drawn emoji in pixels. A jumbo emoji is 55 CSS px, so this is sharp up to
+/// about 2x for the normal sizes and a little soft for a jumbo emoji on a Retina screen.
+const DRAWN_PX: u32 = 96;
+/// An SVG above this size is drawn to a PNG, like an SVG with a filter.
+const HEAVY_SVG_BYTES: usize = 16 * 1024;
+/// The folder of drawn emoji inside the pack folder. A new install of the pack drops it.
+const DRAWN_DIR: &str = ".drawn";
+
+/// WebKit draws an SVG image on the main thread, and an SVG filter on the CPU. Most
+/// Fluent emoji have filters, so a picker full of them hung the app. Such an SVG is drawn
+/// once to a PNG, which WebKit only decodes.
+fn is_heavy(svg: &[u8]) -> bool {
+    svg.len() > HEAVY_SVG_BYTES || svg.windows(7).any(|w| w == b"<filter")
+}
+
+/// The PNG of a heavy emoji: from the cache, or drawn now and written to the cache.
+fn drawn(pack_dir: &Path, key: &str, svg: &[u8]) -> Option<Vec<u8>> {
+    let folder = pack_dir.join(DRAWN_DIR);
+    let path = folder.join(format!("{key}-{DRAWN_PX}.png"));
+    if let Ok(png) = std::fs::read(&path) {
+        return Some(png);
+    }
+    let png = draw(svg, DRAWN_PX)?;
+    // A temporary name, then a rename: two requests for the same emoji can draw at once.
+    let temp = folder.join(format!(".{key}-{}.tmp", std::process::id()));
+    let written = std::fs::create_dir_all(&folder)
+        .and_then(|()| std::fs::write(&temp, &png))
+        .and_then(|()| std::fs::rename(&temp, &path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    Some(png)
+}
+
+/// Draw an SVG into a square PNG of `px` pixels, centred, with its aspect ratio kept.
+fn draw(svg: &[u8], px: u32) -> Option<Vec<u8>> {
+    use resvg::{tiny_skia, usvg};
+    let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let side = px as f32;
+    let scale = (side / size.width()).min(side / size.height());
+    let dx = (side - size.width() * scale) / 2.0;
+    let dy = (side - size.height() * scale) / 2.0;
+    let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
+    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    pixmap.encode_png().ok()
 }
 
 /// Register the scheme.
@@ -493,6 +553,29 @@ mod tests {
         swap_in(&temp, &target, &backup).unwrap();
         assert!(target.join("b").exists());
         assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const FILTERED: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><filter id="b"><feGaussianBlur stdDeviation="1"/></filter><circle cx="16" cy="16" r="12" fill="#fc0" filter="url(#b)"/></svg>"##;
+
+    #[test]
+    fn only_a_filter_or_a_big_svg_is_heavy() {
+        assert!(is_heavy(FILTERED.as_bytes()));
+        assert!(!is_heavy(
+            br#"<svg viewBox="0 0 32 32"><circle r="9"/></svg>"#
+        ));
+        assert!(is_heavy(&vec![b' '; HEAVY_SVG_BYTES + 1]));
+    }
+
+    #[test]
+    fn a_heavy_emoji_is_drawn_once_and_cached() {
+        let dir = temp_dir("drawn");
+        let png = drawn(&dir, "1f600", FILTERED.as_bytes()).unwrap();
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let cached = dir.join(DRAWN_DIR).join(format!("1f600-{DRAWN_PX}.png"));
+        assert_eq!(std::fs::read(&cached).unwrap(), png);
+        // A broken SVG gives no PNG, so the scheme serves the SVG.
+        assert!(drawn(&dir, "1f601", b"<svg").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
