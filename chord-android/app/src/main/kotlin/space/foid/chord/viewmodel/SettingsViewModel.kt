@@ -9,11 +9,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import space.foid.chord.data.logWarn
+import space.foid.chord.ui.settings.AppPrefs
+import space.foid.chord.ui.settings.MAX_STATUS
 import space.foid.chord.ui.settings.SettingsStore
+import space.foid.chord.ui.settings.SignInShow
 import space.foid.chord.ui.settings.ThemeMode
 import uniffi.chord_ffi.Availability
 import uniffi.chord_ffi.ChordClient
-import uniffi.chord_ffi.InvisibleMethod
 import uniffi.chord_ffi.OwnPresence
 
 /** The calls of the settings screen on the core. [ClientSettingsApi] is the real one. */
@@ -29,12 +31,13 @@ interface SettingsApi {
     suspend fun removeAvatar()
     suspend fun ownPresence(): OwnPresence
 
-    /** How the server can hide us, or null. */
-    suspend fun invisibleMethod(): InvisibleMethod?
-    suspend fun setPresence(availability: Availability, status: String?)
     suspend fun blockedContacts(): List<String>
     suspend fun unblockContact(jid: String)
     suspend fun setShareInfo(share: Boolean)
+    suspend fun unblockAll()
+
+    /** Change the password of the account on the server. */
+    suspend fun changePassword(password: String)
 }
 
 /** [SettingsApi] on a [ChordClient]. */
@@ -47,12 +50,11 @@ class ClientSettingsApi(private val client: ChordClient) : SettingsApi {
         client.setAvatar(mime, data, width.toUShort(), height.toUShort())
     override suspend fun removeAvatar() = client.removeAvatar()
     override suspend fun ownPresence(): OwnPresence = client.ownPresence()
-    override suspend fun invisibleMethod(): InvisibleMethod? = client.invisibleMethod()
-    override suspend fun setPresence(availability: Availability, status: String?) =
-        client.setPresence(availability, status)
     override suspend fun blockedContacts(): List<String> = client.blockedContacts()
     override suspend fun unblockContact(jid: String) = client.unblockContact(jid)
     override suspend fun setShareInfo(share: Boolean) = client.setShareInfo(share)
+    override suspend fun unblockAll() = client.unblockAll()
+    override suspend fun changePassword(password: String) = client.changePassword(password)
 }
 
 /** What the settings screen shows. */
@@ -65,42 +67,54 @@ data class SettingsState(
     /** The bytes of our avatar, or null. Compared by reference: a new upload is a new array. */
     val avatar: ByteArray? = null,
     val availability: Availability = Availability.AVAILABLE,
+    /** The status text on the server. Read only here. */
     val status: String = "",
-    val statusDraft: String = "",
-    /** The server can hide us, or we are hidden now: "Invisible" is on offer. */
-    val canHide: Boolean = false,
     val blocked: List<String> = emptyList(),
-    val shareInfo: Boolean = true,
-    val theme: ThemeMode = ThemeMode.System,
+    /** The settings of the phone. */
+    val prefs: AppPrefs = AppPrefs(),
+    /** The text in the sign-in status field. */
+    val signInStatusDraft: String = "",
+    val password: PasswordState = PasswordState(),
     /** Plain-English text of the last failure, or null. */
     val error: String? = null,
     val loaded: Boolean = false,
 ) {
     val nicknameChanged: Boolean get() = nicknameDraft.trim() != nickname
-    val statusChanged: Boolean get() = statusDraft.trim() != status
+    val signInStatusChanged: Boolean get() = signInStatusDraft.trim() != prefs.signInStatus
 
-    /** The availabilities on offer, in the order of the desktop status menu. */
-    val availabilities: List<Availability>
-        get() = buildList {
-            add(Availability.AVAILABLE)
-            add(Availability.AWAY)
-            add(Availability.DND)
-            if (canHide || availability == Availability.INVISIBLE) add(Availability.INVISIBLE)
-        }
+    /** The name to show: the nickname, or the local part of the address. */
+    val displayName: String get() = nickname.ifEmpty { jid.substringBefore('@') }
 }
+
+/** The state of the change-password page. */
+data class PasswordState(
+    val busy: Boolean = false,
+    val error: PasswordError? = null,
+    /** The text of a refusal by the server, for [PasswordError.Server]. */
+    val message: String? = null,
+    val done: Boolean = false,
+)
+
+enum class PasswordError { Empty, Mismatch, SaveFailed, Server }
 
 /**
  * The settings screen. It loads the account data once, then changes the account through [api]
  * and the phone settings through [store]. It holds no protocol logic.
+ *
+ * [savePassword] stores a new password in the credential store of the app after the server took it.
  */
 class SettingsViewModel(
     private val api: SettingsApi,
     private val store: SettingsStore,
     private val signOutAction: suspend () -> Unit,
+    private val savePassword: suspend (String) -> Unit = {},
     private val scope: CoroutineScope = mainScope(),
 ) : ViewModel(scope) {
     private val _state = MutableStateFlow(
-        SettingsState(jid = api.account(), shareInfo = store.shareInfo.value, theme = store.themeMode.value),
+        SettingsState(
+            jid = api.account(), prefs = store.prefs.value,
+            signInStatusDraft = store.prefs.value.signInStatus,
+        ),
     )
     val state: StateFlow<SettingsState> = _state.asStateFlow()
 
@@ -109,8 +123,7 @@ class SettingsViewModel(
     val signedOut: StateFlow<Boolean> = _signedOut.asStateFlow()
 
     init {
-        scope.launch { store.themeMode.collect { t -> _state.update { it.copy(theme = t) } } }
-        scope.launch { store.shareInfo.collect { s -> _state.update { it.copy(shareInfo = s) } } }
+        scope.launch { store.prefs.collect { p -> _state.update { it.copy(prefs = p) } } }
         scope.launch { load() }
     }
 
@@ -119,14 +132,13 @@ class SettingsViewModel(
         val nick = attempt { api.nickname() }.orEmpty()
         val avatar = attempt { api.avatar() }
         val presence = attempt { api.ownPresence() }
-        val hide = attempt { api.invisibleMethod() }
         val blocked = attempt { api.blockedContacts() }.orEmpty()
         _state.update {
             it.copy(
                 nickname = nick, nicknameDraft = nick, avatar = avatar,
                 availability = presence?.availability ?: it.availability,
-                status = presence?.status.orEmpty(), statusDraft = presence?.status.orEmpty(),
-                canHide = hide != null, blocked = blocked, loaded = true,
+                status = presence?.status.orEmpty(),
+                blocked = blocked, loaded = true,
             )
         }
     }
@@ -157,6 +169,9 @@ class SettingsViewModel(
 
     fun onNicknameChange(value: String) = _state.update { it.copy(nicknameDraft = value, error = null) }
 
+    /** Put the nickname field back to the saved name. */
+    fun resetNickname() = _state.update { it.copy(nicknameDraft = it.nickname) }
+
     /** Publish the nickname. An empty text removes it. */
     fun saveNickname() {
         val s = _state.value
@@ -182,25 +197,16 @@ class SettingsViewModel(
     /** The picked image could not be read. */
     fun avatarFailed() = _state.update { it.copy(error = "Chord could not read that picture.") }
 
-    fun onStatusChange(value: String) = _state.update { it.copy(statusDraft = value, error = null) }
+    /** The availability to set at each sign-in. It is a phone setting, not a live status. */
+    fun setSignInShow(show: SignInShow) = store.update { it.copy(signInShow = show) }
 
-    fun setAvailability(availability: Availability) {
-        val status = _state.value.status.ifEmpty { null }
-        run("setPresence") {
-            api.setPresence(availability, status)
-            _state.update { it.copy(availability = availability) }
-        }
-    }
+    fun onSignInStatusChange(value: String) =
+        _state.update { it.copy(signInStatusDraft = value.replace('\n', ' ').take(MAX_STATUS)) }
 
-    /** Publish the status text with the current availability. */
-    fun saveStatus() {
-        val s = _state.value
-        if (!s.statusChanged) return
-        val text = s.statusDraft.trim()
-        run("setStatus") {
-            api.setPresence(s.availability, text.ifEmpty { null })
-            _state.update { it.copy(status = text, statusDraft = text) }
-        }
+    fun saveSignInStatus() {
+        val text = _state.value.signInStatusDraft.trim()
+        store.update { it.copy(signInStatus = text) }
+        _state.update { it.copy(signInStatusDraft = text) }
     }
 
     fun unblock(jid: String) = run("unblock") {
@@ -208,9 +214,14 @@ class SettingsViewModel(
         _state.update { it.copy(blocked = it.blocked - jid) }
     }
 
+    fun unblockAll() = run("unblockAll") {
+        api.unblockAll()
+        _state.update { it.copy(blocked = emptyList()) }
+    }
+
     fun setShareInfo(share: Boolean) {
-        val before = store.shareInfo.value
-        store.setShareInfo(share)
+        val before = store.prefs.value.shareInfo
+        store.update { it.copy(shareInfo = share) }
         scope.launch {
             try {
                 api.setShareInfo(share)
@@ -218,13 +229,79 @@ class SettingsViewModel(
                 throw e
             } catch (e: Exception) {
                 logWarn("SettingsViewModel", "setShareInfo failed", e)
-                store.setShareInfo(before)
+                store.update { it.copy(shareInfo = before) }
                 _state.update { it.copy(error = describeError(e)) }
             }
         }
     }
 
-    fun setTheme(mode: ThemeMode) = store.setThemeMode(mode)
+    fun setTheme(mode: ThemeMode) = store.update { it.copy(theme = mode) }
+    fun setShowPresence(show: Boolean) = store.update { it.copy(showPresence = show) }
+    fun setShareIdle(share: Boolean) = store.update { it.copy(shareIdle = share) }
+    fun setIdleMinutes(minutes: Int) = store.update { it.copy(idleMinutes = minutes) }
+    fun setNoticePreview(show: Boolean) = store.update { it.copy(noticePreview = show) }
+    fun setQuietHours(on: Boolean) = store.update { it.copy(quietHours = on) }
+    fun setQuietFrom(minute: Int) = store.update { it.copy(quietFrom = minute) }
+    fun setQuietTo(minute: Int) = store.update { it.copy(quietTo = minute) }
+
+    /** Put every phone setting back to its default. The share-info answer follows on the account. */
+    fun resetSettings() {
+        store.reset()
+        _state.update { it.copy(signInStatusDraft = "") }
+        scope.launch {
+            try {
+                api.setShareInfo(AppPrefs().shareInfo)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn("SettingsViewModel", "setShareInfo failed", e)
+            }
+        }
+    }
+
+    /** Leave the change-password page: forget the result. */
+    fun clearPassword() = _state.update { it.copy(password = PasswordState()) }
+
+    /** Change the password. Both fields must hold the same, non-empty text. */
+    fun changePassword(new: String, repeat: String) {
+        if (_state.value.password.busy) return
+        val problem = when {
+            new.isEmpty() -> PasswordError.Empty
+            new != repeat -> PasswordError.Mismatch
+            else -> null
+        }
+        if (problem != null) {
+            _state.update { it.copy(password = PasswordState(error = problem)) }
+            return
+        }
+        _state.update { it.copy(password = PasswordState(busy = true)) }
+        scope.launch {
+            try {
+                api.changePassword(new)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn("SettingsViewModel", "changePassword failed", e)
+                _state.update {
+                    it.copy(password = PasswordState(error = PasswordError.Server, message = describeError(e)))
+                }
+                return@launch
+            }
+            // The server has the new password. The phone must keep it for the next sign-in.
+            val saved = try {
+                savePassword(new)
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn("SettingsViewModel", "saving the new password failed", e)
+                false
+            }
+            _state.update {
+                it.copy(password = if (saved) PasswordState(done = true) else PasswordState(error = PasswordError.SaveFailed))
+            }
+        }
+    }
 
     fun signOut() {
         scope.launch {

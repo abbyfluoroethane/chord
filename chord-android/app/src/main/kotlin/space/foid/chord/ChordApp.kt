@@ -16,6 +16,8 @@ import space.foid.chord.secure.KeystoreCredentialStore
 import space.foid.chord.ui.inbox.InboxEvents
 import space.foid.chord.service.ServiceControlImpl
 import space.foid.chord.ui.avatar.AvatarRepository
+import space.foid.chord.ui.settings.PrefsSettingsStore
+import space.foid.chord.ui.settings.SettingsApplier
 import space.foid.chord.ui.sheets.EmojiCatalog
 import java.io.File
 
@@ -65,6 +67,8 @@ class ChordApp : Application() {
             opened
         }
         ChordNotifications.createChannels(this)
+        // The sign-in presence and the idle report of the settings.
+        SettingsApplier(session, PrefsSettingsStore.get(this), appScope).attach()
         appScope.launch {
             // The reaction picker then opens at once. After the first frame, to leave the CPU to start-up.
             delay(EMOJI_DELAY_MS)

@@ -1,7 +1,6 @@
 package space.foid.chord.viewmodel
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -10,11 +9,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import space.foid.chord.ui.settings.SettingsStore
+import space.foid.chord.ui.settings.AppPrefs
+import space.foid.chord.ui.settings.MemorySettingsStore
+import space.foid.chord.ui.settings.SignInShow
 import space.foid.chord.ui.settings.ThemeMode
 import uniffi.chord_ffi.Availability
 import uniffi.chord_ffi.ChordException
-import uniffi.chord_ffi.InvisibleMethod
 import uniffi.chord_ffi.OwnPresence
 
 internal class FakeSettingsApi : SettingsApi {
@@ -22,7 +22,6 @@ internal class FakeSettingsApi : SettingsApi {
     var nickname: String? = "Ally"
     var avatar: ByteArray? = null
     var presence = OwnPresence(Availability.AWAY, "lunch")
-    var hide: InvisibleMethod? = InvisibleMethod.COMMAND
     var blocked = mutableListOf("spam@example.org", "bot@example.org")
     var failWith: Exception? = null
     var failReads = false
@@ -45,19 +44,15 @@ internal class FakeSettingsApi : SettingsApi {
         write("setAvatar $mime ${data.size} ${width}x$height")
     override suspend fun removeAvatar() = write("removeAvatar")
     override suspend fun ownPresence() = read(presence)
-    override suspend fun invisibleMethod() = read(hide)
-    override suspend fun setPresence(availability: Availability, status: String?) =
-        write("setPresence $availability $status")
     override suspend fun blockedContacts() = read(blocked.toList())
     override suspend fun unblockContact(jid: String) = write("unblock $jid")
     override suspend fun setShareInfo(share: Boolean) = write("shareInfo $share")
+    override suspend fun unblockAll() = write("unblockAll")
+    override suspend fun changePassword(password: String) = write("changePassword $password")
 }
 
-internal class FakeSettingsStore : SettingsStore {
-    override val themeMode = MutableStateFlow(ThemeMode.System)
-    override fun setThemeMode(mode: ThemeMode) { themeMode.value = mode }
-    override val shareInfo = MutableStateFlow(true)
-    override fun setShareInfo(share: Boolean) { shareInfo.value = share }
+internal class FakeSettingsStore : MemorySettingsStore() {
+    override fun persist(prefs: AppPrefs) {}
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -66,8 +61,9 @@ class SettingsViewModelTest {
         api: FakeSettingsApi = FakeSettingsApi(),
         store: FakeSettingsStore = FakeSettingsStore(),
         signOut: suspend () -> Unit = {},
+        savePassword: suspend (String) -> Unit = {},
     ): SettingsViewModel {
-        val v = SettingsViewModel(api, store, signOut, backgroundScope)
+        val v = SettingsViewModel(api, store, signOut, savePassword, backgroundScope)
         runCurrent()
         return v
     }
@@ -82,7 +78,6 @@ class SettingsViewModelTest {
         assertEquals("Ally", s.nicknameDraft)
         assertEquals(Availability.AWAY, s.availability)
         assertEquals("lunch", s.status)
-        assertTrue(s.canHide)
         assertEquals(listOf("spam@example.org", "bot@example.org"), s.blocked)
     }
 
@@ -92,7 +87,6 @@ class SettingsViewModelTest {
         val s = vm(api).state.value
         assertTrue(s.loaded)
         assertEquals("", s.nickname)
-        assertFalse(s.canHide)
         assertNull(s.error)
     }
 
@@ -144,37 +138,6 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun changingTheAvailabilityKeepsTheStatusText() = runTest {
-        val api = FakeSettingsApi()
-        val v = vm(api)
-        v.setAvailability(Availability.DND)
-        runCurrent()
-        assertEquals(listOf("setPresence DND lunch"), api.calls)
-        assertEquals(Availability.DND, v.state.value.availability)
-    }
-
-    @Test
-    fun savingTheStatusKeepsTheAvailability() = runTest {
-        val api = FakeSettingsApi()
-        val v = vm(api)
-        v.onStatusChange("back at 3 ")
-        v.saveStatus()
-        runCurrent()
-        assertEquals(listOf("setPresence AWAY back at 3"), api.calls)
-        assertEquals("back at 3", v.state.value.status)
-    }
-
-    @Test
-    fun invisibleIsOfferedOnlyWhenTheServerCanHideUs() = runTest {
-        val can = vm().state.value
-        assertTrue(Availability.INVISIBLE in can.availabilities)
-        val api = FakeSettingsApi().apply { hide = null }
-        val cannot = vm(api).state.value
-        assertFalse(Availability.INVISIBLE in cannot.availabilities)
-        assertEquals(listOf(Availability.AVAILABLE, Availability.AWAY, Availability.DND), cannot.availabilities)
-    }
-
-    @Test
     fun unblockRemovesTheContactFromTheList() = runTest {
         val api = FakeSettingsApi()
         val v = vm(api)
@@ -204,7 +167,7 @@ class SettingsViewModelTest {
         v.setTheme(ThemeMode.Dark)
         runCurrent()
         assertEquals(ThemeMode.Dark, store.themeMode.value)
-        assertEquals(ThemeMode.Dark, v.state.value.theme)
+        assertEquals(ThemeMode.Dark, v.state.value.prefs.theme)
     }
 
     @Test
@@ -216,7 +179,7 @@ class SettingsViewModelTest {
         runCurrent()
         assertEquals(listOf("shareInfo false"), api.calls)
         assertFalse(store.shareInfo.value)
-        assertFalse(v.state.value.shareInfo)
+        assertFalse(v.state.value.prefs.shareInfo)
     }
 
     @Test
@@ -249,5 +212,147 @@ class SettingsViewModelTest {
         runCurrent()
         assertFalse(v.signedOut.value)
         assertTrue(v.state.value.error != null)
+    }
+
+    @Test
+    fun theSignInStatusIsAPhoneSettingAndNeverCallsTheCore() = runTest {
+        val api = FakeSettingsApi()
+        val store = FakeSettingsStore()
+        val v = vm(api, store)
+        v.setSignInShow(SignInShow.Dnd)
+        v.onSignInStatusChange("  deep work ")
+        assertTrue(v.state.value.signInStatusChanged)
+        v.saveSignInStatus()
+        runCurrent()
+        assertEquals(SignInShow.Dnd, store.prefs.value.signInShow)
+        assertEquals("deep work", store.prefs.value.signInStatus)
+        assertFalse(v.state.value.signInStatusChanged)
+        assertTrue(api.calls.isEmpty())
+    }
+
+    @Test
+    fun theSignInStatusIsOneLineAndShort() = runTest {
+        val v = vm()
+        v.onSignInStatusChange("a\nb" + "x".repeat(200))
+        val t = v.state.value.signInStatusDraft
+        assertEquals(128, t.length)
+        assertFalse('\n' in t)
+    }
+
+    @Test
+    fun resetNicknameRestoresTheSavedName() = runTest {
+        val v = vm()
+        v.onNicknameChange("Other")
+        v.resetNickname()
+        assertEquals("Ally", v.state.value.nicknameDraft)
+        assertFalse(v.state.value.nicknameChanged)
+    }
+
+    @Test
+    fun unblockAllEmptiesTheList() = runTest {
+        val api = FakeSettingsApi()
+        val v = vm(api)
+        v.unblockAll()
+        runCurrent()
+        assertEquals(listOf("unblockAll"), api.calls)
+        assertTrue(v.state.value.blocked.isEmpty())
+    }
+
+    @Test
+    fun prefsGoToTheStoreAndBackIntoTheState() = runTest {
+        val store = FakeSettingsStore()
+        val v = vm(store = store)
+        v.setShowPresence(false)
+        v.setShareIdle(false)
+        v.setIdleMinutes(30)
+        v.setNoticePreview(false)
+        v.setQuietHours(true)
+        v.setQuietFrom(23 * 60)
+        v.setQuietTo(7 * 60 + 30)
+        runCurrent()
+        val p = v.state.value.prefs
+        assertFalse(p.showPresence)
+        assertFalse(store.showPresence.value)
+        assertFalse(p.shareIdle)
+        assertEquals(30, p.idleMinutes)
+        assertFalse(p.noticePreview)
+        assertTrue(p.quietHours)
+        assertEquals(23 * 60, p.quietFrom)
+        assertEquals(450, p.quietTo)
+    }
+
+    @Test
+    fun anIdleWaitOutsideTheChoicesFallsBack() = runTest {
+        val store = FakeSettingsStore()
+        val v = vm(store = store)
+        v.setIdleMinutes(7)
+        assertEquals(5, store.prefs.value.idleMinutes)
+    }
+
+    @Test
+    fun resetPutsEverythingBackAndResetsTheShareInfoAnswer() = runTest {
+        val api = FakeSettingsApi()
+        val store = FakeSettingsStore()
+        val v = vm(api, store)
+        v.setTheme(ThemeMode.Dark)
+        v.setSignInShow(SignInShow.Away)
+        v.setShareInfo(false)
+        runCurrent()
+        api.calls.clear()
+        v.resetSettings()
+        runCurrent()
+        assertEquals(AppPrefs(), store.prefs.value)
+        assertEquals(listOf("shareInfo true"), api.calls)
+        assertEquals("", v.state.value.signInStatusDraft)
+    }
+
+    @Test
+    fun changingThePasswordChecksTheFieldsFirst() = runTest {
+        val api = FakeSettingsApi()
+        val v = vm(api)
+        v.changePassword("", "")
+        assertEquals(space.foid.chord.viewmodel.PasswordError.Empty, v.state.value.password.error)
+        v.changePassword("one", "two")
+        assertEquals(space.foid.chord.viewmodel.PasswordError.Mismatch, v.state.value.password.error)
+        runCurrent()
+        assertTrue(api.calls.isEmpty())
+    }
+
+    @Test
+    fun aGoodPasswordGoesToTheServerThenToTheCredentialStore() = runTest {
+        val api = FakeSettingsApi()
+        val saved = ArrayList<String>()
+        val v = vm(api, savePassword = { saved += it })
+        v.changePassword("s3cret", "s3cret")
+        runCurrent()
+        assertEquals(listOf("changePassword s3cret"), api.calls)
+        assertEquals(listOf("s3cret"), saved)
+        assertTrue(v.state.value.password.done)
+        v.clearPassword()
+        assertFalse(v.state.value.password.done)
+    }
+
+    @Test
+    fun aRefusedPasswordIsNotSavedOnThePhone() = runTest {
+        val api = FakeSettingsApi()
+        val saved = ArrayList<String>()
+        val v = vm(api, savePassword = { saved += it })
+        api.failWith = ChordException.Server("no")
+        v.changePassword("s3cret", "s3cret")
+        runCurrent()
+        assertTrue(saved.isEmpty())
+        val p = v.state.value.password
+        assertEquals(space.foid.chord.viewmodel.PasswordError.Server, p.error)
+        assertEquals("The server refused the request.", p.message)
+        assertFalse(p.busy)
+    }
+
+    @Test
+    fun aPasswordThatCannotBeSavedIsReported() = runTest {
+        val v = vm(savePassword = { throw IllegalStateException("no keystore") })
+        v.changePassword("s3cret", "s3cret")
+        runCurrent()
+        assertEquals(space.foid.chord.viewmodel.PasswordError.SaveFailed, v.state.value.password.error)
+        assertFalse(v.state.value.password.done)
     }
 }
