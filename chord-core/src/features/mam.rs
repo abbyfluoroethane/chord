@@ -24,6 +24,7 @@ use xmpp_parsers::data_forms::{DataForm, DataFormType, Field, FieldType};
 use xmpp_parsers::iq::Iq;
 use xmpp_parsers::mam::{Fin, Query, QueryId, Result_};
 use xmpp_parsers::message::Message;
+use xmpp_parsers::minidom::Element;
 use xmpp_parsers::ns;
 use xmpp_parsers::rsm::SetQuery;
 use xmpp_parsers::stanza_error::{DefinedCondition, ErrorType, StanzaError};
@@ -118,11 +119,56 @@ enum Kind {
     Backward,
 }
 
+/// Which messages the server keeps in our archive (XEP-0313, section 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveDefault {
+    /// All messages.
+    Always,
+    /// Only messages with the contacts of our roster.
+    Roster,
+    /// No message.
+    Never,
+}
+
+impl ArchiveDefault {
+    /// The value of the `default` attribute.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Roster => "roster",
+            Self::Never => "never",
+        }
+    }
+
+    /// The value of a `default` attribute, `None` for any other text.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "always" => Some(Self::Always),
+            "roster" => Some(Self::Roster),
+            "never" => Some(Self::Never),
+            _ => None,
+        }
+    }
+}
+
+type PrefsReply = oneshot::Sender<Result<Option<ArchiveDefault>, ClientError>>;
+
 /// What to do with the answer to an IQ that this feature sent.
 #[derive(Debug)]
 pub(crate) enum Pending {
     /// The final answer of the query with this queryid.
     Page(String),
+    /// The archiving preferences. With `set`, we send them again with that default, and
+    /// keep the `always` and `never` lists that the server gave.
+    PrefsGet {
+        set: Option<ArchiveDefault>,
+        reply: PrefsReply,
+    },
+    /// The answer to our new preferences.
+    PrefsSet {
+        default: ArchiveDefault,
+        reply: PrefsReply,
+    },
 }
 
 /// A command from the public API.
@@ -133,6 +179,13 @@ pub(crate) enum Command {
     Older {
         peer: BareJid,
         reply: oneshot::Sender<Result<(), ClientError>>,
+    },
+    /// Read the archiving default. `Ok(None)` means that the server has no archive.
+    GetPrefs { reply: PrefsReply },
+    /// Change the archiving default. `Ok(None)` means that the server has no archive.
+    SetPrefs {
+        default: ArchiveDefault,
+        reply: PrefsReply,
     },
 }
 
@@ -151,6 +204,28 @@ impl ClientHandle {
     pub async fn load_older(&self, peer: BareJid) -> Result<(), ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(super::FeatureCommand::Mam(Command::Older { peer, reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// The archiving default of the server: which messages it keeps for us. `None` when
+    /// the server has no archive. Waits for service discovery. Fails offline.
+    pub async fn archive_default(&self) -> Result<Option<ArchiveDefault>, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(super::FeatureCommand::Mam(Command::GetPrefs { reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Change the archiving default of the server. The `always` and `never` lists of the
+    /// server stay. Returns the new default, or `None` when the server has no archive.
+    pub async fn set_archive_default(
+        &self,
+        default: ArchiveDefault,
+    ) -> Result<Option<ArchiveDefault>, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(super::FeatureCommand::Mam(Command::SetPrefs {
+            default,
+            reply,
+        }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 }
@@ -432,8 +507,94 @@ pub(crate) fn on_live(ctx: &mut Ctx<'_>, id: &str) {
     save_cursor(ctx, "", &cursor);
 }
 
+/// The IQ for the archiving preferences. `get` reads them. Otherwise it sets `default` and
+/// keeps the `lists` (the `always` and `never` elements).
+fn prefs_iq(default: Option<ArchiveDefault>, lists: Vec<Element>) -> Iq {
+    let payload = match default {
+        None => Element::builder("prefs", ns::MAM).build(),
+        Some(default) => Element::builder("prefs", ns::MAM)
+            .attr(
+                xmpp_parsers::minidom::rxml::NcName::try_from("default".to_owned())
+                    .expect("a valid attribute name"),
+                default.as_str(),
+            )
+            .append_all(lists)
+            .build(),
+    };
+    if default.is_none() {
+        Iq::Get {
+            from: None,
+            to: None,
+            id: String::new(),
+            payload,
+        }
+    } else {
+        Iq::Set {
+            from: None,
+            to: None,
+            id: String::new(),
+            payload,
+        }
+    }
+}
+
+/// The answer to a preferences IQ: the payload, or the error that the caller gets.
+fn prefs_outcome(response: IqResponse) -> Result<Option<Element>, ClientError> {
+    match response {
+        IqResponse::Result(payload) => Ok(payload),
+        IqResponse::Error(e) => Err(ClientError::Server(format!("{:?}", e.defined_condition))),
+        IqResponse::Lost => Err(ClientError::NotConnected),
+    }
+}
+
+fn on_prefs_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
+    match pending {
+        Pending::PrefsGet { set, reply } => {
+            let payload = match prefs_outcome(response) {
+                Ok(Some(p)) if p.is("prefs", ns::MAM) => p,
+                Ok(_) => {
+                    let _ = reply.send(Err(ClientError::Invalid(
+                        "the server sent no archive preferences".into(),
+                    )));
+                    return;
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            };
+            let Some(default) = set else {
+                // A server that sends an unknown default gets `roster`, the usual choice.
+                let current = payload
+                    .attr("default")
+                    .and_then(ArchiveDefault::parse)
+                    .unwrap_or(ArchiveDefault::Roster);
+                let _ = reply.send(Ok(Some(current)));
+                return;
+            };
+            let lists: Vec<Element> = payload
+                .children()
+                .filter(|c| c.is("always", ns::MAM) || c.is("never", ns::MAM))
+                .cloned()
+                .collect();
+            let iq = prefs_iq(Some(default), lists);
+            ctx.request(
+                iq,
+                FeaturePending::Mam(Pending::PrefsSet { default, reply }),
+            );
+        }
+        Pending::PrefsSet { default, reply } => {
+            let _ = reply.send(prefs_outcome(response).map(|_| Some(default)));
+        }
+        Pending::Page(_) => {}
+    }
+}
+
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
-    let Pending::Page(queryid) = pending;
+    let queryid = match pending {
+        Pending::Page(queryid) => queryid,
+        other => return on_prefs_response(ctx, other, response),
+    };
     // Forget the query first. Whatever the answer is, a later request can start again.
     let Some(run) = ctx.state.mam.queries.remove(&queryid) else {
         return;
@@ -527,6 +688,26 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             need_older(ctx, &peer);
             let _ = reply.send(Ok(()));
         }
+        Command::GetPrefs { reply } => {
+            if !server_supports(ctx, &Target::Account) {
+                let _ = reply.send(Ok(None));
+                return;
+            }
+            let pending = Pending::PrefsGet { set: None, reply };
+            ctx.request(prefs_iq(None, Vec::new()), FeaturePending::Mam(pending));
+        }
+        Command::SetPrefs { default, reply } => {
+            if !server_supports(ctx, &Target::Account) {
+                let _ = reply.send(Ok(None));
+                return;
+            }
+            // Read first: the lists of the server stay.
+            let pending = Pending::PrefsGet {
+                set: Some(default),
+                reply,
+            };
+            ctx.request(prefs_iq(None, Vec::new()), FeaturePending::Mam(pending));
+        }
     }
 }
 
@@ -534,6 +715,9 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
 pub(crate) fn offline(command: Command) {
     match command {
         Command::CatchUp { reply } | Command::Older { reply, .. } => {
+            let _ = reply.send(Err(ClientError::NotConnected));
+        }
+        Command::GetPrefs { reply } | Command::SetPrefs { reply, .. } => {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
     }
@@ -1033,6 +1217,109 @@ mod tests {
         assert!(h.state.mam.queries.is_empty());
         h.with_ctx(|ctx| need_older(ctx, &bob()));
         assert_eq!(h.sent_iqs().len(), 1);
+    }
+
+    fn prefs_payload(default: &str, lists: bool) -> Element {
+        let mut e = Element::builder("prefs", ns::MAM)
+            .attr(
+                xmpp_parsers::minidom::rxml::NcName::try_from("default".to_owned()).unwrap(),
+                default,
+            )
+            .build();
+        if lists {
+            e.append_child(
+                Element::builder("always", ns::MAM)
+                    .append(
+                        Element::builder("jid", ns::MAM)
+                            .append("bob@example.org")
+                            .build(),
+                    )
+                    .build(),
+            );
+            e.append_child(Element::builder("never", ns::MAM).build());
+        }
+        e
+    }
+
+    #[test]
+    fn the_archive_default_is_read_from_the_prefs() {
+        let mut h = ready();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::GetPrefs { reply }));
+        let iqs = h.sent_iqs();
+        let [Iq::Get { payload, .. }] = &iqs[..] else {
+            panic!("{iqs:?}")
+        };
+        assert!(payload.is("prefs", ns::MAM));
+        h.answer(is_mam, Some(prefs_payload("never", false)));
+        assert_eq!(
+            answer.try_recv().unwrap().unwrap().unwrap(),
+            Some(ArchiveDefault::Never)
+        );
+    }
+
+    #[test]
+    fn a_new_archive_default_keeps_the_lists_of_the_server() {
+        let mut h = ready();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| {
+            on_command(
+                ctx,
+                Command::SetPrefs {
+                    default: ArchiveDefault::Always,
+                    reply,
+                },
+            )
+        });
+        assert_eq!(h.sent_iqs().len(), 1);
+        h.answer(is_mam, Some(prefs_payload("roster", true)));
+        // The answer to the read is the set, with the lists of the server.
+        let iqs = h.sent_iqs();
+        let [Iq::Set { payload, .. }] = &iqs[..] else {
+            panic!("{iqs:?}")
+        };
+        assert_eq!(payload.attr("default"), Some("always"));
+        assert!(payload.get_child("always", ns::MAM).is_some());
+        assert!(payload.get_child("never", ns::MAM).is_some());
+        assert!(answer.try_recv().unwrap().is_none(), "no answer yet");
+        h.answer(is_mam, None);
+        assert_eq!(
+            answer.try_recv().unwrap().unwrap().unwrap(),
+            Some(ArchiveDefault::Always)
+        );
+    }
+
+    #[test]
+    fn the_prefs_of_a_server_without_mam_are_none() {
+        let mut h = Harness::new();
+        h.state.disco.server = Some(crate::features::disco::info(None));
+        h.state.disco.complete = true;
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::GetPrefs { reply }));
+        assert!(answer.try_recv().unwrap().unwrap().unwrap().is_none());
+        assert!(h.sent_iqs().is_empty());
+    }
+
+    #[test]
+    fn a_prefs_error_goes_to_the_caller() {
+        let mut h = ready();
+        let (reply, mut answer) = oneshot::channel();
+        h.with_ctx(|ctx| on_command(ctx, Command::GetPrefs { reply }));
+        h.sent_iqs();
+        h.respond(is_mam, IqResponse::Lost);
+        assert!(answer.try_recv().unwrap().unwrap().is_err());
+    }
+
+    #[test]
+    fn the_archive_default_text_round_trips() {
+        for d in [
+            ArchiveDefault::Always,
+            ArchiveDefault::Roster,
+            ArchiveDefault::Never,
+        ] {
+            assert_eq!(ArchiveDefault::parse(d.as_str()), Some(d));
+        }
+        assert_eq!(ArchiveDefault::parse("sometimes"), None);
     }
 
     #[test]

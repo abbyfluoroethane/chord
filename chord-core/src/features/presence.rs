@@ -183,6 +183,13 @@ pub(crate) enum Command {
         share: bool,
         reply: Reply<()>,
     },
+    /// Turn the read notices and the typing notices on or off. The actor handles it
+    /// offline.
+    SetNotices {
+        read: bool,
+        typing: bool,
+        reply: Reply<()>,
+    },
 }
 
 impl ClientHandle {
@@ -230,6 +237,21 @@ impl ClientHandle {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Presence(Command::SetShareInfo {
             share,
+            reply,
+        }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// Turn the read notices and the typing notices on or off. Both are on by default.
+    /// `read` covers the displayed markers (XEP-0333) and the delivery receipts
+    /// (XEP-0184). `typing` covers all chat states (XEP-0085). Off, Chord sends none of
+    /// them and still keeps the local read position. The choice stays for this client
+    /// until the next call.
+    pub async fn set_notices(&self, read: bool, typing: bool) -> Result<(), ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Presence(Command::SetNotices {
+            read,
+            typing,
             reply,
         }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
@@ -546,6 +568,15 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             broadcast(ctx);
             let _ = reply.send(Ok(()));
         }
+        Command::SetNotices {
+            read,
+            typing,
+            reply,
+        } => {
+            ctx.state.privacy.no_read_notices = !read;
+            ctx.state.privacy.no_typing_notices = !typing;
+            let _ = reply.send(Ok(()));
+        }
     }
 }
 
@@ -592,7 +623,7 @@ pub(crate) fn offline(store: &Store, account_id: i64, command: Command) {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
         // The actor keeps the flag offline, so it never gets here.
-        Command::SetShareInfo { reply, .. } => {
+        Command::SetShareInfo { reply, .. } | Command::SetNotices { reply, .. } => {
             let _ = reply.send(Ok(()));
         }
     }

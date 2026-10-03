@@ -165,9 +165,20 @@ pub(crate) struct FeatureState {
     pub jmi: jmi::State,
     pub presence: presence::State,
     pub mds: mds::State,
+    /// What the user keeps back from the contacts. It stays across sessions.
+    pub privacy: Privacy,
     /// Commands that need a server service (pubsub, upload) and arrived before service
     /// discovery finished. They run when it finishes.
     pub deferred: Vec<FeatureCommand>,
+}
+
+/// The notices that the user may stop. Both are on by default.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Privacy {
+    /// Send no read markers (XEP-0333) and no delivery receipts (XEP-0184).
+    pub no_read_notices: bool,
+    /// Send no chat states (XEP-0085).
+    pub no_typing_notices: bool,
 }
 
 /// A command for one feature. The public API in each feature module sends it.
@@ -311,8 +322,10 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     let inactive = ctx.state.csi.inactive;
     let idle_since = ctx.state.presence.idle_since.take();
     let hide_info = ctx.state.disco.hide_info;
+    let privacy = ctx.state.privacy;
     *ctx.state = FeatureState::default();
     ctx.state.disco.hide_info = hide_info;
+    ctx.state.privacy = privacy;
     ctx.state.muc = muc_state;
     ctx.state.csi.inactive = inactive;
     ctx.state.presence.idle_since = idle_since;
@@ -485,6 +498,7 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: FeatureCommand) {
                     },
             )
             | FeatureCommand::Muc(muc::Command::RoomService { .. })
+            | FeatureCommand::Mam(mam::Command::GetPrefs { .. } | mam::Command::SetPrefs { .. })
             | FeatureCommand::Blocking(
                 blocking::Command::Block { .. }
                     | blocking::Command::Unblock { .. }

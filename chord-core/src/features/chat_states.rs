@@ -101,7 +101,10 @@ fn state_of(message: &Message) -> Option<ChatState> {
 }
 
 /// Payloads for every outgoing message with a body: `<active/>`.
-pub(crate) fn outgoing_payloads(_ctx: &mut Ctx<'_>) -> Vec<Element> {
+pub(crate) fn outgoing_payloads(ctx: &mut Ctx<'_>) -> Vec<Element> {
+    if ctx.state.privacy.no_typing_notices {
+        return Vec::new();
+    }
     vec![ChatState::Active.into()]
 }
 
@@ -236,6 +239,9 @@ pub(crate) fn on_new_session(ctx: &mut Ctx<'_>) {
 }
 
 fn set_typing(ctx: &mut Ctx<'_>, peer: &str, typing: bool) {
+    if ctx.state.privacy.no_typing_notices {
+        return;
+    }
     let Ok(jid) = Jid::new(peer) else {
         return;
     };
@@ -295,6 +301,9 @@ fn with_hints(mut message: Message) -> Message {
 
 /// The user closed the chat with `peer`: send `gone` once.
 fn close_chat(ctx: &mut Ctx<'_>, peer: &str) {
+    if ctx.state.privacy.no_typing_notices {
+        return;
+    }
     let Ok(jid) = Jid::new(peer) else {
         return;
     };
@@ -652,6 +661,23 @@ mod tests {
         assert_eq!(sent_states(&mut h), [(MessageType::Chat, ChatState::Gone)]);
         h.with_ctx(|ctx| close_chat(ctx, BOB));
         assert!(sent_states(&mut h).is_empty());
+    }
+
+    #[test]
+    fn no_state_goes_out_when_the_user_keeps_typing_notices_back() {
+        let mut h = Harness::new();
+        h.state.privacy.no_typing_notices = true;
+        deliver(&mut h, from_bob(Some(ChatState::Active), None));
+        h.with_ctx(|ctx| set_typing(ctx, BOB, true));
+        h.with_ctx(|ctx| close_chat(ctx, BOB));
+        assert!(sent_states(&mut h).is_empty());
+        // A message with a body carries no state either.
+        h.with_ctx(|ctx| chat::send(ctx, Jid::new(BOB).unwrap(), "hello".into()));
+        let sent = h.take_sent();
+        let Stanza::Message(m) = &sent[0] else {
+            panic!("no message");
+        };
+        assert_eq!(state_of(m), None);
     }
 
     #[test]

@@ -398,6 +398,11 @@ fn send_marker(ctx: &mut Ctx<'_>, peer: &str, to: &Jid, newest: &Newest) {
     if let Some(stanza_id) = &newest.stanza_id {
         super::mds::publish(ctx, peer, newest.kind, stanza_id);
     }
+    // The user keeps read notices back. The read position moves and no one hears of it.
+    if ctx.state.privacy.no_read_notices {
+        mark_sent(ctx, peer, newest.rowid);
+        return;
+    }
     message.id = Some(Id(new_id()));
     message.payloads.push(
         Element::builder("displayed", NS_MARKERS)
@@ -480,6 +485,7 @@ pub(crate) fn after_store(
     super::mds::on_stored(ctx, stored);
     let message = incoming.message;
     if !live
+        || ctx.state.privacy.no_read_notices
         || incoming.direction != Direction::In
         || incoming.kind != MessageKind::Chat
         || message_ext::is_private(incoming.peer)
@@ -818,6 +824,27 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn no_receipt_and_no_marker_when_the_user_keeps_read_notices_back() {
+        let mut h = Harness::new();
+        contact(&h, PEER, "both");
+        h.state.privacy.no_read_notices = true;
+        let m = requesting(Some("m1"));
+        assert!(receipts(&mut h, &m, true, MessageKind::Chat, PEER, FROM).is_empty());
+        put(&h, "a", Direction::In, MessageKind::Chat, PEER);
+        h.take_sent();
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        assert!(messages_only(h.take_sent()).is_empty());
+        // The read position moved, and a later session sends no old marker.
+        h.state.privacy.no_read_notices = false;
+        h.with_ctx(on_connected);
+        assert!(messages_only(h.take_sent()).is_empty());
+        // With the notices on, the next message gets its marker.
+        put(&h, "b", Direction::In, MessageKind::Chat, PEER);
+        h.with_ctx(|ctx| mark_read(ctx, PEER)).unwrap();
+        assert_eq!(messages_only(h.take_sent()).len(), 1);
     }
 
     #[test]
