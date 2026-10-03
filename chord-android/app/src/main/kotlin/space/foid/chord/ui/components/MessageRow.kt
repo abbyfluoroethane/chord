@@ -9,6 +9,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -83,6 +85,7 @@ import space.foid.chord.ui.timeline.SendState
  * @param onReplyPreviewClick jumps to the quoted message: gets its id, or null if unknown.
  * @param onRetryClick the "Try again" link of a failed message.
  * @param onImageClick opens the viewer for an inline image: gets its URL.
+ * @param onProfileClick a tap on the avatar or the name. Null: they do nothing.
  * @param onXmppLink a tap on an xmpp: link in the text: gets the URI. http(s) links open in the browser.
  */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
@@ -98,6 +101,7 @@ fun MessageRow(
     onRetryClick: () -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onXmppLink: (String) -> Unit = {},
+    onProfileClick: (() -> Unit)? = null,
 ) {
     val colors = Chord.colors
     // The row and the text both detect a long press. Whoever fires first wins.
@@ -132,7 +136,7 @@ fun MessageRow(
                 if (grouped) {
                     if (pressed) Text(message.timeLabel, style = ChordType.caption, color = colors.inkMuted, maxLines = 1)
                 } else {
-                    avatar()
+                    Box(if (onProfileClick != null) Modifier.clickable(role = Role.Button, onClick = onProfileClick).testTag("message_avatar") else Modifier) { avatar() }
                 }
             }
             Column(Modifier.weight(1f).padding(start = ChordSpace.s3)) {
@@ -144,7 +148,8 @@ fun MessageRow(
                             color = if (message.outgoing) colors.brandInk else colors.ink,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false),
+                            modifier = Modifier.weight(1f, fill = false)
+                                .then(if (onProfileClick != null) Modifier.clickable(onClick = onProfileClick).testTag("message_name") else Modifier),
                         )
                         Text(
                             message.timeLabel,

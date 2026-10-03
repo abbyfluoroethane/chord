@@ -136,6 +136,7 @@ fun TimelineScreen(
     modifier: Modifier = Modifier,
     onXmppLink: ((String) -> Unit)? = null,
     direct: Boolean? = null,
+    onOpenProfile: (address: String, name: String) -> Unit = { _, _ -> },
 ) {
     val vm: TimelineViewModel = viewModel(key = target.toString(), factory = ChordViewModels.timeline(target))
 
@@ -265,6 +266,7 @@ fun TimelineScreen(
         onOpenMembers = onOpenMembers,
         onLongPress = { actionsFor = it },
         onXmppLink = xmppHandler,
+        onOpenProfile = { onOpenProfile(it.senderId, it.senderName) },
         onReactionClick = { id, emoji -> vm.toggleReaction(id, emoji) },
         onRetry = { vm.send(it.body) },
         onImageClick = { viewing = it },
@@ -385,6 +387,7 @@ fun TimelineContent(
     onRetryUpload: (Long) -> Unit = {},
     onDismissUpload: (Long) -> Unit = {},
     onXmppLink: (String) -> Unit = {},
+    onOpenProfile: (MessageUi) -> Unit = {},
     onLoadOlder: () -> Unit = {},
     error: String? = null,
     listState: LazyListState = rememberLazyListState(),
@@ -433,7 +436,7 @@ fun TimelineContent(
                 modifier = Modifier.fillMaxSize().testTag("timeline"),
             ) {
                 items(rows, key = { it.message.id }, contentType = { "message" }) { row ->
-                    TimelineRow(row, onLongPress, onReactionClick, onRetry, onImageClick, onXmppLink, onRowComposed)
+                    TimelineRow(row, onLongPress, onReactionClick, onRetry, onImageClick, onXmppLink, onOpenProfile, onRowComposed)
                 }
                 // After the rows: the top of the screen.
                 if (loadingOlder) {
@@ -498,6 +501,7 @@ private fun TimelineRow(
     onRetry: (MessageUi) -> Unit,
     onImageClick: (MessageUi) -> Unit,
     onXmppLink: (String) -> Unit,
+    onOpenProfile: (MessageUi) -> Unit,
     onRowComposed: ((String) -> Unit)?,
 ) {
     if (onRowComposed != null) SideEffect { onRowComposed(row.message.id) }
@@ -512,6 +516,7 @@ private fun TimelineRow(
         onRetryClick = { onRetry(m) },
         onImageClick = { onImageClick(m) },
         onXmppLink = onXmppLink,
+        onProfileClick = { onOpenProfile(m) },
     )
 }
 
