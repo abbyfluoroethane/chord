@@ -55,7 +55,9 @@ class MainActivity : ComponentActivity() {
         val app = application as ChordApp
         lifecycleScope.launch {
             startSignedIn = try {
-                app.startup.await()
+                // The start-up result is from the process start. After a sign-in in this process,
+                // a new activity must still open the main screen, so ask the session too.
+                app.startup.await() || app.session.client.value != null
             } catch (e: Exception) {
                 logWarn("MainActivity", "restore failed", e)
                 false
