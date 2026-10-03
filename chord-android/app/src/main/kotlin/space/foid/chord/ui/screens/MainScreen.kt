@@ -45,6 +45,8 @@ import kotlinx.coroutines.launch
 import space.foid.chord.ChordApp
 import space.foid.chord.data.TimelineTarget
 import space.foid.chord.ui.layout.DrawerPane
+import space.foid.chord.ui.profile.DmProfilePane
+import space.foid.chord.ui.profile.ProfileSheet
 import space.foid.chord.ui.layout.DualDrawer
 import space.foid.chord.ui.layout.rememberDualDrawerState
 import space.foid.chord.ui.theme.Chord
@@ -89,6 +91,8 @@ fun MainScreen(
     var selectedName by rememberSaveable { mutableStateOf(openPeer?.let(::bareJid)?.substringBefore('@').orEmpty()) }
     // Null when the kind is not known, for example after a notification tap.
     var selectedDirect by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    // The person whose profile sheet is open: address and name.
+    var profileOf by remember { mutableStateOf<Pair<String, String>?>(null) }
     var scopeKey by rememberSaveable { mutableStateOf("") }
     val drawer = rememberDualDrawerState(if (selectedJid.isEmpty()) DrawerPane.Left else DrawerPane.Center)
     val channelScope = remember(scopeKey) { scopeFromString(scopeKey) }
@@ -174,7 +178,20 @@ fun MainScreen(
                     )
                 },
                 right = {
-                    if (selectedJid.isNotEmpty()) MemberDrawer(memberRoomFor(selectedJid), selectedName)
+                    if (selectedJid.isNotEmpty()) {
+                        if (selectedDirect == true && '/' !in selectedJid) {
+                            DmProfilePane(
+                                address = selectedJid, name = selectedName,
+                                onOpenSettings = onOpenSettings,
+                                onViewFull = { profileOf = selectedJid to selectedName },
+                            )
+                        } else {
+                            MemberDrawer(
+                                memberRoomFor(selectedJid), selectedName,
+                                onOpenProfile = { m -> profileOf = (m.jid ?: m.id) to m.name },
+                            )
+                        }
+                    }
                 },
             ) {
                 if (selectedJid.isEmpty()) {
@@ -189,6 +206,7 @@ fun MainScreen(
                             onOpenMembers = { scope.launch { drawer.openRight() } },
                             onXmppLink = joinVm::openXmppUri,
                             direct = selectedDirect,
+                            onOpenProfile = { a, n -> profileOf = a to n },
                         )
                     }
                 }
@@ -197,6 +215,21 @@ fun MainScreen(
         }
     }
 
+    profileOf?.let { (address, name) ->
+        ProfileSheet(
+            address = address,
+            name = name,
+            room = selectedJid.takeIf { it.isNotEmpty() && selectedDirect != true }?.let(::memberRoomFor),
+            onDismiss = { profileOf = null },
+            onMessage = { a, n ->
+                selectedJid = a
+                selectedName = n
+                selectedDirect = true
+                scope.launch { drawer.close() }
+            },
+            onOpenSettings = onOpenSettings,
+        )
+    }
     if (join.visible) {
         NewConversationSheet(join, JoinCallbacks.of(joinVm), onDismiss = joinVm::dismiss)
     }
