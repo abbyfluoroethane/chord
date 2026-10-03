@@ -10,21 +10,39 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import space.foid.chord.R
 
 /** --ease-out: cubic-bezier(0.2, 0, 0, 1). */
 val ChordEase = CubicBezierEasing(0.2f, 0f, 0f, 1f)
 
 /**
  * Type styles. The desktop uses IBM Plex Sans, IBM Plex Mono and Bricolage Grotesque.
- * TODO: bundle those fonts as res/font. Until then the system fonts stand in.
+ * The fonts are in res/font. All three are under the SIL OFL (assets/licenses).
  */
 object ChordType {
-    val sans: FontFamily = FontFamily.SansSerif
-    val mono: FontFamily = FontFamily.Monospace
-    val display: FontFamily = FontFamily.SansSerif
+    val sans: FontFamily = FontFamily(
+        Font(R.font.ibm_plex_sans_regular, FontWeight.Normal),
+        Font(R.font.ibm_plex_sans_medium, FontWeight.Medium),
+        Font(R.font.ibm_plex_sans_semibold, FontWeight.SemiBold),
+        // No Bold file: bold text uses the 600 face.
+        Font(R.font.ibm_plex_sans_semibold, FontWeight.Bold),
+    )
+    val mono: FontFamily = FontFamily(Font(R.font.ibm_plex_mono_regular, FontWeight.Normal))
+    // One variable font file. The wght axis is set to 700.
+    @OptIn(ExperimentalTextApi::class)
+    val display: FontFamily = FontFamily(
+        Font(
+            R.font.bricolage_grotesque,
+            FontWeight.Bold,
+            variationSettings = FontVariation.Settings(FontVariation.weight(700)),
+        ),
+    )
 
     val body = TextStyle(fontFamily = sans, fontSize = 15.sp, lineHeight = 22.sp)
     val bodySmall = TextStyle(fontFamily = sans, fontSize = 13.sp, lineHeight = 18.sp)
