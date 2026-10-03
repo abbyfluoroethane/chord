@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="composer_placeholder_room">Message #%1$s</string>
+    <string name="composer_placeholder_direct">Message %1$s</string>
+    <string name="composer_attach">Add a file</string>
+    <string name="composer_emoji">Emoji</string>
+    <string name="composer_send">Send</string>
+    <string name="composer_save_edit">Save</string>
+    <string name="composer_replying_to">Replying to %1$s</string>
+    <string name="composer_editing">Editing message</string>
+    <string name="composer_cancel_reply">Cancel reply</string>
+    <string name="composer_cancel_edit">Cancel edit (Esc)</string>
+    <string name="composer_hint_edit">Tap Save to keep the change</string>
+    <string name="composer_mention_label">@%1$s</string>
+    <string name="composer_shortcode_label">:%1$s:</string>
+
+    <string name="msg_react">React with %1$s</string>
+    <string name="msg_add_reaction">Add reaction</string>
+    <string name="msg_open_link">Open link</string>
+    <string name="msg_copy_link">Copy link</string>
+    <string name="msg_edit">Edit message</string>
+    <string name="msg_reply">Reply</string>
+    <string name="msg_forward">Forward</string>
+    <string name="msg_copy_text">Copy text</string>
+    <string name="msg_copy_channel_link">Copy channel link</string>
+    <string name="msg_copy_contact_link">Copy contact link</string>
+    <string name="msg_delete">Delete message</string>
+    <string name="msg_remove">Remove message</string>
+    <string name="msg_copy_id">Copy message ID</string>
+    <string name="msg_deleted_preview">Message deleted.</string>
+    <string name="msg_link_copied">Link copied.</string>
+    <string name="msg_text_copied">Text copied.</string>
+    <string name="msg_id_copied">ID copied.</string>
+    <string name="msg_no_app_for_link">No app can open this link.</string>
+
+    <string name="delete_title">Delete message</string>
+    <string name="delete_text">Delete this message? Nobody can bring it back.</string>
+    <string name="remove_title">Remove message</string>
+    <string name="remove_text">Remove this message for everyone in the room? Nobody can bring it back.</string>
+    <string name="delete_cancel">Cancel</string>
+    <string name="delete_confirm">Delete</string>
+    <string name="remove_confirm">Remove</string>
+
+    <string name="forward_title">Forward message</string>
+    <string name="forward_search">Search channels and people</string>
+    <string name="forward_none">Nothing matches. Try a shorter name.</string>
+    <string name="forward_button">Forward</string>
+    <string name="forward_done">Forwarded to %1$s.</string>
+
+    <string name="tray_remove">Remove %1$s</string>
+    <string name="tray_uploading">Uploading</string>
+    <string name="tray_retry">Retry</string>
+</resources>

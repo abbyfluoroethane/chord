@@ -144,6 +144,12 @@ class TimelineViewModel(
 
     fun retract(itemId: String) = act { it.retract(itemId) }
 
+    /** Remove the message of another person, as a room moderator. */
+    fun moderate(itemId: String) = act { it.moderate(itemId) }
+
+    /** Send [text] as a new message to another chat. */
+    fun forward(to: TimelineTarget, text: String) = act { it.send(to, text) }
+
     fun toggleReaction(itemId: String, emoji: String) = act { it.toggleReaction(itemId, emoji) }
 
     /**

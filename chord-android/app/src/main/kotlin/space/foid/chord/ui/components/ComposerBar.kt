@@ -1,5 +1,26 @@
 package space.foid.chord.ui.components
 
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import space.foid.chord.R
+import space.foid.chord.ui.composer.ShortcodeIndex
+import space.foid.chord.ui.composer.ShortcodeIndexCache
+import space.foid.chord.ui.composer.Suggestion
+import space.foid.chord.ui.composer.SuggestionList
+import space.foid.chord.ui.composer.TextEdit
+import space.foid.chord.ui.composer.findMention
+import space.foid.chord.ui.composer.findShortcode
+import space.foid.chord.ui.composer.insertAtSelection
+import space.foid.chord.ui.composer.insertMention
+import space.foid.chord.ui.composer.insertShortcode
+import space.foid.chord.ui.composer.suggestNicks
+import space.foid.chord.ui.sheets.LineIcon
+import space.foid.chord.ui.sheets.ReactionPickerSheet
+import space.foid.chord.ui.sheets.SheetIcon
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +94,8 @@ import space.foid.chord.ui.theme.ChordType
  * @param replyingTo the name of the sender of the quoted message: shows the "Replying to" strip.
  * @param editing true while the user edits an own message: shows the "Editing message" strip.
  *   [onCancelEdit] must clear the text too, the bar does not touch it.
+ * @param mentionNicks the nicks of the room: typing @ offers them. Empty in a 1:1 chat.
+ * @param shortcodeIndex the emoji names for :name: null loads the bundled catalog when needed.
  * @param onAttach opens the file picker. The bar only calls it.
  * @param inputModifier extra modifier of the text field (for example a test tag).
  * @param sendModifier extra modifier of the send button.
@@ -91,6 +114,8 @@ fun ComposerBar(
     onAttach: () -> Unit = {},
     inputModifier: Modifier = Modifier,
     sendModifier: Modifier = Modifier,
+    mentionNicks: List<String> = emptyList(),
+    shortcodeIndex: ShortcodeIndex? = null,
 ) {
     val colors = Chord.colors
     val canSend = text.isNotBlank()
@@ -102,6 +127,23 @@ fun ComposerBar(
     LaunchedEffect(editing, replyingTo != null) {
         if (editing || replyingTo != null) runCatching { focus.requestFocus() }
     }
+
+    // The word under the caret: "@nick" in a room, or ":name" for an emoji.
+    val caret = field.selection.let { if (it.collapsed) it.start else -1 }
+    val mention = if (caret >= 0 && mentionNicks.isNotEmpty()) findMention(field.text, caret) else null
+    val shortcode = if (caret >= 0 && mention == null) findShortcode(field.text, caret) else null
+    val index = shortcodeIndex ?: rememberShortcodeIndex(shortcode != null)
+    val hits: List<Suggestion> = when {
+        mention != null -> suggestNicks(mentionNicks, mention.query, SUGGESTIONS).map { Suggestion.Nick(it) }
+        shortcode != null && index != null -> index.suggest(shortcode.query, SUGGESTIONS).map { Suggestion.Emoji(it.name, it.emoji) }
+        else -> emptyList()
+    }
+    fun apply(edit: TextEdit) {
+        field = TextFieldValue(edit.text, TextRange(edit.caret))
+        onTextChange(edit.text)
+    }
+    var pickerOpen by remember { mutableStateOf(false) }
+
     Column(
         modifier
             .fillMaxWidth()
@@ -109,23 +151,34 @@ fun ComposerBar(
             .imePadding()
             .navigationBarsPadding(),
     ) {
+        if (hits.isNotEmpty()) {
+            SuggestionList(hits, onPick = { pick ->
+                when (pick) {
+                    is Suggestion.Nick -> mention?.let { apply(insertMention(field.text, caret, it, pick.nick)) }
+                    is Suggestion.Emoji -> shortcode?.let { apply(insertShortcode(field.text, caret, it, pick.emoji)) }
+                }
+            })
+        }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         if (replyingTo != null) {
-            Strip(onCancel = onCancelReply, cancelLabel = "Cancel reply") {
-                Text("Replying to ", style = ChordType.bodySmall, color = colors.inkMuted)
+            Strip(onCancel = onCancelReply, cancelLabel = stringResource(R.string.composer_cancel_reply)) {
+                val full = stringResource(R.string.composer_replying_to, replyingTo)
+                val at = full.lastIndexOf(replyingTo)
                 Text(
-                    replyingTo,
-                    style = ChordType.bodySmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
-                    color = colors.ink,
+                    buildAnnotatedString {
+                        append(full)
+                        if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = colors.ink), at, at + replyingTo.length)
+                    },
+                    style = ChordType.bodySmall,
+                    color = colors.inkMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
             }
         }
         if (editing) {
-            Strip(onCancel = onCancelEdit, cancelLabel = "Cancel edit") {
-                Text("Editing message", style = ChordType.bodySmall, color = colors.brandInk)
+            Strip(onCancel = onCancelEdit, cancelLabel = stringResource(R.string.composer_cancel_edit)) {
+                Text(stringResource(R.string.composer_editing), style = ChordType.bodySmall, color = colors.brandInk)
             }
         }
         Row(
@@ -133,7 +186,7 @@ fun ComposerBar(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(ChordSpace.s2),
         ) {
-            RoundButton(label = "Attach a file", onClick = onAttach, background = colors.surface300) { PlusGlyph(colors.inkMuted) }
+            RoundButton(label = stringResource(R.string.composer_attach), onClick = onAttach, background = colors.surface300) { PlusGlyph(colors.inkMuted) }
             BasicTextField(
                 value = field,
                 onValueChange = {
@@ -146,22 +199,32 @@ fun ComposerBar(
                 maxLines = 6,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                 decorationBox = { inner ->
-                    Box(
+                    Row(
                         Modifier
                             .fillMaxWidth()
                             .heightIn(min = ChordSize.avatar)
                             .background(colors.surface300, RoundedCornerShape(20.dp))
                             .border(1.dp, colors.line, RoundedCornerShape(20.dp))
-                            .padding(horizontal = ChordSpace.s4, vertical = 9.dp),
-                        contentAlignment = Alignment.CenterStart,
+                            .padding(start = ChordSpace.s4),
+                        verticalAlignment = Alignment.Bottom,
                     ) {
-                        if (text.isEmpty()) Text(placeholder, style = ChordType.body, color = colors.inkMuted)
-                        inner()
+                        Box(Modifier.weight(1f).heightIn(min = ChordSize.avatar).padding(vertical = 9.dp), contentAlignment = Alignment.CenterStart) {
+                            if (text.isEmpty()) Text(placeholder, style = ChordType.body, color = colors.inkMuted)
+                            inner()
+                        }
+                        val emojiLabel = stringResource(R.string.composer_emoji)
+                        Box(
+                            Modifier
+                                .size(ChordSize.avatar)
+                                .semantics { contentDescription = emojiLabel; role = Role.Button }
+                                .clickable { pickerOpen = true },
+                            contentAlignment = Alignment.Center,
+                        ) { LineIcon(SheetIcon.Smile, colors.inkMuted, 22.dp) }
                     }
                 },
             )
             RoundButton(
-                label = if (editing) "Save edit" else "Send",
+                label = stringResource(if (editing) R.string.composer_save_edit else R.string.composer_send),
                 onClick = { if (canSend) onSend() },
                 background = if (canSend) colors.brand else colors.surface300,
                 enabled = canSend,
@@ -169,6 +232,27 @@ fun ComposerBar(
             ) { SendGlyph(if (canSend) colors.onBrand else colors.inkMuted) }
         }
     }
+    if (pickerOpen) {
+        ReactionPickerSheet(
+            onDismiss = { pickerOpen = false },
+            onPick = { e ->
+                pickerOpen = false
+                apply(insertAtSelection(field.text, field.selection.start, field.selection.end, e))
+            },
+        )
+    }
+}
+
+private const val SUGGESTIONS = 6
+
+/** The shortcode index of the bundled emoji catalog. It loads when [needed] is true the first time. */
+@Composable
+private fun rememberShortcodeIndex(needed: Boolean): ShortcodeIndex? {
+    val context = LocalContext.current
+    val index by produceState(ShortcodeIndexCache.now(), needed) {
+        if (needed && value == null) value = ShortcodeIndexCache.load(context)
+    }
+    return index
 }
 
 /** A thin strip above the field: a label slot and a cancel button. */

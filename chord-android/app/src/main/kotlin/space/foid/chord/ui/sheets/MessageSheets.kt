@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -40,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -50,54 +53,49 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
+import space.foid.chord.R
+import space.foid.chord.ui.composer.MessageAction
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordRadius
 import space.foid.chord.ui.theme.ChordSpace
 import space.foid.chord.ui.theme.ChordType
 import space.foid.chord.ui.timeline.MessageUi
 
-/** The six emoji of the quick row. */
-internal val QuickReactions = listOf("👍", "❤️", "😂", "😮", "😢", "🙏")
-
 /**
- * The sheet for one message: a preview, quick reactions and the actions. Each action hides the
- * sheet first, then calls its callback and [onDismiss].
+ * The sheet for one message: a preview, the quick reactions and the actions, in the order of the
+ * desktop menu. Each action hides the sheet first, then calls its callback and [onDismiss].
+ *
+ * @param links the links of the message: each gets "Open link" and "Copy link" rows on top.
+ * @param quick the emoji of the quick row.
+ * @param channelLinkLabel the text of the "copy the link of the chat" row, or null for no row.
  */
 @Composable
 fun MessageActionsSheet(
     message: MessageUi,
-    canEdit: Boolean,
-    canRetract: Boolean,
+    actions: List<MessageAction>,
+    quick: List<String>,
     onDismiss: () -> Unit,
-    onReply: () -> Unit,
-    onEdit: () -> Unit,
-    onRetract: () -> Unit,
-    onCopy: () -> Unit,
+    onAction: (MessageAction) -> Unit,
     onReact: (String) -> Unit,
     onMoreReactions: () -> Unit,
+    links: List<String> = emptyList(),
+    onOpenLink: (String) -> Unit = {},
+    onCopyLink: (String) -> Unit = {},
+    channelLinkLabel: String? = null,
 ) {
-    var confirming by remember { mutableStateOf(false) }
     ChordModalSheet(onDismiss) { dismissThen ->
         MessageActionsContent(
             message = message,
-            canEdit = canEdit,
-            canRetract = canRetract,
-            onReply = { dismissThen(onReply) },
-            onEdit = { dismissThen(onEdit) },
-            onDelete = { confirming = true },
-            onCopy = { dismissThen(onCopy) },
+            actions = actions,
+            quick = quick,
+            links = links,
+            channelLinkLabel = channelLinkLabel,
+            onAction = { a -> dismissThen { onAction(a) } },
             onReact = { e -> dismissThen { onReact(e) } },
             onMoreReactions = { dismissThen(onMoreReactions) },
+            onOpenLink = { l -> dismissThen { onOpenLink(l) } },
+            onCopyLink = { l -> dismissThen { onCopyLink(l) } },
         )
-        if (confirming) {
-            DeleteConfirmDialog(
-                onConfirm = {
-                    confirming = false
-                    dismissThen(onRetract)
-                },
-                onCancel = { confirming = false },
-            )
-        }
     }
 }
 
@@ -105,82 +103,128 @@ fun MessageActionsSheet(
 @Composable
 internal fun MessageActionsContent(
     message: MessageUi,
-    canEdit: Boolean,
-    canRetract: Boolean,
-    onReply: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onCopy: () -> Unit,
+    actions: List<MessageAction>,
+    quick: List<String>,
+    onAction: (MessageAction) -> Unit,
     onReact: (String) -> Unit,
     onMoreReactions: () -> Unit,
+    modifier: Modifier = Modifier,
+    links: List<String> = emptyList(),
+    channelLinkLabel: String? = null,
+    onOpenLink: (String) -> Unit = {},
+    onCopyLink: (String) -> Unit = {},
 ) {
-    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = ChordSpace.s2)) {
+    val colors = Chord.colors
+    Column(modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = ChordSpace.s2)) {
         MessagePreview(message, Modifier.padding(horizontal = ChordSpace.s4))
-        Spacer(Modifier.height(ChordSpace.s3))
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = ChordSpace.s4),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            QuickReactions.forEach { e ->
+        if (!message.retracted) {
+            Spacer(Modifier.height(ChordSpace.s3))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = ChordSpace.s4),
+                horizontalArrangement = Arrangement.spacedBy(ChordSpace.s2),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                quick.forEach { e ->
+                    Box(
+                        Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(ChordRadius.md)).background(colors.surface300)
+                            .clickable(role = Role.Button) { onReact(e) }
+                            .semantics { contentDescription = "React with $e" },
+                        contentAlignment = Alignment.Center,
+                    ) { Text(e, fontSize = 26.sp) }
+                }
                 Box(
-                    Modifier.size(44.dp).clip(RoundedCornerShape(ChordRadius.md)).background(Chord.colors.surface300)
-                        .clickable(role = Role.Button) { onReact(e) }
-                        .semantics { contentDescription = "React $e" },
+                    Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(ChordRadius.md)).background(colors.surface300)
+                        .clickable(role = Role.Button, onClick = onMoreReactions)
+                        .semantics { contentDescription = "Add reaction" },
                     contentAlignment = Alignment.Center,
-                ) { Text(e, fontSize = 24.sp) }
+                ) { LineIcon(SheetIcon.Smile, colors.ink, 26.dp) }
             }
-            Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(ChordRadius.md)).background(Chord.colors.surface300)
-                    .clickable(role = Role.Button, onClick = onMoreReactions)
-                    .semantics { contentDescription = "More reactions" },
-                contentAlignment = Alignment.Center,
-            ) { LineIcon(SheetIcon.Plus, Chord.colors.ink) }
         }
         Spacer(Modifier.height(ChordSpace.s2))
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Chord.colors.line))
-        SheetRow(SheetIcon.Reply, "Reply", onReply)
-        if (canEdit) SheetRow(SheetIcon.Edit, "Edit", onEdit)
-        SheetRow(SheetIcon.Copy, "Copy text", onCopy)
-        if (canRetract) SheetRow(SheetIcon.Delete, "Delete", onDelete, danger = true)
+        if (links.isNotEmpty()) {
+            Divider()
+            links.forEach { l ->
+                SheetRow(SheetIcon.Open, stringResource(R.string.msg_open_link), { onOpenLink(l) }, subtitle = l)
+                SheetRow(SheetIcon.Link, stringResource(R.string.msg_copy_link), { onCopyLink(l) }, subtitle = l)
+            }
+        }
+        fun group(vararg members: MessageAction): List<MessageAction> = members.filter { it in actions }
+        // The groups are as on the desktop: edit and reply, then copy, then delete, then the ID.
+        listOf(
+            group(MessageAction.Edit, MessageAction.Reply, MessageAction.Forward),
+            group(MessageAction.CopyText, MessageAction.CopyChannelLink),
+            group(MessageAction.Delete, MessageAction.Remove),
+            group(MessageAction.CopyId),
+        ).filter { it.isNotEmpty() }.forEach { rows ->
+            Divider()
+            rows.forEach { a ->
+                val (icon, title) = when (a) {
+                    MessageAction.Edit -> SheetIcon.Edit to stringResource(R.string.msg_edit)
+                    MessageAction.Reply -> SheetIcon.Reply to stringResource(R.string.msg_reply)
+                    MessageAction.Forward -> SheetIcon.Forward to stringResource(R.string.msg_forward)
+                    MessageAction.CopyText -> SheetIcon.Copy to stringResource(R.string.msg_copy_text)
+                    MessageAction.CopyChannelLink -> SheetIcon.Link to (channelLinkLabel ?: stringResource(R.string.msg_copy_channel_link))
+                    MessageAction.Delete -> SheetIcon.Delete to stringResource(R.string.msg_delete)
+                    MessageAction.Remove -> SheetIcon.ShieldX to stringResource(R.string.msg_remove)
+                    MessageAction.CopyId -> SheetIcon.Hash to stringResource(R.string.msg_copy_id)
+                }
+                SheetRow(icon, title, { onAction(a) }, danger = a == MessageAction.Delete || a == MessageAction.Remove)
+            }
+        }
     }
+}
+
+@Composable
+private fun Divider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Chord.colors.line))
 }
 
 /** The sender and the first two lines of the message. */
 @Composable
-private fun MessagePreview(message: MessageUi, modifier: Modifier = Modifier) {
+private fun MessagePreview(message: MessageUi, modifier: Modifier = Modifier, surface: androidx.compose.ui.graphics.Color = Chord.colors.surface300) {
     Column(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(ChordRadius.md)).background(Chord.colors.surface300)
+        modifier.fillMaxWidth().clip(RoundedCornerShape(ChordRadius.md)).background(surface)
             .padding(horizontal = ChordSpace.s3, vertical = ChordSpace.s2),
     ) {
         Text(message.senderName, style = ChordType.name, color = Chord.colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        val snippet = if (message.retracted) "This message was deleted" else message.body
+        val snippet = if (message.retracted) stringResource(R.string.msg_deleted_preview) else message.body
         Text(snippet, style = ChordType.bodySmall, color = Chord.colors.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
-/** The question before a delete. */
+/** The question before a delete. [remove]: a moderator removes the message of someone else. */
 @Composable
-internal fun DeleteConfirmDialog(onConfirm: () -> Unit, onCancel: () -> Unit) {
-    Dialog(onDismissRequest = onCancel) { DeleteConfirmCard(onConfirm, onCancel) }
+internal fun DeleteConfirmDialog(message: MessageUi, remove: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    Dialog(onDismissRequest = onCancel) { DeleteConfirmCard(message, remove, onConfirm, onCancel) }
 }
 
-/** The card of the delete question, with no window. */
+/** The card of the delete question, with no window. It reads as the desktop modal does. */
 @Composable
-internal fun DeleteConfirmCard(onConfirm: () -> Unit, onCancel: () -> Unit) {
+internal fun DeleteConfirmCard(message: MessageUi, remove: Boolean, onConfirm: () -> Unit, onCancel: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(ChordRadius.lg)).background(Chord.colors.surface200)
             .border(1.dp, Chord.colors.line, RoundedCornerShape(ChordRadius.lg))
             .padding(ChordSpace.s6),
     ) {
-        Text("Delete this message?", style = ChordType.title, color = Chord.colors.ink)
+        Text(
+            stringResource(if (remove) R.string.remove_title else R.string.delete_title),
+            style = ChordType.title, color = Chord.colors.ink,
+        )
         Spacer(Modifier.height(ChordSpace.s2))
-        Text("Everyone in the chat will see that it was deleted. You cannot undo this.", style = ChordType.body, color = Chord.colors.inkMuted)
+        Text(
+            stringResource(if (remove) R.string.remove_text else R.string.delete_text),
+            style = ChordType.body, color = Chord.colors.inkMuted,
+        )
+        Spacer(Modifier.height(ChordSpace.s4))
+        MessagePreview(message, Modifier.heightIn(max = 140.dp), surface = Chord.colors.surface100)
         Spacer(Modifier.height(ChordSpace.s6))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-            DialogButton("Cancel", Chord.colors.ink, Chord.colors.surface300, onCancel)
+            DialogButton(stringResource(R.string.delete_cancel), Chord.colors.ink, Chord.colors.surface300, onCancel)
             Spacer(Modifier.width(ChordSpace.s2))
-            DialogButton("Delete", Chord.colors.onDanger, Chord.colors.danger, onConfirm)
+            DialogButton(
+                stringResource(if (remove) R.string.remove_confirm else R.string.delete_confirm),
+                Chord.colors.onDanger, Chord.colors.danger, onConfirm,
+            )
         }
     }
 }
@@ -303,7 +347,7 @@ private fun EmojiCell(emoji: String, onPick: (String) -> Unit) {
 }
 
 @Composable
-private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
+internal fun SearchField(value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier, placeholder: String = "Search emoji") {
     val shape = RoundedCornerShape(ChordRadius.md)
     Row(
         modifier.fillMaxWidth().padding(bottom = ChordSpace.s2).height(44.dp).clip(shape)
@@ -314,7 +358,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Mod
         LineIcon(SheetIcon.Search, Chord.colors.inkMuted, 20.dp)
         Spacer(Modifier.width(ChordSpace.s2))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (value.isEmpty()) Text("Search emoji", style = ChordType.body, color = Chord.colors.inkMuted)
+            if (value.isEmpty()) Text(placeholder, style = ChordType.body, color = Chord.colors.inkMuted)
             BasicTextField(
                 value = value,
                 onValueChange = onChange,

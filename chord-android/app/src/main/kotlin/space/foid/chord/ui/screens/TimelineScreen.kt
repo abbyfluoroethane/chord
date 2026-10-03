@@ -89,8 +89,9 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import space.foid.chord.ui.sheets.MessageActionsSheet
-import space.foid.chord.ui.sheets.ReactionPickerSheet
+import space.foid.chord.ui.composer.MessageActionsHost
+import space.foid.chord.ui.composer.canModerate
+import space.foid.chord.viewmodel.MemberListViewModel
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordRadius
 import space.foid.chord.ui.theme.ChordSize
@@ -161,7 +162,6 @@ fun TimelineScreen(
     var draft by rememberSaveable { mutableStateOf("") }
     var mode by remember { mutableStateOf<Compose?>(null) }
     var actionsFor by remember { mutableStateOf<MessageUi?>(null) }
-    var reactionFor by remember { mutableStateOf<MessageUi?>(null) }
     var attachOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<MessageUi?>(null) }
@@ -225,6 +225,17 @@ fun TimelineScreen(
     val items by vm.items.collectAsStateWithLifecycle()
     val isRoom = target is TimelineTarget.Room &&
         (direct?.not() ?: (items.isEmpty() || items.any { '/' in it.sender }))
+    // The members of a room: the nicks for @mentions, and whether the account moderates.
+    val members = if (isRoom && target is TimelineTarget.Room) {
+        val memberVm: MemberListViewModel = viewModel(key = "members/${target.jid}", factory = ChordViewModels.memberList(target.jid))
+        memberVm.members.collectAsStateWithLifecycle().value
+    } else {
+        emptyList()
+    }
+    val mentionNicks = remember(members) { members.map { it.name } }
+    val moderator = remember(members) {
+        canModerate(members, (context.applicationContext as? ChordApp)?.session?.client?.value?.account())
+    }
     val replying = (mode as? Compose.Reply)?.message
     val editing = (mode as? Compose.Edit)?.message
 
@@ -261,6 +272,7 @@ fun TimelineScreen(
             draft = ""
         },
         onAttach = { attachOpen = true },
+        mentionNicks = mentionNicks,
         onOpenChannels = onOpenChannels,
         onOpenMembers = onOpenMembers,
         onLongPress = { actionsFor = it },
@@ -278,45 +290,18 @@ fun TimelineScreen(
     )
 
     actionsFor?.let { m ->
-        val own = m.outgoing && !m.retracted
-        MessageActionsSheet(
+        MessageActionsHost(
             message = m,
-            canEdit = own,
-            canRetract = own,
+            vm = vm,
+            target = target,
+            direct = target is TimelineTarget.Room && !isRoom,
+            moderator = moderator,
+            messageId = items.firstOrNull { it.id == m.id }?.let { it.stanzaId ?: it.originId ?: it.id } ?: m.id,
             onDismiss = { actionsFor = null },
-            onReply = {
-                actionsFor = null
-                mode = Compose.Reply(m)
-            },
+            onReply = { mode = Compose.Reply(m) },
             onEdit = {
-                actionsFor = null
                 mode = Compose.Edit(m)
                 draft = m.body
-            },
-            onRetract = {
-                actionsFor = null
-                vm.retract(m.id)
-            },
-            onCopy = {
-                actionsFor = null
-                copyScope.launch { clipboard.setClipEntry(ClipData.newPlainText("message", m.body).toClipEntry()) }
-            },
-            onReact = { emoji ->
-                actionsFor = null
-                vm.toggleReaction(m.id, emoji)
-            },
-            onMoreReactions = {
-                actionsFor = null
-                reactionFor = m
-            },
-        )
-    }
-    reactionFor?.let { m ->
-        ReactionPickerSheet(
-            onDismiss = { reactionFor = null },
-            onPick = { emoji ->
-                reactionFor = null
-                vm.toggleReaction(m.id, emoji)
             },
         )
     }
@@ -375,6 +360,7 @@ fun TimelineContent(
     editing: Boolean = false,
     onCancelEdit: () -> Unit = {},
     onAttach: () -> Unit = {},
+    mentionNicks: List<String> = emptyList(),
     onOpenChannels: () -> Unit = {},
     onOpenMembers: () -> Unit = {},
     onLongPress: (MessageUi) -> Unit = {},
@@ -477,7 +463,8 @@ fun TimelineContent(
             text = composerText,
             onTextChange = onComposerChange,
             onSend = onSend,
-            placeholder = if (isRoom) "Message #$title" else "Message $title",
+            placeholder = stringResource(if (isRoom) R.string.composer_placeholder_room else R.string.composer_placeholder_direct, title),
+            mentionNicks = mentionNicks,
             replyingTo = replyingTo,
             onCancelReply = onCancelReply,
             editing = editing,

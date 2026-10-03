@@ -98,6 +98,7 @@ class FakeChatApi : ChatApi {
     override suspend fun reply(itemId: String, body: String) = record("reply $itemId $body")
     override suspend fun edit(itemId: String, body: String) = record("edit $itemId $body")
     override suspend fun retract(itemId: String) = record("retract $itemId")
+    override suspend fun moderate(itemId: String) = record("moderate $itemId")
     override suspend fun toggleReaction(itemId: String, emoji: String) = record("react $itemId $emoji")
     override suspend fun markRead(target: TimelineTarget) = record("markRead")
     override suspend fun setTyping(target: TimelineTarget, typing: Boolean) = record("typing $typing")
