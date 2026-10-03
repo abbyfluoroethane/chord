@@ -45,7 +45,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import space.foid.chord.data.stableKey
-import space.foid.chord.ui.components.Avatar
+import space.foid.chord.ui.avatar.JidAvatar
+import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.ChannelKind
 import space.foid.chord.ui.components.ChannelListItem
 import space.foid.chord.ui.components.RailIconKind
@@ -178,6 +179,8 @@ fun ChannelDrawerContent(
                                 onClick = { onSelect(ch) },
                                 kind = ch.rowKind(!isHome),
                                 jid = bareJid(ch.jid),
+                                image = if (ch.kind is uniffi.chord_ffi.ChannelKind.PrivateMessage || ch.rowKind(!isHome) == ChannelKind.Room) null
+                                    else rememberAvatarBitmap(bareJid(ch.jid), null, 36.dp),
                                 unread = ch.unread.toInt(),
                                 mentions = 0,
                                 subtitle = if (isHome) groupSubtitle(ch) else null,
@@ -260,7 +263,7 @@ private fun UserPanel(account: AccountUi, onSignOut: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(ChordSpace.s3),
         ) {
-            Avatar(account.jid, name = account.name, size = 36.dp, cut = c.surfaceRail)
+            JidAvatar(account.jid, name = account.name, size = 36.dp, cut = c.surfaceRail)
             Column(Modifier.weight(1f)) {
                 Text(account.name, style = ChordType.name, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(account.jid, style = ChordType.caption, color = c.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -10,6 +10,7 @@ import space.foid.chord.data.ChordSessionImpl
 import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.secure.KeystoreCredentialStore
 import space.foid.chord.service.ServiceControlImpl
+import space.foid.chord.ui.avatar.AvatarRepository
 import space.foid.chord.ui.sheets.EmojiCatalog
 import java.io.File
 
@@ -26,6 +27,9 @@ class ChordApp : Application() {
             service = ServiceControlImpl(this),
         )
     }
+
+    /** Avatar bitmaps. It clears itself when the session ends. */
+    val avatars: AvatarRepository by lazy { AvatarRepository.forSession(session, appScope) }
 
     override fun onCreate() {
         super.onCreate()
