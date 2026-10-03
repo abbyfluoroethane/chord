@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_save">Save</string>
+
+    <string name="settings_profile">Profile</string>
+    <string name="settings_avatar_change">Change photo</string>
+    <string name="settings_avatar_remove">Remove</string>
+    <string name="settings_nickname">Nickname</string>
+    <string name="settings_nickname_hint">Shown to people who add you</string>
+    <string name="settings_jid">Your address</string>
+    <string name="settings_copy">Copy</string>
+    <string name="settings_copied">Copied</string>
+
+    <string name="settings_presence">Presence</string>
+    <string name="settings_available">Available</string>
+    <string name="settings_away">Away</string>
+    <string name="settings_dnd">Do not disturb</string>
+    <string name="settings_invisible">Invisible</string>
+    <string name="settings_status">Status text</string>
+    <string name="settings_status_hint">What are you up to?</string>
+
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_light">Light</string>
+
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notifications_on">Notifications are on.</string>
+    <string name="settings_notifications_off">Notifications are off. You will not see new messages.</string>
+    <string name="settings_notifications_open">Open system settings</string>
+
+    <string name="settings_privacy">Privacy</string>
+    <string name="settings_share_info">Share app version and time</string>
+    <string name="settings_share_info_hint">Let contacts and the server ask which app you use and your local time.</string>
+    <string name="settings_blocked">Blocked contacts</string>
+    <string name="settings_blocked_none">You have not blocked anyone.</string>
+    <string name="settings_unblock">Unblock</string>
+
+    <string name="settings_about">About</string>
+    <string name="settings_version">Version %1$s</string>
+    <string name="settings_website">Website and source code</string>
+    <string name="settings_licenses">Open source licences</string>
+
+    <string name="settings_sign_out">Sign out</string>
+    <string name="settings_sign_out_title">Sign out of Chord?</string>
+    <string name="settings_sign_out_body">Chord forgets your password on this phone. Your messages stay on the server.</string>
+    <string name="settings_cancel">Cancel</string>
+</resources>

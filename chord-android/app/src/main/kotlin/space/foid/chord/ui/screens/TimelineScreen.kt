@@ -69,6 +69,7 @@ import space.foid.chord.data.TimelineTarget
 import space.foid.chord.data.stableKey
 import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.ui.components.Avatar
+import space.foid.chord.ui.components.ConnectionBanner
 import space.foid.chord.ui.components.ComposerBar
 import space.foid.chord.ui.components.MessageRow
 import space.foid.chord.ui.sheets.AttachmentSheet
@@ -326,6 +327,7 @@ fun TimelineContent(
     val colors = Chord.colors
     Column(modifier.fillMaxSize().background(colors.surface100)) {
         TopBar(title = title, isRoom = isRoom, onOpenChannels = onOpenChannels, onOpenMembers = onOpenMembers)
+        ConnectionBanner()
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val newestKey = rows.firstOrNull()?.message?.id
             val newestOutgoing = rows.firstOrNull()?.message?.outgoing == true

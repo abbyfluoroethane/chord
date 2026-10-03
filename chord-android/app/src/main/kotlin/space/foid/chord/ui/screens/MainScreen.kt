@@ -55,7 +55,12 @@ private fun scopeFromString(s: String): ChannelScope =
  * @param openPeer the jid that a notification asks for. The screen selects that channel.
  */
 @Composable
-fun MainScreen(onSignedOut: () -> Unit, openPeer: String?, modifier: Modifier = Modifier) {
+fun MainScreen(
+    onSignedOut: () -> Unit,
+    openPeer: String?,
+    modifier: Modifier = Modifier,
+    onOpenSettings: () -> Unit = {},
+) {
     val session = (LocalContext.current.applicationContext as ChordApp).session
     val scope = rememberCoroutineScope()
 
@@ -90,6 +95,7 @@ fun MainScreen(onSignedOut: () -> Unit, openPeer: String?, modifier: Modifier = 
                 },
                 account = account,
                 onSignOut = { scope.launch { session.signOut(); onSignedOut() } },
+                onOpenSettings = onOpenSettings,
             )
         },
         right = {
