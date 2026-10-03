@@ -358,7 +358,7 @@ private fun SearchBox(query: String, onQuery: (String) -> Unit) {
 private fun EntryRow(e: ContactEntry, busy: Boolean, cb: ContactsCallbacks) {
     val c = Chord.colors
     val contact = e.contact
-    val presence = if (e.kind == EntryKind.Contact) contact?.placeholderPresence() else null
+    val presence = if (e.kind == EntryKind.Contact) contact?.contactPresence() else null
     val line = when (e.kind) {
         EntryKind.Contact -> listOfNotNull(
             contact?.statusText() ?: presence?.label,

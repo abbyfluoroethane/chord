@@ -69,6 +69,9 @@ fun avatarInitials(name: String): String {
 
 private val AvatarInk = Color(0xFFF6F4EF)
 
+/** False when the user turned off the status dots (Settings, Appearance). Avatars then show none. */
+val LocalShowPresence = androidx.compose.runtime.staticCompositionLocalOf { true }
+
 /**
  * Avatar with an optional presence mark at the bottom right.
  *
@@ -109,7 +112,7 @@ fun Avatar(
                 )
             }
         }
-        if (presence != null) {
+        if (presence != null && LocalShowPresence.current) {
             val dot = max(10, (size.value * 0.36f).roundToInt()).dp
             val pad = if (size >= 40.dp) 3.dp else 2.dp
             PresenceMark(

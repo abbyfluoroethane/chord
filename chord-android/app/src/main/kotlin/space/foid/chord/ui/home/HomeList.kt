@@ -39,7 +39,7 @@ import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.ChannelKind
 import space.foid.chord.ui.components.ChannelListItem
 import space.foid.chord.ui.components.CountBadge
-import space.foid.chord.ui.contacts.placeholderPresence
+import space.foid.chord.ui.contacts.contactPresence
 import space.foid.chord.ui.screens.bareJid
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordRadius
@@ -111,7 +111,7 @@ fun HomeListContent(
                         kind = ChannelKind.Dm,
                         jid = bare,
                         image = if (ch.kind is FfiChannelKind.PrivateMessage) null else rememberAvatarBitmap(bare, null, 36.dp),
-                        presence = byJid[bare.lowercase()]?.placeholderPresence(),
+                        presence = byJid[bare.lowercase()]?.contactPresence(),
                         unread = ch.unread.toInt(),
                         modifier = tag,
                     )

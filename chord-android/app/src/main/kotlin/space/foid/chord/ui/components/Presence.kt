@@ -27,6 +27,14 @@ fun Availability.toPresence(): Presence = when (this) {
 fun shownOwnPresence(availability: Availability, connected: Boolean): Presence =
     if (connected) availability.toPresence() else Presence.Offline
 
+/** The presence shape of a contact or a member: its `show` value while it is online. */
+fun presenceOf(online: Boolean, show: String?): Presence = when {
+    !online -> Presence.Offline
+    show == "dnd" -> Presence.Dnd
+    show == "away" || show == "xa" -> Presence.Away
+    else -> Presence.Online
+}
+
 /** The words for an availability. */
 @Composable
 fun availabilityLabel(a: Availability): String = stringResource(

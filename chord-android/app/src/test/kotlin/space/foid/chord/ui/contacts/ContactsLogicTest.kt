@@ -1,5 +1,6 @@
 package space.foid.chord.ui.contacts
 
+import space.foid.chord.ui.components.presenceOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -84,12 +85,12 @@ class ContactsLogicTest {
 
     @Test
     fun presenceFollowsOnlineAndShow() {
-        assertEquals(Presence.Offline, placeholderPresenceOf(false, "away"))
-        assertEquals(Presence.Online, placeholderPresenceOf(true, null))
-        assertEquals(Presence.Online, placeholderPresenceOf(true, "chat"))
-        assertEquals(Presence.Away, placeholderPresenceOf(true, "away"))
-        assertEquals(Presence.Away, placeholderPresenceOf(true, "xa"))
-        assertEquals(Presence.Dnd, placeholderPresenceOf(true, "dnd"))
+        assertEquals(Presence.Offline, presenceOf(false, "away"))
+        assertEquals(Presence.Online, presenceOf(true, null))
+        assertEquals(Presence.Online, presenceOf(true, "chat"))
+        assertEquals(Presence.Away, presenceOf(true, "away"))
+        assertEquals(Presence.Away, presenceOf(true, "xa"))
+        assertEquals(Presence.Dnd, presenceOf(true, "dnd"))
     }
 
     @Test

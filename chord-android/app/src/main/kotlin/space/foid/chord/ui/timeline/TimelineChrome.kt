@@ -1,5 +1,6 @@
 package space.foid.chord.ui.timeline
 
+import space.foid.chord.ui.components.PresenceBadge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -102,7 +103,7 @@ fun TimelineHeaderContent(
                         modifier = Modifier.weight(1f, fill = false).padding(start = ChordSpace.s1),
                     )
                     if (!isRoom && presence != null) {
-                        PresenceDotPlaceholder(presence, Modifier.padding(start = ChordSpace.s2).testTag("header_presence"))
+                        PresenceBadge(presence, Modifier.padding(start = ChordSpace.s2).semantics { contentDescription = presence.label }.testTag("header_presence"))
                     }
                 }
                 if (!topic.isNullOrBlank()) {
@@ -131,30 +132,6 @@ fun TimelineHeaderContent(
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
     }
-}
-
-/**
- * PLACEHOLDER. The shared presence mark is built by another change (ui/components/Presence.kt).
- * Replace this call with it when both are merged. It draws the same states as a plain dot.
- */
-@Composable
-private fun PresenceDotPlaceholder(presence: Presence, modifier: Modifier = Modifier) {
-    val colors = Chord.colors
-    val color = when (presence) {
-        Presence.Online -> colors.online
-        Presence.Away -> colors.away
-        Presence.Dnd -> colors.danger
-        Presence.Offline -> colors.inkMuted
-    }
-    Box(
-        modifier
-            .size(10.dp)
-            .semantics { contentDescription = presence.label }
-            .then(
-                if (presence == Presence.Offline) Modifier.border(2.dp, color, CircleShape)
-                else Modifier.background(color, CircleShape),
-            ),
-    )
 }
 
 @Composable

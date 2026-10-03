@@ -80,12 +80,7 @@ data class ProfileState(
 )
 
 /** Presence from the `online` and `show` values of the core. */
-fun presenceFor(online: Boolean, show: String?): Presence = when {
-    !online -> Presence.Offline
-    show == "dnd" -> Presence.Dnd
-    show == "away" || show == "xa" -> Presence.Away
-    else -> Presence.Online
-}
+fun presenceFor(online: Boolean, show: String?): Presence = space.foid.chord.ui.components.presenceOf(online, show)
 
 internal fun bareAddress(jid: String) = jid.substringBefore('/')
 

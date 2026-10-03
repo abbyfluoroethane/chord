@@ -420,7 +420,10 @@ internal fun UserPanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(ChordSpace.s3),
         ) {
-            JidAvatar(account.jid, name = account.name, size = 36.dp, presence = shown, cut = c.surfaceRail)
+            // Our own status always shows here, even with the status dots turned off.
+            androidx.compose.runtime.CompositionLocalProvider(space.foid.chord.ui.components.LocalShowPresence provides true) {
+                JidAvatar(account.jid, name = account.name, size = 36.dp, presence = shown, cut = c.surfaceRail)
+            }
             Column(Modifier.weight(1f)) {
                 Text(account.name, style = ChordType.name, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val custom = status.status

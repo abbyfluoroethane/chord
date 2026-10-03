@@ -49,7 +49,7 @@ import space.foid.chord.R
 import space.foid.chord.ui.avatar.rememberAvatarBitmap
 import space.foid.chord.ui.components.Avatar
 import space.foid.chord.ui.components.Presence
-import space.foid.chord.ui.contacts.placeholderPresence
+import space.foid.chord.ui.contacts.contactPresence
 import space.foid.chord.ui.screens.bareJid
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordRadius
@@ -216,12 +216,12 @@ private fun HitRow(hit: FindHit, contacts: Map<String, Contact>, onClick: () -> 
         is FindHit.Chat -> {
             title = hit.title
             hint = stringResource(if (hit.direct) R.string.find_message else R.string.find_group_chat)
-            if (hit.direct) { jid = bareJid(hit.item.jid); presence = contacts[jid.lowercase()]?.placeholderPresence() } else jid = null
+            if (hit.direct) { jid = bareJid(hit.item.jid); presence = contacts[jid.lowercase()]?.contactPresence() } else jid = null
         }
         is FindHit.Room -> { title = hit.title; hint = stringResource(R.string.find_room) }
         is FindHit.Person -> {
             title = hit.title; hint = stringResource(R.string.find_message)
-            jid = hit.jid; presence = contacts[hit.jid.lowercase()]?.placeholderPresence()
+            jid = hit.jid; presence = contacts[hit.jid.lowercase()]?.contactPresence()
         }
         is FindHit.Space -> { title = hit.title; hint = stringResource(R.string.find_space) }
         is FindHit.MessageAddress -> { title = stringResource(R.string.find_message_address, hit.jid); hint = stringResource(R.string.find_message_address_hint) }

@@ -10,6 +10,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -25,6 +26,7 @@ import kotlinx.coroutines.launch
 import space.foid.chord.data.logWarn
 import space.foid.chord.notify.ChordNotifications
 import space.foid.chord.ui.ChordNavHost
+import space.foid.chord.ui.components.LocalShowPresence
 import space.foid.chord.ui.settings.PrefsSettingsStore
 import space.foid.chord.ui.join.XmppLinkInbox
 import space.foid.chord.ui.theme.ChordTheme
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
         val settings = PrefsSettingsStore.get(this)
         setContent {
             val mode by settings.themeMode.collectAsState()
+            val showPresence by settings.showPresence.collectAsState()
             val dark = mode.isDark(isSystemInDarkTheme())
             // The bar icons follow the chosen theme, not only the system one.
             DisposableEffect(dark) {
@@ -78,13 +81,15 @@ class MainActivity : ComponentActivity() {
                 onDispose {}
             }
             ChordTheme(dark = dark) {
-                Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-                    startSignedIn?.let { signedIn ->
-                        ChordNavHost(startSignedIn = signedIn, openPeer = openPeer)
-                        // The splash ends with the first frame of real content.
-                        LaunchedEffect(Unit) {
-                            Startup.mark("content.firstFrame")
-                            reportFullyDrawn()
+                CompositionLocalProvider(LocalShowPresence provides showPresence) {
+                    Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
+                        startSignedIn?.let { signedIn ->
+                            ChordNavHost(startSignedIn = signedIn, openPeer = openPeer)
+                            // The splash ends with the first frame of real content.
+                            LaunchedEffect(Unit) {
+                                Startup.mark("content.firstFrame")
+                                reportFullyDrawn()
+                            }
                         }
                     }
                 }

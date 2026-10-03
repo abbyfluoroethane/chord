@@ -33,18 +33,8 @@ fun peopleOf(contacts: List<Contact>): List<Contact> = contacts.filter { !it.blo
 /** The contacts that are online now. */
 fun onlineOf(contacts: List<Contact>): List<Contact> = peopleOf(contacts).filter { it.online }
 
-/**
- * PLACEHOLDER. The presence state of a roster entry as the shared `Presence` enum shows it.
- * The integrator swaps this for the function of ui/components/Presence.kt.
- */
-fun placeholderPresenceOf(online: Boolean, show: String?): Presence = when {
-    !online -> Presence.Offline
-    show == "away" || show == "xa" -> Presence.Away
-    show == "dnd" -> Presence.Dnd
-    else -> Presence.Online
-}
-
-fun Contact.placeholderPresence(): Presence = placeholderPresenceOf(online, show)
+/** The presence shape of a roster entry. */
+fun Contact.contactPresence(): Presence = space.foid.chord.ui.components.presenceOf(online, show)
 
 /** The text under a contact: the status text of the contact, or none. The presence name is the fallback of the UI. */
 fun Contact.statusText(): String? = status?.trim()?.takeIf { it.isNotEmpty() }
