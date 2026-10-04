@@ -12,6 +12,7 @@ import space.foid.chord.ui.text.formatMessage
 import space.foid.chord.ui.timeline.MessageUi
 import space.foid.chord.ui.timeline.ReactionUi
 import space.foid.chord.ui.timeline.ReplyUi
+import space.foid.chord.ui.timeline.GROUP_GAP_MS
 import space.foid.chord.ui.timeline.clockLabel
 import space.foid.chord.ui.timeline.replySnippet
 import space.foid.chord.viewmodel.ProfileState
@@ -186,10 +187,13 @@ internal object ShowcaseData {
             replyTo: MessageUi? = null,
         ): MessageUi {
             val ts = at(hour, minute)
+            // The core flag: the same sender as the row before, and close in time.
+            val prev = out.lastOrNull()
+            val same = prev != null && prev.senderId == p.jid && ts - prev.timestamp < GROUP_GAP_MS
             val m = MessageUi(
                 id = "m:${out.size + 1}", senderId = p.jid, senderName = p.name, avatarUrl = null, body = body,
                 timestamp = ts, timeLabel = clockLabel(ts), stamp = "today ${clockLabel(ts)}", outgoing = p == nina,
-                sameSenderAsPrevious = false, edited = false, retracted = false, reactions = reactions,
+                sameSenderAsPrevious = same, edited = false, retracted = false, reactions = reactions,
                 reply = replyTo?.let { ReplyUi(it.id, it.senderName, replySnippet(it.body)) },
                 attachment = attachment,
                 formatted = formatMessage(body, palette, own, p.name),
