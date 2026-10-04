@@ -64,6 +64,9 @@ jobs:
               updater=$(ls "$b"/nsis/*-setup.exe) ;;
             macOS)
               target=darwin; arch=$( [[ "$(uname -m)" == arm64 ]] && echo aarch64 || echo x86_64 )
+              # The app is signed ad hoc (tauri.conf.json): macOS then offers "Open Anyway"
+              # instead of calling a downloaded app damaged. Check the signature.
+              codesign --verify --deep --strict --verbose=2 "$b"/macos/*.app
               cp "$b"/dmg/*.dmg dist/
               updater=$(ls "$b"/macos/*.app.tar.gz) ;;
           esac

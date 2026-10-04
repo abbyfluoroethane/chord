@@ -107,6 +107,8 @@ jobs:
             echo
             echo "Linux: the .flatpak (it updates itself), or see https://bigaouette.com/chord-nightly/flatpak/. Windows: the -setup.exe. macOS (Apple silicon): the .dmg."
             echo
+            echo "The macOS app is not notarized yet. If macOS says it cannot verify Chord, open System Settings → Privacy & Security and click Open Anyway."
+            echo
             echo '```'
             cat assets/SHA256SUMS
             echo '```'

@@ -115,8 +115,9 @@ to move to a new one. If the updater key is lost, installed desktop apps can nev
 
 ## Not done yet
 
-- The macOS build is not signed or notarized, and the Windows installer is not signed. Users
-  see a warning when they open them.
+- The macOS build is signed ad hoc, not with a Developer ID, and not notarized. macOS asks
+  the user to allow it once (Privacy & Security → Open Anyway). The Windows installer is not
+  signed; SmartScreen warns once.
 - The macOS build is for Apple silicon only.
 - The Android APKs are signed with the test key. A phone can only update to an APK with the
   same key, so keep the key safe and back it up. Changing it later means that every user has to
