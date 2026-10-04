@@ -57,8 +57,45 @@ fn version() {
         })
         .unwrap_or_else(|| "0.0.0+dev".to_owned());
     let commit = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
+    let channel = channel_of(&version);
+    let time = git(&["show", "-s", "--format=%ct", "HEAD"])
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0);
     println!("cargo:rustc-env=CHORD_VERSION={version}");
     println!("cargo:rustc-env=CHORD_COMMIT={commit}");
+    println!("cargo:rustc-env=CHORD_CHANNEL={channel}");
+    println!(
+        "cargo:rustc-env=CHORD_BUILD={}",
+        build_number(time, channel)
+    );
+}
+
+/// The update channel of a version: stable, beta, nightly, or dev for a build that is not a release.
+fn channel_of(version: &str) -> &'static str {
+    let (core, meta) = version.split_once('+').unwrap_or((version, ""));
+    if meta.contains("dev") {
+        "dev"
+    } else if core.contains("-beta.") {
+        "beta"
+    } else if core.contains("-nightly.") {
+        "nightly"
+    } else {
+        "stable"
+    }
+}
+
+/// The build number: the minutes from 2026-01-01 to the commit, times 4, plus 2 for a release,
+/// 1 for a beta, 0 for a nightly or a dev build. A newer commit always has a higher number, in
+/// any channel, so the updater can move between channels. The same rule is in
+/// chord-android/app/build.gradle.kts.
+fn build_number(commit_time: i64, channel: &str) -> i64 {
+    let minutes = ((commit_time - 1_767_225_600) / 60).max(0);
+    let slot = match channel {
+        "stable" => 2,
+        "beta" => 1,
+        _ => 0,
+    };
+    minutes * 4 + slot
 }
 
 fn main() {

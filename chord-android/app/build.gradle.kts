@@ -11,10 +11,10 @@ plugins {
 // The Rust workspace is the parent of chord-android.
 val repoRoot: File = rootDir.parentFile
 
-// Version. A release passes it: -Pchord.version=0.3.0 or 0.3.0-beta.2 (dev/release.sh reads the
-// tag android-v<version>). Without it, a build takes the last android-v tag and adds "+dev".
-// No tag (a shallow CI clone or a source archive) gives 0.0.0+dev. See docs/releasing.md.
-// providers.exec is configuration-cache safe.
+// Version. A release passes it: -Pchord.version=0.3.0, 0.3.0-beta.2 or 0.3.0-nightly.20261004
+// (dev/release.sh and the nightly workflow). Without it, a build takes the last android-v tag and
+// adds "+dev". No tag (a shallow CI clone or a source archive) gives 0.0.0+dev.
+// See docs/releasing.md. providers.exec is configuration-cache safe.
 fun gitOutput(vararg args: String): Provider<String> =
     providers.exec {
         commandLine("git", *args)
@@ -22,6 +22,7 @@ fun gitOutput(vararg args: String): Provider<String> =
         isIgnoreExitValue = true
     }.standardOutput.asText.map { it.trim() }
 val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD").orNull.orEmpty()
+val gitCommitTime: Long = gitOutput("show", "-s", "--format=%ct", "HEAD").orNull?.toLongOrNull() ?: 0L
 val releaseVersion: String? = (providers.gradleProperty("chord.version").orNull ?: System.getenv("CHORD_VERSION"))
     ?.takeIf { it.isNotBlank() }
 val chordVersion: String = releaseVersion
@@ -29,22 +30,32 @@ val chordVersion: String = releaseVersion
         ?.removePrefix("android-v")?.takeIf { it.isNotEmpty() }?.let { "$it+dev" }
     ?: "0.0.0+dev"
 
-/**
- * The versionCode of a version: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N, with any
- * +metadata ignored. Each beta of a version sorts below the version, so a phone updates from
- * 0.3.0-beta.2 to 0.3.0, and from any 0.3.0 build to 0.3.1-beta.1.
- * Code = major * 100,000,000 + minor * 1,000,000 + patch * 1,000 + (N for beta N, 999 for a release).
- */
-fun versionCodeOf(version: String): Int {
-    val m = Regex("""^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?(?:\+[0-9A-Za-z.-]+)?$""").matchEntire(version)
-        ?: throw GradleException("Version $version is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N")
-    val (major, minor, patch, beta) = m.destructured
-    val n = beta.toIntOrNull() ?: 999
-    if (major.toInt() > 20 || minor.toInt() > 99 || patch.toInt() > 999 || n !in 1..999) {
-        throw GradleException("Version $version is out of range for the versionCode")
+/** The update channel of a version: stable, beta, nightly, or dev for a build that is not a release. */
+fun channelOf(version: String): String {
+    val m = Regex("""^\d+\.\d+\.\d+(?:-(beta\.\d+|nightly\.\d{8}))?(\+[0-9A-Za-z.-]+)?$""").matchEntire(version)
+        ?: throw GradleException("Version $version is not MAJOR.MINOR.PATCH, -beta.N or -nightly.YYYYMMDD")
+    return when {
+        m.groupValues[2].contains("dev") -> "dev"
+        m.groupValues[1].startsWith("beta") -> "beta"
+        m.groupValues[1].startsWith("nightly") -> "nightly"
+        else -> "stable"
     }
-    return major.toInt() * 100_000_000 + minor.toInt() * 1_000_000 + patch.toInt() * 1_000 + n
 }
+val chordChannel: String = channelOf(chordVersion)
+
+/**
+ * The build number, which is also the versionCode: the minutes from 2026-01-01 to the commit,
+ * times 4, plus 2 for a release, 1 for a beta, 0 for a nightly or a dev build. A newer commit
+ * always has a higher number, in any channel, so a phone can move between the update channels.
+ * A release made from the same commit as a beta or a nightly is still an update.
+ * The same rule is in chord-desktop/src-tauri/build.rs.
+ */
+fun buildNumberOf(commitTime: Long, channel: String): Int {
+    val minutes = ((commitTime - 1_767_225_600L) / 60).coerceAtLeast(0)
+    val slot = when (channel) { "stable" -> 2; "beta" -> 1; else -> 0 }
+    return Math.toIntExact(minutes * 4 + slot)
+}
+val chordBuild: Int = buildNumberOf(gitCommitTime, chordChannel)
 
 // Release signing. Read keystore.properties (gitignored) or the CHORD_KEYSTORE_* variables for CI.
 // Without either, the release build stays unsigned.
@@ -162,10 +173,17 @@ android {
         // Open question in the spec. 26 is the proposal.
         minSdk = 26
         targetSdk = 36
-        versionCode = versionCodeOf(chordVersion)
+        versionCode = chordBuild
         versionName = chordVersion
         // The commit of the build, for the About page and bug reports.
         buildConfigField("String", "COMMIT", "\"${gitShortSha.ifEmpty { "unknown" }}\"")
+        // The channel that the build came from: stable, beta, nightly or dev.
+        buildConfigField("String", "CHANNEL", "\"$chordChannel\"")
+        // The in-app updater. A store build (Play, F-Droid) turns it off: -Pchord.updater=false.
+        buildConfigField(
+            "boolean", "UPDATER",
+            (providers.gradleProperty("chord.updater").orNull?.toBooleanStrictOrNull() ?: true).toString(),
+        )
     }
 
     // One APK per ABI and a universal one. This replaces ndk.abiFilters, which conflicts with splits.
