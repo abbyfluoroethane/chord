@@ -10,7 +10,17 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
+import androidx.compose.ui.unit.IntOffset
+import space.foid.chord.ui.theme.ChordEase
+import space.foid.chord.ui.theme.ChordMotion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +30,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +76,9 @@ enum class SettingsPage(val parent: SettingsPage?) {
     Advanced(Home),
     About(Home),
 }
+
+/** How deep a page is: Home is 0. A deeper page slides in from the right. */
+private fun SettingsPage.depth(): Int = generateSequence(parent) { it.parent }.count()
 
 @Composable
 private fun pageTitle(page: SettingsPage): String = stringResource(
@@ -279,29 +291,51 @@ fun SettingsContent(
 
     Column(modifier.fillMaxSize().background(c.surface100).statusBarsPadding().testTag("settings_screen")) {
         SettingsTopBar(pageTitle(page), up)
-        Column(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .imePadding()
-                .padding(horizontal = ChordSpace.s4)
-                .padding(bottom = ChordSpace.s6)
-                .testTag("settings_page_${page.name}"),
-            verticalArrangement = Arrangement.spacedBy(ChordSpace.s2),
-        ) {
-            state.error?.let { ErrorNote(it) }
-            when (page) {
-                SettingsPage.Home -> HomePage(state, onPage) { confirmSignOut = true }
-                SettingsPage.Account -> AccountPage(tab, { tab = it }, state, actions, onPage)
-                SettingsPage.Password -> PasswordPage(state, actions)
-                SettingsPage.Privacy -> PrivacyPage(state, actions)
-                SettingsPage.Notifications -> NotificationsPage(state, notificationsOn, is24, actions)
-                SettingsPage.Appearance -> AppearancePage(state, actions)
-                SettingsPage.Advanced -> AdvancedPage(connection, actions)
-                SettingsPage.About -> AboutPage(version, licenses, licenseText, actions)
+        // One scroll state per page, so a page keeps its place when the user comes back to it.
+        val scrolls = SettingsPage.entries.associateWith { p ->
+            rememberSaveable(p.name, saver = ScrollState.Saver) { ScrollState(0) }
+        }
+        AnimatedContent(
+            targetState = page,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            transitionSpec = {
+                val forward = targetState.depth() >= initialState.depth()
+                val spec = tween<IntOffset>(ChordMotion.SLOW, easing = ChordEase)
+                val t = if (forward) {
+                    (slideInHorizontally(spec) { it } togetherWith slideOutHorizontally(spec) { -it / 4 })
+                        .apply { targetContentZIndex = 1f }
+                } else {
+                    (slideInHorizontally(spec) { -it / 4 } togetherWith slideOutHorizontally(spec) { it })
+                        .apply { targetContentZIndex = -1f }
+                }
+                t.using(SizeTransform(clip = false))
+            },
+            label = "settings-page",
+        ) { shown ->
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .background(c.surface100)
+                    .verticalScroll(scrolls.getValue(shown))
+                    .imePadding()
+                    .padding(horizontal = ChordSpace.s4)
+                    .padding(bottom = ChordSpace.s6)
+                    .testTag("settings_page_${shown.name}"),
+                verticalArrangement = Arrangement.spacedBy(ChordSpace.s2),
+            ) {
+                state.error?.let { ErrorNote(it) }
+                when (shown) {
+                    SettingsPage.Home -> HomePage(state, onPage) { confirmSignOut = true }
+                    SettingsPage.Account -> AccountPage(tab, { tab = it }, state, actions, onPage)
+                    SettingsPage.Password -> PasswordPage(state, actions)
+                    SettingsPage.Privacy -> PrivacyPage(state, actions)
+                    SettingsPage.Notifications -> NotificationsPage(state, notificationsOn, is24, actions)
+                    SettingsPage.Appearance -> AppearancePage(state, actions)
+                    SettingsPage.Advanced -> AdvancedPage(connection, actions)
+                    SettingsPage.About -> AboutPage(version, licenses, licenseText, actions)
+                }
+                Box(Modifier.navigationBarsPadding())
             }
-            Box(Modifier.navigationBarsPadding())
         }
     }
     if (confirmSignOut) {

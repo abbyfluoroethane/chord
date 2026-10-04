@@ -1,5 +1,7 @@
 package space.foid.chord.ui.join
 
+import space.foid.chord.ui.components.LucideIcon
+import space.foid.chord.ui.components.LucideIcons
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -76,28 +78,5 @@ internal enum class InboxGlyph { Tray, Plus }
 
 @Composable
 private fun Glyph(glyph: InboxGlyph, tint: Color) {
-    Box(
-        Modifier.size(24.dp).drawBehind {
-            val k = size.width / 24f
-            val stroke = Stroke(1.9f * k, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            when (glyph) {
-                InboxGlyph.Plus -> {
-                    drawLine(tint, Offset(12 * k, 5 * k), Offset(12 * k, 19 * k), 1.9f * k, StrokeCap.Round)
-                    drawLine(tint, Offset(5 * k, 12 * k), Offset(19 * k, 12 * k), 1.9f * k, StrokeCap.Round)
-                }
-                InboxGlyph.Tray -> {
-                    val p = Path().apply {
-                        moveTo(3.5f * k, 13 * k); lineTo(6.5f * k, 5 * k); lineTo(17.5f * k, 5 * k); lineTo(20.5f * k, 13 * k)
-                        lineTo(20.5f * k, 18 * k); lineTo(3.5f * k, 18 * k); close()
-                    }
-                    drawPath(p, tint, style = stroke)
-                    val q = Path().apply {
-                        moveTo(3.5f * k, 13 * k); lineTo(8.5f * k, 13 * k); lineTo(10 * k, 15.5f * k)
-                        lineTo(14 * k, 15.5f * k); lineTo(15.5f * k, 13 * k); lineTo(20.5f * k, 13 * k)
-                    }
-                    drawPath(q, tint, style = stroke)
-                }
-            }
-        },
-    )
+    LucideIcon(if (glyph == InboxGlyph.Plus) LucideIcons.Plus else LucideIcons.Inbox, tint, size = 24.dp)
 }

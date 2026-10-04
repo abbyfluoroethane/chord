@@ -189,24 +189,4 @@ private fun HashGlyph(color: Color) {
 
 /** A bell with a slash, 16dp. */
 @Composable
-private fun BellOffGlyph(color: Color) {
-    Canvas(Modifier.size(16.dp)) {
-        val u = size.width / 24f
-        val st = Stroke(2f * u, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val bell = Path().apply {
-            moveTo(6.5f * u, 8f * u)
-            cubicTo(6.5f * u, 4.5f * u, 9f * u, 3f * u, 12f * u, 3f * u)
-            cubicTo(14.5f * u, 3f * u, 16.5f * u, 4.2f * u, 17.3f * u, 6.3f * u)
-            moveTo(6.5f * u, 8f * u)
-            cubicTo(6.5f * u, 14f * u, 4f * u, 16f * u, 4f * u, 16f * u)
-            lineTo(14f * u, 16f * u)
-            moveTo(17.8f * u, 10f * u)
-            cubicTo(18f * u, 14f * u, 20f * u, 16f * u, 20f * u, 16f * u)
-            lineTo(18f * u, 16f * u)
-            moveTo(10f * u, 20f * u)
-            cubicTo(10.6f * u, 21f * u, 13.4f * u, 21f * u, 14f * u, 20f * u)
-        }
-        drawPath(bell, color, style = st)
-        drawLine(color, Offset(3f * u, 3f * u), Offset(21f * u, 21f * u), st.width, StrokeCap.Round)
-    }
-}
+private fun BellOffGlyph(color: Color) = LucideIcon(LucideIcons.BellOff, color, size = 16.dp)

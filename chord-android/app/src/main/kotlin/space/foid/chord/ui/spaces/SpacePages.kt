@@ -97,11 +97,8 @@ fun SpacePage(
     bottom: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Dialog(
-        onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
-    ) {
-        SpacePageFrame(title, onClose, bottom = bottom, content = content)
+    space.foid.chord.ui.components.MotionDialog(onClose, space.foid.chord.ui.components.DialogMotion.Slide) { close ->
+        SpacePageFrame(title, close, bottom = bottom, content = content)
     }
 }
 

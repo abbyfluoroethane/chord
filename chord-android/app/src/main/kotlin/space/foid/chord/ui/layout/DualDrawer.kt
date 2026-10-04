@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -30,6 +31,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -119,6 +122,18 @@ fun DualDrawer(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     BackHandler(enabled = state.isOpen) { scope.launch { state.close() } }
+
+    // The keyboard goes away as soon as a drawer starts to open, by drag or by a header button.
+    // It does not come back when the drawer closes.
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    val moved = state.offset != 0f
+    LaunchedEffect(moved) {
+        if (moved) {
+            focus.clearFocus(force = true)
+            keyboard?.hide()
+        }
+    }
 
     BoxWithConstraints(modifier.fillMaxSize().background(Chord.colors.surfaceSide).clipToBounds()) {
         // A drawer leaves a strip of the center pane visible: it takes at most 84% of the width.

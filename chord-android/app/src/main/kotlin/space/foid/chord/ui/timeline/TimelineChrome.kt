@@ -1,5 +1,7 @@
 package space.foid.chord.ui.timeline
 
+import space.foid.chord.ui.components.LucideIcon
+import space.foid.chord.ui.components.LucideIcons
 import space.foid.chord.ui.components.PresenceBadge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -85,7 +87,7 @@ fun TimelineHeaderContent(
                 stringResource(R.string.timeline_open_channels),
                 onOpenChannels,
                 Modifier.testTag("drawer_open_channels"),
-            ) { MenuGlyph(colors.ink) }
+            ) { LucideIcon(LucideIcons.Menu, colors.ink, size = 22.dp) }
             Column(Modifier.weight(1f).padding(vertical = ChordSpace.s1)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -128,7 +130,7 @@ fun TimelineHeaderContent(
                 stringResource(if (isRoom) R.string.timeline_open_members else R.string.timeline_open_profile),
                 onOpenMembers,
                 Modifier.testTag("drawer_open_members"),
-            ) { MembersGlyph(colors.ink) }
+            ) { LucideIcon(LucideIcons.Users, colors.ink, size = 22.dp) }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
     }
@@ -143,35 +145,6 @@ private fun HeaderButton(label: String, onClick: () -> Unit, modifier: Modifier,
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { glyph() }
-}
-
-@Composable
-private fun MenuGlyph(color: Color) {
-    Box(
-        Modifier.size(20.dp).drawBehind {
-            val w = 2.dp.toPx()
-            for (f in listOf(0.2f, 0.5f, 0.8f)) {
-                drawLine(color, Offset(0f, size.height * f), Offset(size.width, size.height * f), w, StrokeCap.Round)
-            }
-        },
-    )
-}
-
-@Composable
-private fun MembersGlyph(color: Color) {
-    // A head and shoulders.
-    Box(
-        Modifier.size(22.dp).drawBehind {
-            val w = 2.dp.toPx()
-            drawCircle(color, radius = size.width * 0.19f, center = Offset(size.width / 2, size.height * 0.32f), style = Stroke(w))
-            drawArc(
-                color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
-                topLeft = Offset(size.width * 0.12f, size.height * 0.58f),
-                size = Size(size.width * 0.76f, size.height * 0.7f),
-                style = Stroke(w, cap = StrokeCap.Round),
-            )
-        },
-    )
 }
 
 /** The top of the history: "Welcome to #general" or the name of the person, with one line below. */
