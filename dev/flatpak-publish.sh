@@ -32,6 +32,9 @@ if [[ ! -d $repo/objects ]]; then
   mkdir -p "$repo"
   ostree init --repo="$repo" --mode=archive-z2
 fi
+# Git keeps no empty folders, so a repository checked out from gh-pages lacks some that ostree
+# needs, such as refs/remotes.
+mkdir -p "$repo"/{objects,tmp,state,extensions,refs/heads,refs/remotes,refs/mirrors}
 
 ref="app/$APP/x86_64/$branch"
 ostree --repo="$build_repo" rev-parse "$ref" >/dev/null || { echo "FAIL: $build_repo has no $ref" >&2; exit 1; }
