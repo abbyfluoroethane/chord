@@ -39,6 +39,8 @@ percent-encoding = "2"
 rusqlite.workspace = true
 # Link previews (src/link_preview.rs): the HTTP fetch, with rustls as in chord-core.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# Only to pick the process-wide crypto backend at start (lib.rs, install_crypto_provider).
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 # The DNS lookup of the SSRF filter, and the per-URL lock. The time limit of a Flatpak update.
 tokio = { workspace = true, features = ["net", "sync", "rt-multi-thread", "time"] }
 # Parses the URL, and resolves a relative image URL against the page.

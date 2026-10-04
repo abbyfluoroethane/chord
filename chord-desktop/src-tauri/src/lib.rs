@@ -53,8 +53,18 @@ fn set_runtime() {
     }
 }
 
+/// Picks the crypto backend of rustls for the whole process. tokio-xmpp uses aws-lc-rs, and
+/// tauri-plugin-updater turns on ring too. With two backends rustls cannot choose, and the
+/// first TLS connection (the login) panicked: "Could not automatically determine the
+/// process-level CryptoProvider".
+fn install_crypto_provider() {
+    // An error means a provider is in place already, which is fine.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_crypto_provider();
     set_runtime();
     let builder = tauri::Builder::default();
     // The single-instance plugin must be the first plugin. A second copy of the app sends its
@@ -247,4 +257,17 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| behaviour::on_run_event(app, &event));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rustls_has_a_crypto_provider() {
+        install_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        // A TLS client config builds without a panic, as the login does.
+        let _ = rustls::ClientConfig::builder();
+    }
 }
