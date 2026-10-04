@@ -52,7 +52,7 @@
     { value: 'full', label: 'Off' }
   ];
   // The sample time is mid afternoon, so the 12-hour and 24-hour formats look different.
-  const SAMPLE_TIME = new Date(2026, 0, 15, 15, 4).getTime();
+  const SAMPLE_TIME = new Date(2026, 0, 15, 21, 4).getTime();
   // The slider shows the drag. The zoom applies when the user lets go.
   let zoomShown = $state(prefs.zoom);
 </script>
@@ -78,35 +78,35 @@
       {#if prefs.display === 'compact'}
         <span class="time meta">{clock(SAMPLE_TIME)}</span>
       {:else}
-        <Avatar name="Priya Raman" size={40} cut="var(--surface-200)" />
+        <Avatar name="nina" size={40} cut="var(--surface-200)" />
       {/if}
     </span>
     <div>
       <div class="head">
-        <b>Priya Raman</b>
+        <b>nina</b>
         {#if prefs.display !== 'compact'}<span class="time meta">today {clock(SAMPLE_TIME)}</span>{/if}
       </div>
-      <span class="text">Build 0.14.2 is up on the playtest branch.</span>
+      <span class="text">new ninajirachi is out</span>
     </div>
   </div>
   <div class="msg">
     <span class="gutter"></span>
-    <span class="text">Notes are on <a href="#preview" onclick={(e) => e.preventDefault()}>lanternworks.example/notes</a></span>
+    <span class="text"><a href="#preview" onclick={(e) => e.preventDefault()}>youtube.com/watch?v=Ob_EDY9Eiis</a></span>
   </div>
   <div class="msg gap">
     <span class="gutter">
       {#if prefs.display === 'compact'}
         <span class="time meta">{clock(SAMPLE_TIME + 60_000)}</span>
       {:else}
-        <Avatar name="Kenji Ito" size={40} cut="var(--surface-200)" />
+        <Avatar name="marco" size={40} cut="var(--surface-200)" />
       {/if}
     </span>
     <div>
       <div class="head">
-        <b>Kenji Ito</b>
+        <b>marco</b>
         {#if prefs.display !== 'compact'}<span class="time meta">today {clock(SAMPLE_TIME + 60_000)}</span>{/if}
       </div>
-      <span class="text" class:jumbo={prefs.jumboEmoji}><Emoji emoji="👍" /><Emoji emoji="🎉" /></span>
+      <span class="text" class:jumbo={prefs.jumboEmoji}><Emoji emoji="🔥" /><Emoji emoji="🔥" /></span>
     </div>
   </div>
 </div>

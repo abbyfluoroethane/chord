@@ -18,7 +18,7 @@
     if (view === 'login') return;
     session.force(view === 'reconnecting' ? 'reconnecting' : 'connected');
     ui.settingsOpen = view === 'settings';
-    ui.profile = view === 'profile' ? (sub ? `${sub}@chat.foid.space` : 'priya@chat.foid.space') : null;
+    ui.profile = view === 'profile' ? (sub ? `${sub}@chat.foid.space` : 'jess@chat.foid.space') : null;
     if (view === 'contacts') app.openContacts();
     if (view === 'settings') {
       const pages: SettingsPage[] = ['account', 'privacy', 'notifications', 'appearance', 'keybinds', 'about'];
