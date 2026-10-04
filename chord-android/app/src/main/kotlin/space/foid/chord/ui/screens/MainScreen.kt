@@ -202,6 +202,7 @@ fun MainScreen(
                             selectedName = ch.name.ifBlank { bareJid(ch.jid) }
                             selectedDirect = ch.kind is ChannelKind.Direct
                             selectedUnread = ch.unread.toInt()
+                            spaceVm.joinIfNeeded(ch)
                             scope.launch { drawer.close() }
                         },
                         account = account,
@@ -269,6 +270,7 @@ fun MainScreen(
                             selectedName = ch.name.ifBlank { bareJid(ch.jid) }
                             selectedDirect = ch.kind is ChannelKind.Direct
                             selectedUnread = ch.unread.toInt()
+                            spaceVm.joinIfNeeded(ch)
                             homePage = ""
                             scope.launch { drawer.close() }
                         },

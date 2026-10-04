@@ -125,6 +125,33 @@ class SpaceViewModelTest {
     }
 
     @Test
+    fun openingARoomThatIsNotJoinedJoinsItWithTheAccountNick() = runTest {
+        val (vm, api) = opened()
+        val old = room("club-old@conference.example.org", joined = false)
+        vm.joinIfNeeded(old)
+        runCurrent()
+        assertEquals("joinRoom club-old@conference.example.org nick=me", api.calls.last())
+    }
+
+    @Test
+    fun openingAJoinedRoomDoesNotJoinAgain() = runTest {
+        val (vm, api) = opened()
+        val before = api.calls.size
+        vm.joinIfNeeded(room(general))
+        runCurrent()
+        assertEquals(before, api.calls.size)
+    }
+
+    @Test
+    fun aFailedJoinIsShown() = runTest {
+        val (vm, _) = opened(api().apply { failJoin = true })
+        val got = events(vm, backgroundScope)
+        vm.joinIfNeeded(room("club-old@conference.example.org", joined = false))
+        runCurrent()
+        assertTrue(got.single() is SpaceEvent.Message)
+    }
+
+    @Test
     fun createChannelNeedsLettersOrDigits() = runTest {
         val (vm, api) = opened()
         val before = api.calls.size
