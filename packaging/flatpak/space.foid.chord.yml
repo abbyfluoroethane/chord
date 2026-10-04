@@ -1,0 +1,117 @@
+# Flatpak manifest of Chord Desktop. It builds the app from source, offline, as Flathub
+# requires. The same file can go to the Flathub repository of the app.
+#
+# Source: the chord module builds one commit of https://github.com/abbyfluoroethane/chord.
+# A sandboxed build (--sandbox, as on Flathub) takes no local directory, so the commit must
+# be on GitHub.
+#
+# Version: chord-desktop/src-tauri/build.rs reads the version and the commit from the env of
+# the chord module, because the build checkout has no tags. Before a build, CI sets the
+# commit and these three values, for example for desktop-v0.3.0:
+#   sha=$(git rev-parse HEAD)
+#   sed -i -e "s|^\( *\)commit: .*|\1commit: $sha|" \
+#          -e "s|^\( *\)CHORD_VERSION: .*|\1CHORD_VERSION: '0.3.0'|" \
+#          -e "s|^\( *\)CHORD_COMMIT: .*|\1CHORD_COMMIT: '${sha:0:7}'|" \
+#          -e "s|^\( *\)CHORD_COMMIT_TIME: .*|\1CHORD_COMMIT_TIME: '$(git show -s --format=%ct HEAD)'|" \
+#     packaging/flatpak/space.foid.chord.yml
+# Without that the build is 0.0.0+dev: the dev channel, which never looks for updates.
+# Only the chord module has a commit line in this file; the other git sources are in
+# shared-modules.
+#
+# Build and install (from the repository root):
+#   flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//51 \
+#     org.freedesktop.Sdk.Extension.rust-stable//26.08 org.freedesktop.Sdk.Extension.node24//26.08
+#   flatpak run org.flatpak.Builder --user --install --force-clean --sandbox \
+#     --state-dir=.flatpak-builder flatpak-build packaging/flatpak/space.foid.chord.yml
+#   flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest packaging/flatpak/space.foid.chord.yml
+#
+# Sources: after a change to Cargo.lock or chord-desktop/package-lock.json, run
+# packaging/flatpak/update-sources.sh and commit cargo-sources.json and node-sources.json.
+
+id: space.foid.chord
+# GNOME 51 is the newest GNOME runtime, and it still has WebKitGTK 4.1 (webkit2gtk-4.1 with
+# libsoup 3), which Tauri 2 needs: lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0.24.4.
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node24
+command: chord-desktop
+
+finish-args:
+  # XMPP connections, link previews, GIF search, emoji pack downloads.
+  - --share=network
+  # Shared memory for X11. Flathub expects it with an X11 fallback.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GPU rendering for the WebKitGTK webview.
+  - --device=dri
+  # Notification sounds (WebAudio) and the audio and video player.
+  - --socket=pulseaudio
+  # tauri-plugin-notification sends notifications on the D-Bus Notifications interface
+  # (notify-rust), not through the portal.
+  - --talk-name=org.freedesktop.Notifications
+  # The saved password lives in the Secret Service (keyring, sync-secret-service).
+  - --talk-name=org.freedesktop.secrets
+  # The tray icon (libayatana-appindicator, StatusNotifierItem).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # No filesystem access: the app picks files to send and saves images and text through
+  # the GTK file chooser (rfd, GtkFileChooserNative), which uses the FileChooser portal in
+  # the sandbox.
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - '*.la'
+  - '*.a'
+
+modules:
+  # The tray icon. The GNOME runtime has no libayatana-appindicator. Copied from
+  # flathub/shared-modules at cb9ec602a1ece1c76d5a4f8aa1d87c4a6bf99c3e.
+  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
+
+  - name: chord
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
+      env:
+        # The version and the commit for build.rs. CI replaces these (see the top). Empty
+        # commit values make build.rs ask git in the build checkout.
+        CHORD_VERSION: '0.0.0+dev'
+        CHORD_COMMIT: ''
+        CHORD_COMMIT_TIME: ''
+        # Offline: crates from cargo-sources.json, npm packages from node-sources.json.
+        CARGO_HOME: /run/build/chord/cargo
+        CARGO_NET_OFFLINE: 'true'
+        npm_config_cache: /run/build/chord/flatpak-node/npm-cache
+        npm_config_offline: 'true'
+        XDG_CACHE_HOME: /run/build/chord/flatpak-node/cache
+        # The Tauri CLI asks nothing and prints plain output.
+        CI: 'true'
+    build-commands:
+      - npm ci --prefix chord-desktop --offline
+      # tauri build runs `npm run build` (the page) and then the release build of the app.
+      - cd chord-desktop && npx --offline tauri build --no-bundle
+      - install -Dm755 target/release/chord-desktop /app/bin/chord-desktop
+      - install -Dm644 packaging/flatpak/space.foid.chord.desktop /app/share/applications/space.foid.chord.desktop
+      # A nightly or beta shows its own version in the software centre: the top release entry
+      # takes CHORD_VERSION and the commit date. A Flathub release lists itself there already.
+      - |
+        if [ "$CHORD_VERSION" != 0.0.0+dev ] && [ -n "$CHORD_COMMIT_TIME" ]; then
+          sed -i "0,/<release version=\"[^\"]*\" date=\"[^\"]*\"/s//<release version=\"$CHORD_VERSION\" date=\"$(date -u -d "@$CHORD_COMMIT_TIME" +%F)\"/" \
+            packaging/flatpak/space.foid.chord.metainfo.xml
+        fi
+      - install -Dm644 packaging/flatpak/space.foid.chord.metainfo.xml /app/share/metainfo/space.foid.chord.metainfo.xml
+      - install -Dm644 chord-desktop/src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/space.foid.chord.png
+      - install -Dm644 chord-desktop/src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/space.foid.chord.png
+      - install -Dm644 chord-desktop/src-tauri/icons/icon.png /app/share/icons/hicolor/512x512/apps/space.foid.chord.png
+    sources:
+      # The commit to build. CI replaces it (see the top). The default is a commit with
+      # this packaging.
+      - type: git
+        url: https://github.com/abbyfluoroethane/chord.git
+        commit: e649832862fc406a4be0cee3cc49c74c93ebb775
+      - cargo-sources.json
+      - node-sources.json

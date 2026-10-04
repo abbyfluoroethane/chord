@@ -6,7 +6,7 @@
   import Icon from './Icon.svelte';
   import { ui } from './ui.svelte';
   import { updates } from './updates.svelte';
-  import { percentOf } from './updatesdata';
+  import { bannerText, percentOf } from './updatesdata';
 
   const info = $derived(updates.banner);
   const s = $derived(updates.status);
@@ -16,16 +16,13 @@
   <div class="banner" role="status">
     <Icon icon={Download} size={16} />
     {#if s.kind === 'downloading'}
-      {@const pct = percentOf(s.downloaded, s.total)}
-      <span>Downloading Chord {info.version}{pct === null ? '' : ` (${pct}%)`}.</span>
+      <span>{bannerText(info, 'downloading', percentOf(s.downloaded, s.total))}</span>
     {:else if s.kind === 'ready'}
-      <span>Chord {info.version} is ready.</span>
+      <span>{bannerText(info, 'ready', null)}</span>
       <button class="act" onclick={() => void updates.restart()}>Restart to update</button>
     {:else}
-      <span>Chord {info.version} is available.</span>
-      {#if info.canInstall}
-        <button class="act" onclick={() => void updates.restart()}>Restart to update</button>
-      {/if}
+      <span>{bannerText(info, 'available', null)}</span>
+      <button class="act" onclick={() => void updates.restart()}>Restart to update</button>
     {/if}
     <button class="act" onclick={() => ui.openSettings('about')}>View</button>
     <button class="close" aria-label="Close" onclick={() => updates.dismiss()}>

@@ -24,6 +24,9 @@ export GNUPGHOME; GNUPGHOME=$(mktemp -d); trap 'rm -rf "$GNUPGHOME"' EXIT
 printf '%s\n' "$CHORD_FLATPAK_GPG_KEY" | gpg --batch --quiet --import
 key=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')
 
+# The flatpak-github-actions container may lack the ostree command. It runs as root on Fedora.
+command -v ostree >/dev/null || dnf install -y -q ostree
+
 repo="$pages/flatpak/repo"
 if [[ ! -d $repo/objects ]]; then
   mkdir -p "$repo"

@@ -1,6 +1,7 @@
 name: Build desktop
 
-# Builds the signed desktop bundles for a version. release.yml and nightly.yml call it.
+# Builds the signed desktop bundles for Windows and macOS. release.yml and nightly.yml call it.
+# Linux ships as a Flatpak: build-flatpak.yml.
 # Each platform leaves an artifact desktop-<os> with its bundles and updater-<target>-<arch>.json:
 # the name of the updater bundle and its signature (docs/updates.md).
 
@@ -11,7 +12,7 @@ on:
         required: true
         type: string
       platforms:
-        description: 'JSON list of runners, for example ["ubuntu-22.04","windows-latest","macos-latest"]'
+        description: 'JSON list of runners, for example ["windows-latest","macos-latest"]'
         required: true
         type: string
 
@@ -32,11 +33,6 @@ jobs:
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install the Tauri system libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -48,11 +44,9 @@ jobs:
         working-directory: chord-desktop
         shell: bash
         run: |
-          # Linux: AppImage (it updates itself), .deb and .rpm. Windows: NSIS, because the MSI
-          # installer does not take a version like 0.3.0-beta.1. macOS: the .app (the updater
-          # bundle) and the .dmg.
+          # Windows: NSIS, because the MSI installer does not take a version like 0.3.0-beta.1.
+          # macOS: the .app (the updater bundle) and the .dmg.
           case "$RUNNER_OS" in
-            Linux) bundles=appimage,deb,rpm ;;
             Windows) bundles=nsis ;;
             macOS) bundles=app,dmg ;;
           esac
@@ -65,15 +59,14 @@ jobs:
           mkdir dist
           b=target/release/bundle
           case "$RUNNER_OS" in
-            Linux)
-              target=linux; arch=x86_64
-              cp "$b"/deb/*.deb "$b"/rpm/*.rpm dist/
-              updater=$(ls "$b"/appimage/*.AppImage) ;;
             Windows)
               target=windows; arch=x86_64
               updater=$(ls "$b"/nsis/*-setup.exe) ;;
             macOS)
               target=darwin; arch=$( [[ "$(uname -m)" == arm64 ]] && echo aarch64 || echo x86_64 )
+              # The app is signed ad hoc (tauri.conf.json): macOS then offers "Open Anyway"
+              # instead of calling a downloaded app damaged. Check the signature.
+              codesign --verify --deep --strict --verbose=2 "$b"/macos/*.app
               cp "$b"/dmg/*.dmg dist/
               updater=$(ls "$b"/macos/*.app.tar.gz) ;;
           esac

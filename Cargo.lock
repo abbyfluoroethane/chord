@@ -86,6 +86,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "ashpd"
+version = "0.13.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb8421aaa9644a5faf26735f258b669b15f063313ef8f8e2bdb28912a1a6f111"
+dependencies = [
+ "enumflags2",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_repr",
+ "zbus 5.19.0",
+]
+
+[[package]]
 name = "askama"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -741,10 +755,12 @@ dependencies = [
 name = "chord-desktop"
 version = "0.1.0"
 dependencies = [
+ "ashpd",
  "base64 0.22.1",
  "chord-core",
  "chrono",
  "flate2",
+ "futures-util",
  "image",
  "keyring",
  "libc",
@@ -753,6 +769,7 @@ dependencies = [
  "reqwest",
  "resvg",
  "rusqlite",
+ "rustls",
  "scraper",
  "serde",
  "serde_json",

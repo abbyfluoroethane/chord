@@ -14,6 +14,7 @@ mod commands;
 mod emoji;
 mod error;
 mod files;
+mod flatpak;
 mod forms;
 mod gif;
 mod keychain;
@@ -52,8 +53,18 @@ fn set_runtime() {
     }
 }
 
+/// Picks the crypto backend of rustls for the whole process. tokio-xmpp uses aws-lc-rs, and
+/// tauri-plugin-updater turns on ring too. With two backends rustls cannot choose, and the
+/// first TLS connection (the login) panicked: "Could not automatically determine the
+/// process-level CryptoProvider".
+fn install_crypto_provider() {
+    // An error means a provider is in place already, which is fine.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_crypto_provider();
     set_runtime();
     let builder = tauri::Builder::default();
     // The single-instance plugin must be the first plugin. A second copy of the app sends its
@@ -73,7 +84,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        // The endpoints come from the chosen channel at each check (src/updates.rs).
+        // The endpoints come from the chosen channel at each check (src/updates.rs). Only
+        // Windows and macOS use it: on Linux the Flatpak portal does the updates.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(navigation::plugin())
         .manage(state::AppState::default())
@@ -81,7 +93,11 @@ pub fn run() {
         .manage(notify::NoticePrefs::default())
         .manage(certpin::CertPins::default())
         .manage(behaviour::Behaviour::default())
-        .manage(updates::Pending::default())
+        .manage(updates::Pending::default());
+    // In a Flatpak the portal does the updates (src/flatpak.rs).
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(flatpak::Updater::default());
+    let builder = builder
         .on_window_event(behaviour::on_window_event)
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {
@@ -241,4 +257,17 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| behaviour::on_run_event(app, &event));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rustls_has_a_crypto_provider() {
+        install_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        // A TLS client config builds without a panic, as the login does.
+        let _ = rustls::ClientConfig::builder();
+    }
 }

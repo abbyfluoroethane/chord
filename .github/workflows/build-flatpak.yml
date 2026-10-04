@@ -1,0 +1,93 @@
+name: Build Flatpak
+
+# Builds the desktop app as a Flatpak from packaging/flatpak/space.foid.chord.yml and adds it to
+# the self-hosted repository (https://bigaouette.com/chord-nightly/flatpak/, the gh-pages branch
+# of abbyfluoroethane/chord-nightly) on the given branch. Also leaves an artifact "flatpak" with a
+# single-file bundle that installs from that repository and updates from it.
+# release.yml and nightly.yml call it. See docs/updates.md.
+#
+# Secrets: CHORD_FLATPAK_GPG_KEY (signs the repository), CHORD_RELEASES_TOKEN (pushes gh-pages).
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      branch:
+        description: stable, beta or nightly
+        required: true
+        type: string
+
+# One publish at a time: each one rewrites the gh-pages branch.
+concurrency:
+  group: flatpak-repo
+  cancel-in-progress: false
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    env:
+      VERSION: ${{ inputs.version }}
+      BRANCH: ${{ inputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Point the manifest at this commit and version
+        run: |
+          git config --global --add safe.directory "$PWD"
+          sha=$(git rev-parse HEAD)
+          sed -i -e "s|^\( *\)commit: .*|\1commit: $sha|" \
+                 -e "s|^\( *\)CHORD_VERSION: .*|\1CHORD_VERSION: '$VERSION'|" \
+                 -e "s|^\( *\)CHORD_COMMIT: .*|\1CHORD_COMMIT: '${sha:0:7}'|" \
+                 -e "s|^\( *\)CHORD_COMMIT_TIME: .*|\1CHORD_COMMIT_TIME: '$(git show -s --format=%ct HEAD)'|" \
+            packaging/flatpak/space.foid.chord.yml
+          grep -nE "commit:|CHORD_(VERSION|COMMIT|COMMIT_TIME):" packaging/flatpak/space.foid.chord.yml
+      - uses: actions/cache@v4
+        with:
+          path: .flatpak-builder
+          key: flatpak-${{ hashFiles('packaging/flatpak/*.json', 'packaging/flatpak/shared-modules/**') }}
+          restore-keys: flatpak-
+      - name: Build
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --force-clean --sandbox \
+            --default-branch="$BRANCH" --repo=build-repo --state-dir=.flatpak-builder \
+            flatpak-build packaging/flatpak/space.foid.chord.yml
+      - name: Publish to the repository
+        env:
+          CHORD_FLATPAK_GPG_KEY: ${{ secrets.CHORD_FLATPAK_GPG_KEY }}
+          GH_TOKEN: ${{ secrets.CHORD_RELEASES_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$GH_TOKEN" ]] || { echo "::error::The CHORD_RELEASES_TOKEN secret is missing."; exit 1; }
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:$GH_TOKEN@github.com/abbyfluoroethane/chord-nightly.git" pages
+          dev/flatpak-publish.sh build-repo "$BRANCH" pages
+          # A new root commit each time, so the old repository objects leave the git history.
+          cd pages
+          git config user.name "Abby Bigaouette"
+          git config user.email "abby@bigaouette.com"
+          git checkout -q --orphan publish
+          git add -A
+          git commit -q -m "Publish $BRANCH $VERSION"
+          git push -q --force origin publish:gh-pages
+      - name: Bundle
+        run: |
+          set -euo pipefail
+          mkdir dist
+          # The bundle names the repository and its key, so an install from the file updates.
+          sed -n 's/^GPGKey=//p' pages/flatpak/chord-nightly.flatpakrepo | base64 -d > repo.gpg
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            --repo-url=https://bigaouette.com/chord-nightly/flatpak/repo/ --gpg-keys=repo.gpg \
+            build-repo "dist/Chord_${VERSION}_x86_64.flatpak" space.foid.chord "$BRANCH"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: dist/*
+          if-no-files-found: error

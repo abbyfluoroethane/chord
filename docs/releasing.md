@@ -53,9 +53,26 @@ them yourself.
 - **Android** builds on your machine, because the signing key lives there
   (`dev/android-keystore.sh`). The script publishes the arm64-v8a, x86_64 and universal APKs and
   a `SHA256SUMS` file.
-- **Desktop** builds in `.github/workflows/release.yml` on Linux (AppImage, .deb, .rpm),
-  Windows (NSIS installer) and macOS (.dmg). "Run workflow" on that workflow builds a version
-  without publishing it.
+- **Desktop** builds in `.github/workflows/release.yml`: Windows (NSIS installer) and macOS
+  (.dmg) with Tauri, Linux as a Flatpak. "Run workflow" on that workflow builds Windows and
+  macOS without publishing them.
+
+## Linux: Flatpak
+
+Linux ships only as a Flatpak, built from source by `packaging/flatpak/space.foid.chord.yml`
+(see the comments at its top). The app updates itself through the Flatpak portal
+([updates.md](updates.md)).
+
+- **Self-hosted repository:** https://bigaouette.com/chord-nightly/flatpak/, served by GitHub
+  Pages from the `gh-pages` branch of chord-nightly. `dev/flatpak-publish.sh` signs each build
+  with the repository key and keeps the last 7 builds of each branch. The branches are
+  `nightly`, and `beta` and `stable` until Chord is on Flathub. Each publish replaces the
+  `gh-pages` history with one commit, so old builds leave git.
+- **Install:** `flatpak install --from https://bigaouette.com/chord-nightly/flatpak/space.foid.chord-nightly.flatpakref`.
+  Each release also has a `.flatpak` file that installs from the repository and updates from it.
+- **Flathub:** stable from `flathub`, beta from `flathub-beta`, from the same manifest. After a
+  change to `Cargo.lock` or `chord-desktop/package-lock.json`, run
+  `packaging/flatpak/update-sources.sh`.
 
 ## Nightlies
 
@@ -89,15 +106,18 @@ Secrets of this repository:
 - `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the desktop updater key.
   The original is `~/.config/chord/tauri-updater.key` and `.password`; the public key is in
   `tauri.conf.json`.
+- `CHORD_FLATPAK_GPG_KEY`: the key that signs the Flatpak repository. The original is
+  `~/.config/chord/flatpak-repo.key`; its public key is in the `.flatpakrepo` file.
 - `CHORD_KLIPY_KEY`, for GIF search in desktop builds.
 
-Keep an offline backup of both keys. If the Android key is lost, every user has to uninstall
+Keep an offline backup of the keys. If the Android key is lost, every user has to uninstall
 to move to a new one. If the updater key is lost, installed desktop apps can never update again.
 
 ## Not done yet
 
-- The macOS build is not signed or notarized, and the Windows installer is not signed. Users
-  see a warning when they open them.
+- The macOS build is signed ad hoc, not with a Developer ID, and not notarized. macOS asks
+  the user to allow it once (Privacy & Security → Open Anyway). The Windows installer is not
+  signed; SmartScreen warns once.
 - The macOS build is for Apple silicon only.
 - The Android APKs are signed with the test key. A phone can only update to an APK with the
   same key, so keep the key safe and back it up. Changing it later means that every user has to

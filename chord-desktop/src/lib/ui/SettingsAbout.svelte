@@ -8,8 +8,23 @@
   import Toggle from './Toggle.svelte';
   import { tick } from './now.svelte';
   import { prefs } from './prefs.svelte';
+  import { copyText } from './clipboard';
   import { updates } from './updates.svelte';
-  import { CHANNELS, checkedText, megabytes, percentOf, slowerNote, versionLine } from './updatesdata';
+  import type { UpdateChannel } from '$lib/chord/types';
+  import {
+    CHANNELS,
+    branchChannel,
+    branchLabel,
+    channelLabel,
+    checkedText,
+    megabytes,
+    offText,
+    percentOf,
+    slowerNote,
+    switchFor,
+    updateLine,
+    versionLine
+  } from './updatesdata';
 
   // The version comes from the build (src-tauri/build.rs). The preview shows a sample.
   onMount(() => {
@@ -21,8 +36,19 @@
   const s = $derived(updates.status);
   const channel = $derived(updates.channel);
   const hint = $derived(CHANNELS.find((c) => c.value === channel)?.hint ?? '');
-  const note = $derived(app ? slowerNote(channel, app.channel) : null);
+  const note = $derived(app && !app.flatpak ? slowerNote(channel, app.channel) : null);
   const checked = $derived(checkedText(updates.lastChecked, tick()));
+
+  // In a Flatpak the branch is the channel. A pick shows the command that installs the other
+  // branch; it does not switch.
+  const flatpak = $derived(app?.flatpak ?? null);
+  const installed = $derived(flatpak ? branchChannel(flatpak.branch) : null);
+  let wanted = $state<UpdateChannel | null>(null);
+  const shown = $derived(wanted ?? installed ?? ('' as UpdateChannel));
+  const howTo = $derived(wanted && wanted !== installed ? switchFor(app, wanted) : null);
+  const flatpakHint = $derived(
+    flatpak ? `The Flatpak branch that you installed: ${branchLabel(flatpak.branch)}.` : ''
+  );
 </script>
 
 <div class="head">
@@ -40,16 +66,43 @@
 
 <h2 class="section">Updates</h2>
 {#if s.kind === 'off'}
-  <p class="meta">This is a dev build. It does not update itself.</p>
+  <p class="meta">{app ? offText(app) : 'This build does not update itself.'}</p>
 {:else}
-  <SettingRow title="Channel" {hint}>
-    <Segmented
-      label="Update channel"
-      value={channel}
-      options={CHANNELS.map((c) => ({ value: c.value, label: c.label }))}
-      onchange={(v) => updates.setChannel(v)}
-    />
-  </SettingRow>
+  {#if flatpak}
+    <SettingRow title="Channel" hint={flatpakHint}>
+      <Segmented
+        label="Update channel"
+        value={shown}
+        options={CHANNELS.map((c) => ({ value: c.value, label: c.label }))}
+        onchange={(v) => (wanted = v === installed ? null : v)}
+      />
+    </SettingRow>
+    {#if howTo}
+      <div class="switch">
+        <p>
+          To get {channelLabel(howTo.channel)}, install its Flatpak branch once. Run this command in a terminal:
+        </p>
+        <pre><code>{howTo.install}</code></pre>
+        <div class="row">
+          <button class="btn" onclick={() => void copyText(howTo.install, 'Command copied.')}>Copy</button>
+          <button class="btn" onclick={() => (wanted = null)}>Cancel</button>
+        </div>
+        <p class="meta">
+          Both branches can stay installed side by side, and they use the same data. To pick the one that
+          runs, use <code>{howTo.makeCurrent}</code>.
+        </p>
+      </div>
+    {/if}
+  {:else}
+    <SettingRow title="Channel" {hint}>
+      <Segmented
+        label="Update channel"
+        value={channel}
+        options={CHANNELS.map((c) => ({ value: c.value, label: c.label }))}
+        onchange={(v) => updates.setChannel(v)}
+      />
+    </SettingRow>
+  {/if}
   {#if note}<p class="meta note">{note}</p>{/if}
   <SettingRow title="Check automatically" hint="When Chord starts and once a day.">
     <Toggle
@@ -66,23 +119,18 @@
     {#if s.kind === 'checking'}
       <p class="line">Checking for updates…</p>
     {:else if s.kind === 'available'}
-      <p class="line">Version {s.info.version} is available.</p>
+      <p class="line">{updateLine(s.info, 'available')}</p>
       {#if s.info.notes}<p class="notes">{s.info.notes}</p>{/if}
-      {#if s.info.canInstall}
-        <button class="btn btn-primary" onclick={() => void updates.install()}>Install</button>
-      {:else if s.info.releaseUrl}
-        <p class="meta">This install cannot update itself. Download the new version and install it.</p>
-        <a class="btn btn-primary" href={s.info.releaseUrl} target="_blank" rel="noopener noreferrer">Download</a>
-      {/if}
+      <button class="btn btn-primary" onclick={() => void updates.install()}>Install</button>
     {:else if s.kind === 'downloading'}
       {@const pct = percentOf(s.downloaded, s.total)}
       <p class="line">
-        Downloading version {s.info.version}…
+        {updateLine(s.info, 'downloading')}
         {pct === null ? megabytes(s.downloaded) : `${pct}%`}
       </p>
       <progress max="100" value={pct ?? undefined} aria-label="Download"></progress>
     {:else if s.kind === 'ready'}
-      <p class="line">Version {s.info.version} is installed.</p>
+      <p class="line">{updateLine(s.info, 'ready')}</p>
       <button class="btn btn-primary" onclick={() => void updates.restart()}>Restart to update</button>
     {:else if s.kind === 'failed'}
       <p class="line">{s.info ? 'The update failed.' : 'Cannot check for updates.'}</p>
@@ -92,7 +140,9 @@
       <p class="line">
         {s.kind === 'current' ? 'Chord is up to date.' : prefs.autoUpdate ? 'Chord looks for updates by itself.' : 'Automatic checks are off.'}
       </p>
-      <p class="meta">{checked}</p>
+      <p class="meta">
+        {checked}{flatpak ? '. Flatpak also looks for updates by itself, twice an hour.' : ''}
+      </p>
       <button class="btn" onclick={() => void updates.check()}>Check for updates</button>
     {/if}
   </div>
@@ -171,6 +221,40 @@
   .notes {
     white-space: pre-wrap;
     color: var(--ink-muted);
+  }
+  .switch {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 0;
+    padding: var(--space-3);
+    background: var(--surface-200);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+  }
+  .switch p {
+    margin: 0;
+  }
+  .switch pre {
+    align-self: stretch;
+    margin: 0;
+    padding: var(--space-2);
+    background: var(--surface-100);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+  code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    user-select: text;
+  }
+  .row {
+    display: flex;
+    gap: var(--space-2);
   }
   progress {
     width: 100%;

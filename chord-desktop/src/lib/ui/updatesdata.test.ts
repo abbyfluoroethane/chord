@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { UpdateInfo } from '$lib/chord/types';
+import type { FlatpakSwitch, UpdateInfo } from '$lib/chord/types';
 import {
   CHECK_EVERY_MS,
+  bannerText,
+  branchChannel,
+  branchLabel,
+  offText,
+  switchFor,
+  updateKey,
+  updateLine,
   channelLabel,
   checkDue,
   checkedText,
@@ -22,8 +29,65 @@ const INFO: UpdateInfo = {
   notes: null,
   pubDate: null,
   releaseUrl: null,
-  canInstall: true
+  installed: false
 };
+
+const FLATPAK_UPDATE: UpdateInfo = { ...INFO, version: '', build: 0, commit: '7c2e91b04d' };
+
+const SWITCH: FlatpakSwitch = {
+  channel: 'nightly',
+  install: 'flatpak install chord-nightly space.foid.chord//nightly',
+  makeCurrent: 'flatpak make-current space.foid.chord nightly'
+};
+
+describe('flatpak', () => {
+  it('reads the channel from the branch', () => {
+    expect(branchChannel('beta')).toBe('beta');
+    expect(branchChannel('master')).toBeNull();
+    expect(branchLabel('nightly')).toBe('Nightly');
+    expect(branchLabel('master')).toBe('master');
+    expect(branchLabel('')).toBe('Unknown branch');
+  });
+  it('names the branch in the version line', () => {
+    expect(versionLine({ version: '0.3.0', commit: 'abc', channel: 'beta', flatpak: { branch: 'beta' } })).toBe(
+      'Version 0.3.0 (abc) · Beta (Flatpak)'
+    );
+  });
+  it('finds the switch command of a channel', () => {
+    expect(switchFor({ flatpak: { appId: 'a', branch: 'beta', arch: null, commit: null, flatpakVersion: null, switch: [SWITCH] } }, 'nightly')).toBe(SWITCH);
+    expect(switchFor({ flatpak: null }, 'nightly')).toBeNull();
+    expect(switchFor(null, 'nightly')).toBeNull();
+  });
+  it('says why an install has no updater', () => {
+    const fp = { appId: 'a', branch: '', arch: null, commit: null, flatpakVersion: null, switch: [] };
+    expect(offText({ channel: 'beta', os: 'linux', flatpak: fp })).toContain('development run');
+    expect(offText({ channel: 'dev', os: 'linux', flatpak: null })).toBe('This is a dev build. It does not update itself.');
+    expect(offText({ channel: 'beta', os: 'linux', flatpak: null })).toBe(
+      'On Linux, Chord updates itself only when it runs as a Flatpak.'
+    );
+  });
+});
+
+describe('update texts', () => {
+  it('use the version when there is one', () => {
+    expect(updateLine(INFO, 'available')).toBe('Version 0.3.0 is available.');
+    expect(updateLine(INFO, 'downloading')).toBe('Downloading version 0.3.0…');
+    expect(updateLine(INFO, 'ready')).toBe('Version 0.3.0 is installed.');
+    expect(bannerText(INFO, 'available', null)).toBe('Chord 0.3.0 is available.');
+    expect(bannerText(INFO, 'downloading', 40)).toBe('Downloading Chord 0.3.0 (40%).');
+    expect(bannerText(INFO, 'ready', null)).toBe('Chord 0.3.0 is ready.');
+    expect(updateKey(INFO)).toBe('0.3.0');
+  });
+  it('speak of a new version for a Flatpak update', () => {
+    expect(updateLine(FLATPAK_UPDATE, 'available')).toBe('A new version is available.');
+    expect(updateLine(FLATPAK_UPDATE, 'downloading')).toBe('Downloading the update…');
+    expect(updateLine(FLATPAK_UPDATE, 'ready')).toBe('A new version is ready.');
+    expect(bannerText(FLATPAK_UPDATE, 'available', null)).toBe('A new version of Chord is available.');
+    expect(bannerText(FLATPAK_UPDATE, 'downloading', null)).toBe('Downloading the update.');
+    expect(bannerText(FLATPAK_UPDATE, 'ready', null)).toBe('A new version of Chord is ready.');
+    expect(updateKey(FLATPAK_UPDATE)).toBe('7c2e91b04d');
+  });
+});
 
 describe('effectiveChannel', () => {
   it('follows the build until the user picks one', () => {
