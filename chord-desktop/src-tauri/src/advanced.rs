@@ -41,6 +41,10 @@ pub struct AppInfo {
     pub channel: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
+    /// How this install updates: `tauri`, `flatpak` or `none` (see `updates::updater_kind`).
+    pub updater: &'static str,
+    /// The Flatpak install, when Chord runs in one. Its branch is the channel.
+    pub flatpak: Option<crate::flatpak::FlatpakInfo>,
 }
 
 /// The size of a file, or zero when it does not exist.
@@ -203,6 +207,8 @@ pub fn app_info() -> AppInfo {
         channel: crate::updates::BUILD_CHANNEL,
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
+        updater: crate::updates::updater_kind(),
+        flatpak: crate::flatpak::instance().cloned(),
     }
 }
 

@@ -1,6 +1,6 @@
 // The rules of the update setting and its texts. No state here, so they are easy to test.
 // See docs/updates.md.
-import type { AppInfo, BuildChannel, UpdateChannel, UpdateInfo } from '$lib/chord/types';
+import type { AppInfo, BuildChannel, FlatpakInfo, FlatpakSwitch, UpdateChannel, UpdateInfo } from '$lib/chord/types';
 
 /** The time between two automatic checks. */
 export const CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -34,9 +34,57 @@ export function slowerNote(chosen: UpdateChannel, build: BuildChannel): string |
   return `You keep this build until ${channelLabel(chosen)} has a newer one.`;
 }
 
-/** "Version 0.3.0-beta.2 (09c83fb) · Beta" */
-export function versionLine(app: Pick<AppInfo, 'version' | 'commit' | 'channel'>): string {
-  return `Version ${app.version} (${app.commit}) · ${channelLabel(app.channel)}`;
+/** The channel of a Flatpak branch, or null for another branch (for example `master`). */
+export function branchChannel(branch: string): UpdateChannel | null {
+  return CHANNELS.find((c) => c.value === branch)?.value ?? null;
+}
+
+/** The name of a Flatpak branch: the channel name, else the branch itself. */
+export function branchLabel(branch: string): string {
+  const c = branchChannel(branch);
+  return c ? channelLabel(c) : branch || 'Unknown branch';
+}
+
+/** "Version 0.3.0-beta.2 (09c83fb) · Beta", or "· Beta (Flatpak)" in a Flatpak. */
+export function versionLine(
+  app: Pick<AppInfo, 'version' | 'commit' | 'channel'> & { flatpak?: Pick<FlatpakInfo, 'branch'> | null }
+): string {
+  const where = app.flatpak ? `${branchLabel(app.flatpak.branch)} (Flatpak)` : channelLabel(app.channel);
+  return `Version ${app.version} (${app.commit}) · ${where}`;
+}
+
+/** Why this install does not update itself. */
+export function offText(app: Pick<AppInfo, 'channel' | 'os' | 'flatpak'>): string {
+  if (app.flatpak) return 'This Flatpak is a development run. It does not update itself.';
+  if (app.channel === 'dev') return 'This is a dev build. It does not update itself.';
+  if (app.os === 'linux') return 'On Linux, Chord updates itself only when it runs as a Flatpak.';
+  return 'This build does not update itself.';
+}
+
+/** The commands that get the branch of a channel, in a Flatpak. */
+export function switchFor(app: Pick<AppInfo, 'flatpak'> | null, channel: UpdateChannel): FlatpakSwitch | null {
+  return app?.flatpak?.switch.find((s) => s.channel === channel) ?? null;
+}
+
+/** The status line of an update. A Flatpak update has no version text. */
+export function updateLine(info: UpdateInfo, kind: 'available' | 'downloading' | 'ready'): string {
+  const v = info.version;
+  if (kind === 'available') return v ? `Version ${v} is available.` : 'A new version is available.';
+  if (kind === 'downloading') return v ? `Downloading version ${v}…` : 'Downloading the update…';
+  return v ? `Version ${v} is installed.` : 'A new version is ready.';
+}
+
+/** The text of the update banner. */
+export function bannerText(info: UpdateInfo, kind: 'available' | 'downloading' | 'ready', pct: number | null): string {
+  const v = info.version;
+  if (kind === 'downloading') return `Downloading ${v ? `Chord ${v}` : 'the update'}${pct === null ? '' : ` (${pct}%)`}.`;
+  const name = v ? `Chord ${v}` : 'A new version of Chord';
+  return kind === 'ready' ? `${name} is ready.` : `${name} is available.`;
+}
+
+/** What tells one update from another, for a closed banner. */
+export function updateKey(info: UpdateInfo): string {
+  return info.version || info.commit || 'update';
 }
 
 /** Is an automatic check due? */

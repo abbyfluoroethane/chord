@@ -14,6 +14,7 @@ mod commands;
 mod emoji;
 mod error;
 mod files;
+mod flatpak;
 mod forms;
 mod gif;
 mod keychain;
@@ -73,7 +74,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        // The endpoints come from the chosen channel at each check (src/updates.rs).
+        // The endpoints come from the chosen channel at each check (src/updates.rs). Only
+        // Windows and macOS use it: on Linux the Flatpak portal does the updates.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(navigation::plugin())
         .manage(state::AppState::default())
@@ -81,7 +83,11 @@ pub fn run() {
         .manage(notify::NoticePrefs::default())
         .manage(certpin::CertPins::default())
         .manage(behaviour::Behaviour::default())
-        .manage(updates::Pending::default())
+        .manage(updates::Pending::default());
+    // In a Flatpak the portal does the updates (src/flatpak.rs).
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(flatpak::Updater::default());
+    let builder = builder
         .on_window_event(behaviour::on_window_event)
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {

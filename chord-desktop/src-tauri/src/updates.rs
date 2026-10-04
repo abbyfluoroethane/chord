@@ -2,8 +2,10 @@
 //!
 //! The page picks the channel. Rust reads the manifest of that channel for this platform, and
 //! takes an update only when its build number is higher than the build of this app: never a
-//! downgrade. A `dev` build does not update itself. On Linux only an AppImage can replace
-//! itself, so a .deb or .rpm install gets the release page instead of an install.
+//! downgrade. A `dev` build does not update itself.
+//!
+//! On Linux Chord is a Flatpak: the Flatpak portal does the updates (src/flatpak.rs), never
+//! the Tauri updater. A Linux build outside Flatpak (a dev build) has no updater.
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -36,6 +38,26 @@ pub fn current_build() -> i64 {
     env!("CHORD_BUILD").parse().unwrap_or(0)
 }
 
+/// The event that tells the page about an update that the Flatpak portal found.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const UPDATE_EVENT: &str = "update-available";
+
+/// How this install updates: `tauri` (Windows, macOS), `flatpak`, or `none`.
+pub fn updater_kind() -> &'static str {
+    if let Some(info) = crate::flatpak::instance() {
+        return if crate::flatpak::can_update(info) {
+            "flatpak"
+        } else {
+            "none"
+        };
+    }
+    if cfg!(target_os = "linux") || BUILD_CHANNEL == "dev" {
+        "none"
+    } else {
+        "tauri"
+    }
+}
+
 /// The update found by the last check. Install takes it from here.
 #[derive(Default)]
 pub struct Pending(Mutex<Option<Update>>);
@@ -44,7 +66,8 @@ pub struct Pending(Mutex<Option<Update>>);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
-    /// The version without the build number, for example `0.3.0-beta.2`.
+    /// The version without the build number, for example `0.3.0-beta.2`. Empty for a Flatpak
+    /// update: the portal gives no version.
     pub version: String,
     pub build: i64,
     pub channel: Option<String>,
@@ -53,9 +76,9 @@ pub struct UpdateInfo {
     pub notes: Option<String>,
     pub pub_date: Option<String>,
     pub release_url: Option<String>,
-    /// False when this install cannot replace itself (a .deb or .rpm on Linux). The page then
-    /// links to `release_url`.
-    pub can_install: bool,
+    /// The new version is already installed (a Flatpak updated by the system): only a
+    /// restart is needed.
+    pub installed: bool,
 }
 
 /// The download progress of an install.
@@ -106,20 +129,8 @@ fn is_newer(remote_meta: &str, current: i64) -> bool {
     build_from_meta(remote_meta).is_some_and(|remote| remote > current)
 }
 
-/// Can this install replace itself? On Linux only an AppImage can.
-fn can_self_install(os: &str, appimage: bool) -> bool {
-    os != "linux" || appimage
-}
-
-fn this_can_install() -> bool {
-    can_self_install(
-        std::env::consts::OS,
-        std::env::var_os("APPIMAGE").is_some_and(|p| !p.is_empty()),
-    )
-}
-
 /// The page view of an update. The extra fields come from the raw manifest.
-fn info_of(version: &str, raw: &Value, can_install: bool) -> UpdateInfo {
+fn info_of(version: &str, raw: &Value) -> UpdateInfo {
     let text = |key: &str| raw.get(key).and_then(Value::as_str).map(str::to_owned);
     UpdateInfo {
         version: without_build(version).to_owned(),
@@ -131,7 +142,7 @@ fn info_of(version: &str, raw: &Value, can_install: bool) -> UpdateInfo {
         notes: text("notes"),
         pub_date: text("pub_date"),
         release_url: text("release_url"),
-        can_install,
+        installed: false,
     }
 }
 
@@ -140,18 +151,22 @@ fn update_error(e: impl std::fmt::Display) -> ChordError {
 }
 
 /// Look for an update in `channel`. Resolves to null when there is none, when the channel has
-/// no manifest yet, or when this is a dev build.
+/// no manifest yet, or when this install has no updater. In a Flatpak the branch is the
+/// channel, so `channel` does not count there: the update monitor of the portal answers.
 #[tauri::command]
 pub async fn update_check(
     app: AppHandle,
     pending: State<'_, Pending>,
     channel: String,
 ) -> Res<Option<UpdateInfo>> {
-    if BUILD_CHANNEL == "dev" {
-        return Ok(None);
-    }
     let channel = parse_channel(&channel)
         .ok_or_else(|| ChordError::invalid(format!("no update channel {channel}")))?;
+    match updater_kind() {
+        #[cfg(target_os = "linux")]
+        "flatpak" => return crate::flatpak::check(&app).await,
+        "tauri" => {}
+        _ => return Ok(None),
+    }
     let url = manifest_url(channel)
         .parse()
         .map_err(|e| ChordError::invalid(format!("bad manifest URL: {e}")))?;
@@ -176,7 +191,7 @@ pub async fn update_check(
         *lock(&pending.0) = None;
         return Ok(None);
     };
-    let info = info_of(&update.version, &update.raw_json, this_can_install());
+    let info = info_of(&update.version, &update.raw_json);
     // The signature names the version that the release was built with, which has no build
     // number. The updater compares the two before it installs.
     update.version = info.version.clone();
@@ -188,15 +203,27 @@ pub async fn update_check(
 /// On Windows the installer closes the app. Elsewhere, call `update_restart` after it.
 #[tauri::command]
 pub async fn update_install(
+    app: AppHandle,
     pending: State<'_, Pending>,
     on_progress: Channel<UpdateProgress>,
 ) -> Res<()> {
-    if !this_can_install() {
-        return Err(ChordError::new(
-            "updateManual",
-            "this install cannot update itself: download the new version",
-        ));
+    match updater_kind() {
+        // The portal counts in operations, not bytes: each operation is 100.
+        #[cfg(target_os = "linux")]
+        "flatpak" => {
+            return crate::flatpak::install(&app, |downloaded, total| {
+                let _ = on_progress.send(UpdateProgress {
+                    downloaded,
+                    total: Some(total),
+                });
+            })
+            .await;
+        }
+        "tauri" => {}
+        _ => return Err(ChordError::new("noUpdate", "this install has no updater")),
     }
+    // Only the Flatpak path needs the handle.
+    let _ = &app;
     let update = lock(&pending.0)
         .clone()
         .ok_or_else(|| ChordError::new("noUpdate", "no update to install: check first"))?;
@@ -224,9 +251,14 @@ pub async fn update_install(
     Ok(())
 }
 
-/// Start the app again, so the installed update runs.
+/// Start the app again, so the installed update runs. In a Flatpak the portal starts the
+/// newest installed version, then the app quits.
 #[tauri::command]
-pub fn update_restart(app: AppHandle) {
+pub async fn update_restart(app: AppHandle) -> Res<()> {
+    #[cfg(target_os = "linux")]
+    if updater_kind() == "flatpak" {
+        return crate::flatpak::restart(&app).await;
+    }
     app.restart();
 }
 
@@ -291,11 +323,10 @@ mod tests {
     }
 
     #[test]
-    fn linux_installs_only_from_an_appimage() {
-        assert!(can_self_install("linux", true));
-        assert!(!can_self_install("linux", false));
-        assert!(can_self_install("windows", false));
-        assert!(can_self_install("macos", false));
+    fn linux_outside_flatpak_has_no_updater() {
+        if cfg!(target_os = "linux") && crate::flatpak::instance().is_none() {
+            assert_eq!(updater_kind(), "none");
+        }
     }
 
     #[test]
@@ -309,7 +340,7 @@ mod tests {
             "release_url": "https://example.org/r",
             "notes": "Fixes",
         });
-        let info = info_of("0.3.0-beta.2+b1612345", &raw, false);
+        let info = info_of("0.3.0-beta.2+b1612345", &raw);
         assert_eq!(
             info,
             UpdateInfo {
@@ -320,10 +351,10 @@ mod tests {
                 notes: Some("Fixes".into()),
                 pub_date: Some("2026-10-04T06:00:00Z".into()),
                 release_url: Some("https://example.org/r".into()),
-                can_install: false,
+                installed: false,
             }
         );
         // Without the build in the version, the build field counts.
-        assert_eq!(info_of("0.3.0", &json!({ "build": 7 }), true).build, 7);
+        assert_eq!(info_of("0.3.0", &json!({ "build": 7 })).build, 7);
     }
 }

@@ -445,6 +445,32 @@ export interface AppInfo {
   channel: BuildChannel;
   os: string;
   arch: string;
+  /** How this install updates. `none`: a dev build, or Linux outside Flatpak. */
+  updater: 'tauri' | 'flatpak' | 'none';
+  /** The Flatpak install, when Chord runs in one. Its branch is the channel. */
+  flatpak: FlatpakInfo | null;
+}
+
+/** The Flatpak install that runs the app (Rust `FlatpakInfo`). */
+export interface FlatpakInfo {
+  appId: string;
+  /** For example `beta`. Empty when Flatpak did not say. */
+  branch: string;
+  arch: string | null;
+  /** The OSTree commit of the running app. */
+  commit: string | null;
+  flatpakVersion: string | null;
+  /** The command that installs the branch of each channel. */
+  switch: FlatpakSwitch[];
+}
+
+/** How to get the branch of a channel (Rust `SwitchCommand`). */
+export interface FlatpakSwitch {
+  channel: UpdateChannel;
+  /** Adds the remote when needed, and installs the branch. Run once. */
+  install: string;
+  /** Picks the branch that runs, when several are installed. */
+  makeCurrent: string;
 }
 
 /** The update channels that the user can pick. */
@@ -454,7 +480,8 @@ export type BuildChannel = UpdateChannel | 'dev';
 
 /** An update found by a check (Rust `UpdateInfo`). */
 export interface UpdateInfo {
-  /** The version without the build number, for example `0.3.0-beta.2`. */
+  /** The version without the build number, for example `0.3.0-beta.2`. Empty for a Flatpak
+   *  update: the portal gives no version. */
   version: string;
   build: number;
   channel: string | null;
@@ -463,8 +490,9 @@ export interface UpdateInfo {
   notes: string | null;
   pubDate: string | null;
   releaseUrl: string | null;
-  /** False for a .deb or .rpm install on Linux: link to `releaseUrl` instead. */
-  canInstall: boolean;
+  /** The new version is already installed (a Flatpak that the system updated): only a
+   *  restart is needed. */
+  installed: boolean;
 }
 
 /** The download progress of an update (Rust `UpdateProgress`). */

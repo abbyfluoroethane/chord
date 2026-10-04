@@ -37,7 +37,9 @@
     build: 0,
     channel: 'dev',
     os: 'preview',
-    arch: 'browser'
+    arch: 'browser',
+    updater: 'none',
+    flatpak: null
   };
 
   let features = $state<string[]>([]);
@@ -134,7 +136,10 @@
   function copyDebug() {
     void copyText(
       debugText({
-        version: app ? `${app.version} (${app.commit}) build ${app.build}, ${app.channel}` : 'unknown',
+        version: app
+          ? `${app.version} (${app.commit}) build ${app.build}, ${app.channel}` +
+            (app.flatpak ? `, Flatpak ${app.flatpak.branch || 'unknown branch'}` : '')
+          : 'unknown',
         os: app?.os ?? 'unknown',
         arch: app?.arch ?? '',
         server: session.host,

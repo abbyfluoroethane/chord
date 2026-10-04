@@ -39,8 +39,8 @@ percent-encoding = "2"
 rusqlite.workspace = true
 # Link previews (src/link_preview.rs): the HTTP fetch, with rustls as in chord-core.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-# The DNS lookup of the SSRF filter, and the per-URL lock.
-tokio = { workspace = true, features = ["net", "sync", "rt-multi-thread"] }
+# The DNS lookup of the SSRF filter, and the per-URL lock. The time limit of a Flatpak update.
+tokio = { workspace = true, features = ["net", "sync", "rt-multi-thread", "time"] }
 # Parses the URL, and resolves a relative image URL against the page.
 url = "2"
 # html5ever based HTML parser and selectors, for the Open Graph tags.
@@ -57,9 +57,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # SVG filters on the main thread, so a picker full of Fluent emoji hung the app. No text and
 # no system fonts: emoji SVGs have only shapes.
 resvg = { version = "0.48", default-features = false }
-# The app updates itself from the release repository (src/updates.rs). Rust calls the plugin,
-# so the page needs no permission for it.
+# The app updates itself from the release repository on Windows and macOS (src/updates.rs).
+# Rust calls the plugin, so the page needs no permission for it.
 tauri-plugin-updater = "2"
+# The streams of D-Bus signals from the Flatpak portal (src/flatpak.rs).
+futures-util = "0.3"
 
 # One running app. On Windows and Linux the OS starts a second copy for an xmpp: link. The
 # `deep-link` feature passes the link to the first copy, which then gets the link event.
@@ -76,6 +78,12 @@ tauri-plugin-autostart = "2"
 keyring = { version = "3", features = ["apple-native"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+# On Linux Chord is a Flatpak. It updates through the Flatpak portal (src/flatpak.rs). Use the
+# async-io executor of zbus, not tokio: notify-rust and single-instance use the blocking zbus
+# API, and with the tokio feature that API panics when it runs inside a tokio runtime.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "flatpak"] }
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 
