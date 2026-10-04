@@ -439,28 +439,6 @@ private fun TimeDialog(title: String, current: Int, is24: Boolean, onDismiss: ()
     )
 }
 
-// ---- Appearance ----
-
-@Composable
-internal fun AppearancePage(state: SettingsState, a: SettingsActions) {
-    Group(stringResource(R.string.settings_mode)) {
-        Choices(
-            options = listOf(
-                ThemeMode.System to stringResource(R.string.settings_theme_system),
-                ThemeMode.Dark to stringResource(R.string.settings_theme_dark),
-                ThemeMode.Light to stringResource(R.string.settings_theme_light),
-            ),
-            selected = state.prefs.theme, onSelect = a.onTheme, tag = "theme",
-        )
-    }
-    Group(stringResource(R.string.settings_interface)) {
-        ToggleRow(
-            stringResource(R.string.settings_show_presence), state.prefs.showPresence, a.onShowPresence, "settings_show_presence",
-            hint = stringResource(R.string.settings_show_presence_hint),
-        )
-    }
-}
-
 // ---- Advanced ----
 
 @Composable

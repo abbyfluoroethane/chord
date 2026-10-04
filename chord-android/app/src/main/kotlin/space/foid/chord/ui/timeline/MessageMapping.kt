@@ -10,9 +10,11 @@ import java.time.format.DateTimeFormatter
 
 private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
-/** "14:05" in [zone]. */
-fun clockLabel(timestampMs: Long, zone: ZoneId = ZoneId.systemDefault()): String =
-    CLOCK.format(Instant.ofEpochMilli(timestampMs).atZone(zone))
+private val CLOCK_12: DateTimeFormatter = DateTimeFormatter.ofPattern("h:mm a")
+
+/** "14:05" in [zone], or "2:05 PM" when [is24] is false. */
+fun clockLabel(timestampMs: Long, zone: ZoneId = ZoneId.systemDefault(), is24: Boolean = true): String =
+    (if (is24) CLOCK else CLOCK_12).format(Instant.ofEpochMilli(timestampMs).atZone(zone))
 
 /** The first line of a quoted body, cut so it stays short. */
 fun replySnippet(body: String, max: Int = 140): String {

@@ -9,7 +9,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -66,9 +68,15 @@ object Chord {
  * plumbing (sheets, dialogs, text fields, navigation) uses Chord colours.
  */
 @Composable
-fun ChordTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val c = if (dark) ChordDark else ChordLight
-    val scheme = if (dark) {
+fun ChordTheme(
+    dark: Boolean = isSystemInDarkTheme(),
+    /** The colours of the picked theme. Null: the Chord theme of the mode. */
+    colors: ChordColors? = null,
+    appearance: Appearance = Appearance(),
+    content: @Composable () -> Unit,
+) {
+    val c = colors ?: if (dark) ChordDark else ChordLight
+    val scheme = if (c.isDark) {
         darkColorScheme(
             primary = c.brand, onPrimary = c.onBrand, primaryContainer = c.brandSoft, onPrimaryContainer = c.brandInk,
             secondary = c.accent, onSecondary = c.surface100,
@@ -89,7 +97,15 @@ fun ChordTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () ->
             error = c.danger, onError = c.onDanger, scrim = c.scrim,
         )
     }
-    CompositionLocalProvider(LocalChordColors provides c) {
+    // The text size scales every sp, so all of ChordType follows it.
+    val density = LocalDensity.current
+    val scaled = Density(density.density, density.fontScale * appearance.fontFactor)
+    CompositionLocalProvider(
+        LocalChordColors provides c,
+        LocalAppearance provides appearance,
+        LocalReduceMotion provides appearance.reduceMotion,
+        LocalDensity provides scaled,
+    ) {
         MaterialTheme(colorScheme = scheme, content = content)
     }
 }

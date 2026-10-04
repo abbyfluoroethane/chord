@@ -5,6 +5,13 @@ import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import space.foid.chord.ui.emoji.EmojiPack
+import space.foid.chord.ui.theme.DEFAULT_DARK_THEME
+import space.foid.chord.ui.theme.DEFAULT_LIGHT_THEME
+import space.foid.chord.ui.theme.MotionMode
+import space.foid.chord.ui.theme.TimeFormat
+import space.foid.chord.ui.theme.decodeAccents
+import space.foid.chord.ui.theme.encodeAccents
 
 /** The theme the user picked. [System] follows the system setting. */
 enum class ThemeMode {
@@ -57,7 +64,24 @@ data class AppPrefs(
     val quietHours: Boolean = false,
     val quietFrom: Int = 22 * 60,
     val quietTo: Int = 8 * 60,
+    /** The theme for the dark mode and for the light mode, by library id. */
+    val darkTheme: String = DEFAULT_DARK_THEME,
+    val lightTheme: String = DEFAULT_LIGHT_THEME,
+    /** The accent picked for each theme id. A theme without an entry uses its default. */
+    val accents: Map<String, String> = emptyMap(),
+    /** Which images draw emoji. [EmojiPack.System] is the font of the phone. */
+    val emojiPack: EmojiPack = EmojiPack.System,
+    /** Show a message with only emoji large. */
+    val jumboEmoji: Boolean = true,
+    /** Message text size in sp. */
+    val fontSize: Int = DEFAULT_FONT_SIZE,
+    val timeFormat: TimeFormat = TimeFormat.System,
+    val underlineLinks: Boolean = true,
+    val motion: MotionMode = MotionMode.System,
 )
+
+const val DEFAULT_FONT_SIZE = 15
+val FONT_SIZES = 12..20
 
 /**
  * The settings that live on the phone. [prefs] holds all of them. [themeMode], [shareInfo] and
@@ -111,6 +135,7 @@ internal fun AppPrefs.sanitised(): AppPrefs = copy(
     idleMinutes = if (idleMinutes in IDLE_MINUTES) idleMinutes else 5,
     quietFrom = quietFrom.coerceIn(0, 24 * 60 - 1),
     quietTo = quietTo.coerceIn(0, 24 * 60 - 1),
+    fontSize = fontSize.coerceIn(FONT_SIZES),
 )
 
 /** [SettingsStore] in SharedPreferences. One instance per process: use [get]. */
@@ -130,6 +155,15 @@ class PrefsSettingsStore private constructor(private val sp: SharedPreferences) 
             .putBoolean(QUIET, prefs.quietHours)
             .putInt(QUIET_FROM, prefs.quietFrom)
             .putInt(QUIET_TO, prefs.quietTo)
+            .putString(DARK_THEME, prefs.darkTheme)
+            .putString(LIGHT_THEME, prefs.lightTheme)
+            .putString(ACCENTS, encodeAccents(prefs.accents))
+            .putString(EMOJI_PACK, prefs.emojiPack.name)
+            .putBoolean(JUMBO_EMOJI, prefs.jumboEmoji)
+            .putInt(FONT_SIZE, prefs.fontSize)
+            .putString(TIME_FORMAT, prefs.timeFormat.name)
+            .putBoolean(UNDERLINE_LINKS, prefs.underlineLinks)
+            .putString(MOTION, prefs.motion.name)
             .apply()
     }
 
@@ -145,6 +179,15 @@ class PrefsSettingsStore private constructor(private val sp: SharedPreferences) 
         private const val QUIET = "quiet_hours"
         private const val QUIET_FROM = "quiet_from"
         private const val QUIET_TO = "quiet_to"
+        private const val DARK_THEME = "dark_theme"
+        private const val LIGHT_THEME = "light_theme"
+        private const val ACCENTS = "theme_accents"
+        private const val EMOJI_PACK = "emoji_pack"
+        private const val JUMBO_EMOJI = "jumbo_emoji"
+        private const val FONT_SIZE = "font_size"
+        private const val TIME_FORMAT = "time_format"
+        private const val UNDERLINE_LINKS = "underline_links"
+        private const val MOTION = "motion"
 
         private fun read(sp: SharedPreferences): AppPrefs {
             val d = AppPrefs()
@@ -160,6 +203,15 @@ class PrefsSettingsStore private constructor(private val sp: SharedPreferences) 
                 quietHours = sp.getBoolean(QUIET, d.quietHours),
                 quietFrom = sp.getInt(QUIET_FROM, d.quietFrom),
                 quietTo = sp.getInt(QUIET_TO, d.quietTo),
+                darkTheme = sp.getString(DARK_THEME, null) ?: d.darkTheme,
+                lightTheme = sp.getString(LIGHT_THEME, null) ?: d.lightTheme,
+                accents = decodeAccents(sp.getString(ACCENTS, null)),
+                emojiPack = EmojiPack.fromName(sp.getString(EMOJI_PACK, null)),
+                jumboEmoji = sp.getBoolean(JUMBO_EMOJI, d.jumboEmoji),
+                fontSize = sp.getInt(FONT_SIZE, d.fontSize),
+                timeFormat = TimeFormat.fromName(sp.getString(TIME_FORMAT, null)),
+                underlineLinks = sp.getBoolean(UNDERLINE_LINKS, d.underlineLinks),
+                motion = MotionMode.fromName(sp.getString(MOTION, null)),
             ).sanitised()
         }
 

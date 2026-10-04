@@ -156,6 +156,29 @@ private fun emojiEnd(s: String, i: Int): Int {
     return j
 }
 
+/**
+ * The character ranges (end included) of each emoji in [s]. A symbol that is text by default and
+ * has no variation selector (the copyright sign, an arrow) is not an emoji here.
+ */
+fun emojiRuns(s: String): List<IntRange> {
+    val out = ArrayList<IntRange>()
+    var i = 0
+    while (i < s.length) {
+        val end = emojiEnd(s, i)
+        if (end < 0) {
+            i += Character.charCount(s.codePointAt(i))
+            continue
+        }
+        val single = end - i == Character.charCount(s.codePointAt(i))
+        val cp = s.codePointAt(i)
+        val textSymbol = single && (cp == 0xA9 || cp == 0xAE || cp == 0x203C || cp == 0x2049 || cp == 0x2122 ||
+            cp == 0x2139 || cp in 0x2194..0x21AA)
+        if (!textSymbol) out += i until end
+        i = end
+    }
+    return out.map { it.first..it.last }
+}
+
 // ---------------------------------------------------------------- links
 
 private val BARE_LINK = Regex("^(?:https?://|xmpp:)[^\\s<>]+", RegexOption.IGNORE_CASE)
