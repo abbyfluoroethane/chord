@@ -8,7 +8,7 @@ name: Release
 # "Run workflow" builds without a tag and without publishing, to check the build.
 #
 # Secrets:
-#   RELEASES_TOKEN   A fine-grained token with "Contents: read and write" on the release
+#   CHORD_RELEASES_TOKEN   A fine-grained token with "Contents: read and write" on the release
 #                    repositories only. GITHUB_TOKEN cannot write to another repository.
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   The updater key.
 #   CHORD_KLIPY_KEY  The GIF search key (docs/gifs.md). Without it, GIF search is off.
@@ -71,12 +71,12 @@ jobs:
           merge-multiple: true
       - name: Publish to abbyfluoroethane/chord-desktop
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.CHORD_RELEASES_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          [[ -n "$GH_TOKEN" ]] || { echo "::error::The RELEASES_TOKEN secret is missing."; exit 1; }
+          [[ -n "$GH_TOKEN" ]] || { echo "::error::The CHORD_RELEASES_TOKEN secret is missing."; exit 1; }
           repo=abbyfluoroethane/chord-desktop
           commit=$(git rev-parse --short HEAD)
           channel=stable; release_tag="v$VERSION"; flags=(--latest)

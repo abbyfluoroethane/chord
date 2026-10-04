@@ -79,7 +79,7 @@ manifests. Nothing else.
 
 Secrets of this repository:
 
-- `RELEASES_TOKEN`: a fine-grained personal access token with access to the four release
+- `CHORD_RELEASES_TOKEN`: a fine-grained personal access token with access to the four release
   repositories only (chord-android, chord-desktop, chord-iOS, chord-nightly), and the permission
   "Contents: read and write". The workflows need it to publish.
 - `ANDROID_KEYSTORE_BASE64`, `CHORD_KEYSTORE_PASSWORD`, `CHORD_KEY_ALIAS`, `CHORD_KEY_PASSWORD`:

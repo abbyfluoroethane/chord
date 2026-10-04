@@ -90,7 +90,7 @@ jobs:
     if: always() && (needs.android.result == 'success' || needs.desktop.result == 'success')
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+      GH_TOKEN: ${{ secrets.CHORD_RELEASES_TOKEN }}
       REPO: abbyfluoroethane/chord-nightly
     steps:
       - uses: actions/checkout@v4
@@ -102,7 +102,7 @@ jobs:
           path: artifacts
       - name: Notes
         run: |
-          [[ -n "$GH_TOKEN" ]] || { echo "::error::The RELEASES_TOKEN secret is missing."; exit 1; }
+          [[ -n "$GH_TOKEN" ]] || { echo "::error::The CHORD_RELEASES_TOKEN secret is missing."; exit 1; }
           {
             echo "A nightly build of \`main\`. It can break."
             echo
