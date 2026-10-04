@@ -31,7 +31,7 @@
     'urn:xmpp:vendor:extra:1'
   ];
   const SAMPLE_STORAGE: StorageInfo = { database: 48_300_000, avatars: 2_100_000, emojiCache: 3_400_000 };
-  const SAMPLE_APP: AppInfo = { version: '0.1.0', os: 'preview', arch: 'browser' };
+  const SAMPLE_APP: AppInfo = { version: '0.1.0', commit: 'preview', os: 'preview', arch: 'browser' };
 
   let features = $state<string[]>([]);
   let featuresLoaded = $state(false);
@@ -127,7 +127,7 @@
   function copyDebug() {
     void copyText(
       debugText({
-        version: app?.version ?? 'unknown',
+        version: app ? `${app.version} (${app.commit})` : 'unknown',
         os: app?.os ?? 'unknown',
         arch: app?.arch ?? '',
         server: session.host,

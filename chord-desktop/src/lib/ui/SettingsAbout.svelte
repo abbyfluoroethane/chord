@@ -1,8 +1,20 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import ChordMark from './ChordMark.svelte';
+  import { api, live } from './bridge';
+  import type { AppInfo } from '$lib/chord/types';
 
-  // Keep in step with package.json.
-  const VERSION = '0.1.0';
+  // The version comes from the build (src-tauri/build.rs). The preview shows a sample.
+  let app = $state<AppInfo | null>(null);
+  onMount(() => {
+    void (async () => {
+      try {
+        app = live ? await (await api()).appInfo() : { version: '0.1.0', commit: 'preview', os: 'preview', arch: 'browser' };
+      } catch {
+        app = null;
+      }
+    })();
+  });
   const SOURCE = 'https://github.com/abbyfluoroethane/chord';
 </script>
 
@@ -10,7 +22,7 @@
   <span class="mark"><ChordMark /></span>
   <div>
     <p class="name">Chord Desktop</p>
-    <p class="meta">Version {VERSION}</p>
+    <p class="meta">{app ? `Version ${app.version} (${app.commit})` : 'Version unknown'}</p>
   </div>
 </div>
 

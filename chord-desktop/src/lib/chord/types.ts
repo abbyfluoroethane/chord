@@ -437,6 +437,8 @@ export interface StorageInfo {
 /** The app version and the system (Rust `AppInfo`). */
 export interface AppInfo {
   version: string;
+  /** The short hash of the commit that the app was built from. */
+  commit: string;
   os: string;
   arch: string;
 }

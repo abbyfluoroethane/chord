@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build the signed release APKs (universal and one per ABI), print their paths and SHA-256.
 #
-# Usage: dev/android-release.sh [--install] [--prebuilt <dir>] [--abis <list>]
+# Usage: dev/android-release.sh [--install] [--prebuilt <dir>] [--abis <list>] [--version <v>]
 #   --install          Install the right APK on the connected device with adb.
+#   --version <v>      The version, for example 0.3.0 or 0.3.0-beta.2. Default: the last
+#                      android-v tag plus "+dev". dev/release.sh passes it.
 #   --prebuilt <dir>   Use a prebuilt core (see chord-android/README.md) and skip cargo.
 #   --abis <list>      ABIs to build, for example x86_64. Default: arm64-v8a,x86_64.
 #
@@ -18,7 +20,8 @@ while (( $# )); do
     --install) install=1; shift ;;
     --prebuilt) gradle_args+=("-Pchord.prebuilt=$(cd "${2:?--prebuilt needs a directory}" && pwd)"); shift 2 ;;
     --abis) gradle_args+=("-Pchord.abis=${2:?--abis needs a value}"); shift 2 ;;
-    *) echo "usage: $0 [--install] [--prebuilt <dir>] [--abis <list>]" >&2; exit 2 ;;
+    --version) gradle_args+=("-Pchord.version=${2:?--version needs a value}"); shift 2 ;;
+    *) echo "usage: $0 [--install] [--prebuilt <dir>] [--abis <list>] [--version <v>]" >&2; exit 2 ;;
   esac
 done
 

@@ -11,16 +11,40 @@ plugins {
 // The Rust workspace is the parent of chord-android.
 val repoRoot: File = rootDir.parentFile
 
-// Version: versionCode is the commit count, versionName is 0.1.0-<short sha>.
-// providers.exec is configuration-cache safe. Without git (a source archive) it falls back to 1 and "0.1.0".
+// Version. A release passes it: -Pchord.version=0.3.0 or 0.3.0-beta.2 (dev/release.sh reads the
+// tag android-v<version>). Without it, a build takes the last android-v tag and adds "+dev".
+// No tag (a shallow CI clone or a source archive) gives 0.0.0+dev. See docs/releasing.md.
+// providers.exec is configuration-cache safe.
 fun gitOutput(vararg args: String): Provider<String> =
     providers.exec {
         commandLine("git", *args)
         workingDir = rootDir
         isIgnoreExitValue = true
     }.standardOutput.asText.map { it.trim() }
-val gitCommitCount: Int = gitOutput("rev-list", "--count", "HEAD").orNull?.toIntOrNull() ?: 1
 val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD").orNull.orEmpty()
+val releaseVersion: String? = (providers.gradleProperty("chord.version").orNull ?: System.getenv("CHORD_VERSION"))
+    ?.takeIf { it.isNotBlank() }
+val chordVersion: String = releaseVersion
+    ?: gitOutput("describe", "--tags", "--abbrev=0", "--match", "android-v*").orNull
+        ?.removePrefix("android-v")?.takeIf { it.isNotEmpty() }?.let { "$it+dev" }
+    ?: "0.0.0+dev"
+
+/**
+ * The versionCode of a version: MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N, with any
+ * +metadata ignored. Each beta of a version sorts below the version, so a phone updates from
+ * 0.3.0-beta.2 to 0.3.0, and from any 0.3.0 build to 0.3.1-beta.1.
+ * Code = major * 100,000,000 + minor * 1,000,000 + patch * 1,000 + (N for beta N, 999 for a release).
+ */
+fun versionCodeOf(version: String): Int {
+    val m = Regex("""^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?(?:\+[0-9A-Za-z.-]+)?$""").matchEntire(version)
+        ?: throw GradleException("Version $version is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N")
+    val (major, minor, patch, beta) = m.destructured
+    val n = beta.toIntOrNull() ?: 999
+    if (major.toInt() > 20 || minor.toInt() > 99 || patch.toInt() > 999 || n !in 1..999) {
+        throw GradleException("Version $version is out of range for the versionCode")
+    }
+    return major.toInt() * 100_000_000 + minor.toInt() * 1_000_000 + patch.toInt() * 1_000 + n
+}
 
 // Release signing. Read keystore.properties (gitignored) or the CHORD_KEYSTORE_* variables for CI.
 // Without either, the release build stays unsigned.
@@ -138,8 +162,10 @@ android {
         // Open question in the spec. 26 is the proposal.
         minSdk = 26
         targetSdk = 36
-        versionCode = gitCommitCount
-        versionName = if (gitShortSha.isEmpty()) "0.1.0" else "0.1.0-$gitShortSha"
+        versionCode = versionCodeOf(chordVersion)
+        versionName = chordVersion
+        // The commit of the build, for the About page and bug reports.
+        buildConfigField("String", "COMMIT", "\"${gitShortSha.ifEmpty { "unknown" }}\"")
     }
 
     // One APK per ABI and a universal one. This replaces ndk.abiFilters, which conflicts with splits.
@@ -187,6 +213,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {

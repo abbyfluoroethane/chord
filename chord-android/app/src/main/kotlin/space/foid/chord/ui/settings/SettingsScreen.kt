@@ -230,7 +230,7 @@ fun SettingsScreen(onBack: () -> Unit, onSignedOut: () -> Unit, modifier: Modifi
 }
 
 private fun versionName(context: Context): String = try {
-    context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+    "${context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""} (${space.foid.chord.BuildConfig.COMMIT})"
 } catch (e: Exception) {
     ""
 }
