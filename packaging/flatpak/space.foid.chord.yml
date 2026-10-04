@@ -1,4 +1,3 @@
-
 # Flatpak manifest of Chord Desktop. It builds the app from source, offline, as Flathub
 # requires. The same file can go to the Flathub repository of the app.
 #
@@ -10,13 +9,14 @@
 # the chord module, because the build checkout has no tags. Before a build, CI sets the
 # commit and these three values, for example for desktop-v0.3.0:
 #   sha=$(git rev-parse HEAD)
-#   sed -i -e "s|commit: .*|commit: $sha|" \
-#          -e "s|CHORD_VERSION: .*|CHORD_VERSION: '0.3.0'|" \
-#          -e "s|CHORD_COMMIT: .*|CHORD_COMMIT: '${sha:0:7}'|" \
-#          -e "s|CHORD_COMMIT_TIME: .*|CHORD_COMMIT_TIME: '$(git show -s --format=%ct HEAD)'|" \
+#   sed -i -e "s|^\( *\)commit: .*|\1commit: $sha|" \
+#          -e "s|^\( *\)CHORD_VERSION: .*|\1CHORD_VERSION: '0.3.0'|" \
+#          -e "s|^\( *\)CHORD_COMMIT: .*|\1CHORD_COMMIT: '${sha:0:7}'|" \
+#          -e "s|^\( *\)CHORD_COMMIT_TIME: .*|\1CHORD_COMMIT_TIME: '$(git show -s --format=%ct HEAD)'|" \
 #     packaging/flatpak/space.foid.chord.yml
 # Without that the build is 0.0.0+dev: the dev channel, which never looks for updates.
-# (Only the chord module has a `commit:` line; the other git sources are in shared-modules.)
+# Only the chord module has a commit line in this file; the other git sources are in
+# shared-modules.
 #
 # Build and install (from the repository root):
 #   flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//51 \
@@ -77,10 +77,11 @@ modules:
     build-options:
       append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node24/bin
       env:
-        # The version and the commit for build.rs. CI replaces these (see the top).
+        # The version and the commit for build.rs. CI replaces these (see the top). Empty
+        # commit values make build.rs ask git in the build checkout.
         CHORD_VERSION: '0.0.0+dev'
-        CHORD_COMMIT: 'unknown'
-        CHORD_COMMIT_TIME: '0'
+        CHORD_COMMIT: ''
+        CHORD_COMMIT_TIME: ''
         # Offline: crates from cargo-sources.json, npm packages from node-sources.json.
         CARGO_HOME: /run/build/chord/cargo
         CARGO_NET_OFFLINE: 'true'
@@ -100,10 +101,10 @@ modules:
       - install -Dm644 chord-desktop/src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/space.foid.chord.png
       - install -Dm644 chord-desktop/src-tauri/icons/icon.png /app/share/icons/hicolor/512x512/apps/space.foid.chord.png
     sources:
-      # The commit to build. CI replaces it (see the top). The default is the last commit
-      # that changed the packaging.
+      # The commit to build. CI replaces it (see the top). The default is a commit with
+      # this packaging.
       - type: git
         url: https://github.com/abbyfluoroethane/chord.git
-        commit: COMMIT_PLACEHOLDER
+        commit: e649832862fc406a4be0cee3cc49c74c93ebb775
       - cargo-sources.json
       - node-sources.json
