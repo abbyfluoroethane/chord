@@ -16,6 +16,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import android.text.format.DateFormat
+import space.foid.chord.ui.emoji.EmojiPacks
+import space.foid.chord.ui.emoji.LocalEmojiImages
+import space.foid.chord.ui.theme.ThemeLibrary
+import space.foid.chord.ui.theme.appearanceOf
+import space.foid.chord.ui.theme.resolveTheme
+import space.foid.chord.ui.theme.systemReduceMotion
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
@@ -68,20 +77,31 @@ class MainActivity : ComponentActivity() {
         }
 
         val settings = PrefsSettingsStore.get(this)
+        val themeLibrary = ThemeLibrary.get(this)
+        val emojiPacks = EmojiPacks.get(this)
         setContent {
-            val mode by settings.themeMode.collectAsState()
+            val prefs by settings.prefs.collectAsState()
             val showPresence by settings.showPresence.collectAsState()
-            val dark = mode.isDark(isSystemInDarkTheme())
+            val dark = prefs.theme.isDark(isSystemInDarkTheme())
+            // The picked theme for the mode that shows. A change applies at once.
+            val themes by themeLibrary.entries.collectAsState()
+            val entry = resolveTheme(themes, if (dark) prefs.darkTheme else prefs.lightTheme, dark)
+            val colors = remember(entry, prefs.accents) { entry.info.colors(entry.info.accentOr(prefs.accents[entry.id])) }
+            val context = LocalContext.current
+            val appearance = appearanceOf(prefs, systemReduceMotion(context), DateFormat.is24HourFormat(context))
+            // The emoji pack in use. It is null until the pack is on the phone: the font draws then.
+            LaunchedEffect(prefs.emojiPack) { emojiPacks.activate(prefs.emojiPack) }
+            val emojiImages by emojiPacks.active.collectAsState()
             // The bar icons follow the chosen theme, not only the system one.
-            DisposableEffect(dark) {
+            DisposableEffect(colors.isDark) {
                 enableEdgeToEdge(
-                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
-                    navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { colors.isDark },
+                    navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { colors.isDark },
                 )
                 onDispose {}
             }
-            ChordTheme(dark = dark) {
-                CompositionLocalProvider(LocalShowPresence provides showPresence) {
+            ChordTheme(dark = dark, colors = colors, appearance = appearance) {
+                CompositionLocalProvider(LocalShowPresence provides showPresence, LocalEmojiImages provides emojiImages) {
                     Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
                         startSignedIn?.let { signedIn ->
                             ChordNavHost(startSignedIn = signedIn, openPeer = openPeer)

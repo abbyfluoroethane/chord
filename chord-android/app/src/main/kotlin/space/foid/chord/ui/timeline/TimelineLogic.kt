@@ -29,8 +29,9 @@ fun stampLabel(
     now: Long,
     zone: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault(),
+    is24: Boolean = true,
 ): String {
-    val clock = clockLabel(ms, zone)
+    val clock = clockLabel(ms, zone, is24)
     return when (dayDiff(ms, now, zone)) {
         0 -> "today $clock"
         1 -> "yesterday $clock"

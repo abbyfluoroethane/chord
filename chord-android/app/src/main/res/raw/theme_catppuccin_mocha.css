@@ -1,0 +1,86 @@
+/**
+ * @name Catppuccin Mocha
+ * @author Catppuccin (catppuccin.com), MIT License
+ * @mode dark
+ * @description Soothing pastel theme. Pick one of the 14 accents.
+ * @default mauve
+ * @accent rosewater Rosewater
+ * @accent flamingo Flamingo
+ * @accent pink Pink
+ * @accent mauve Mauve
+ * @accent red Red
+ * @accent maroon Maroon
+ * @accent peach Peach
+ * @accent yellow Yellow
+ * @accent green Green
+ * @accent teal Teal
+ * @accent sky Sky
+ * @accent sapphire Sapphire
+ * @accent blue Blue
+ * @accent lavender Lavender
+ */
+:root {
+  /* As in the Catppuccin theme for Discord: the chat is base, the channel list mantle,
+     the rail and inputs crust, and the borders surface0. */
+  --surface-100: #1e1e2e;
+  --surface-200: #181825;
+  --surface-300: #11111b;
+  --line: #313244;
+  --surface-rail: #0c0c14;
+  --surface-side: #181825;
+  --line-strong: #585b70;
+  --ink: #cdd6f4;
+  --ink-muted: #a6adc8;
+  --brand: #cba6f7;
+  --brand-soft: color-mix(in srgb, var(--brand) 20%, #1e1e2e);
+  --brand-ink: var(--brand);
+  --on-brand: #11111b;
+  --accent: #89b4fa;
+  --online: #a6e3a1;
+  --away: #f9e2af;
+  --danger: #f38ba8;
+  --on-danger: #11111b;
+  --scrim: rgb(17 17 27 / 0.6);
+}
+:root[data-accent="rosewater"] {
+  --brand: #f5e0dc;
+}
+:root[data-accent="flamingo"] {
+  --brand: #f2cdcd;
+}
+:root[data-accent="pink"] {
+  --brand: #f5c2e7;
+}
+:root[data-accent="mauve"] {
+  --brand: #cba6f7;
+}
+:root[data-accent="red"] {
+  --brand: #f38ba8;
+}
+:root[data-accent="maroon"] {
+  --brand: #eba0ac;
+}
+:root[data-accent="peach"] {
+  --brand: #fab387;
+}
+:root[data-accent="yellow"] {
+  --brand: #f9e2af;
+}
+:root[data-accent="green"] {
+  --brand: #a6e3a1;
+}
+:root[data-accent="teal"] {
+  --brand: #94e2d5;
+}
+:root[data-accent="sky"] {
+  --brand: #89dceb;
+}
+:root[data-accent="sapphire"] {
+  --brand: #74c7ec;
+}
+:root[data-accent="blue"] {
+  --brand: #89b4fa;
+}
+:root[data-accent="lavender"] {
+  --brand: #b4befe;
+}

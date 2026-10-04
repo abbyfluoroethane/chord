@@ -69,6 +69,12 @@ import space.foid.chord.ui.theme.ChordRadius
 import space.foid.chord.ui.theme.ChordSize
 import space.foid.chord.ui.theme.ChordSpace
 import space.foid.chord.ui.theme.ChordType
+import space.foid.chord.ui.theme.LocalAppearance
+import space.foid.chord.ui.emoji.EmojiLabel
+import space.foid.chord.ui.emoji.EmojiText
+import space.foid.chord.ui.text.withoutLinkUnderline
+import space.foid.chord.ui.timeline.clockLabel
+import space.foid.chord.ui.timeline.stampLabel
 import space.foid.chord.ui.timeline.MessageUi
 import space.foid.chord.ui.timeline.ReactionUi
 import space.foid.chord.ui.timeline.ReplyUi
@@ -134,7 +140,7 @@ fun MessageRow(
         Row {
             Box(Modifier.width(gutter), contentAlignment = if (grouped) Alignment.TopEnd else Alignment.TopStart) {
                 if (grouped) {
-                    if (pressed) Text(message.timeLabel, style = ChordType.caption, color = colors.inkMuted, maxLines = 1)
+                    if (pressed) Text(if (LocalAppearance.current.is24h) message.timeLabel else clockLabel(message.timestamp, is24 = false), style = ChordType.caption, color = colors.inkMuted, maxLines = 1)
                 } else {
                     Box(if (onProfileClick != null) Modifier.clickable(role = Role.Button, onClick = onProfileClick).testTag("message_avatar") else Modifier) { avatar() }
                 }
@@ -166,7 +172,7 @@ fun MessageRow(
                             )
                         }
                         Text(
-                            message.stamp.ifEmpty { message.timeLabel },
+                            shownStamp(message),
                             style = ChordType.caption,
                             color = colors.inkMuted,
                             maxLines = 1,
@@ -215,6 +221,14 @@ fun MessageRow(
  * [LocalUriHandler]. A tap on an xmpp: link calls [onXmppLink]. The text has no pointer input of
  * its own beyond the link taps, so a long press reaches the row.
  */
+/** The time next to the name. The 12 hour clock redoes the text, the 24 hour one keeps the mapped one. */
+@Composable
+private fun shownStamp(message: MessageUi): String {
+    val is24 = LocalAppearance.current.is24h
+    if (is24 || message.timestamp <= 0L) return message.stamp.ifEmpty { message.timeLabel }
+    return stampLabel(message.timestamp, System.currentTimeMillis(), is24 = false)
+}
+
 @Composable
 private fun MessageText(message: MessageUi, onXmppLink: (String) -> Unit, onLongPress: () -> Unit) {
     val colors = Chord.colors
@@ -241,7 +255,7 @@ private fun MessageText(message: MessageUi, onXmppLink: (String) -> Unit, onLong
         }
     } else null
     val base = when {
-        formatted.jumbo -> ChordType.body.copy(fontSize = 40.sp, lineHeight = 48.sp)
+        formatted.jumbo && LocalAppearance.current.jumboEmoji -> ChordType.body.copy(fontSize = 40.sp, lineHeight = 48.sp)
         formatted.action -> ChordType.body.copy(fontStyle = FontStyle.Italic)
         else -> ChordType.body
     }
@@ -256,6 +270,7 @@ private fun MessageText(message: MessageUi, onXmppLink: (String) -> Unit, onLong
 @Composable
 private fun TextBlocks(blocks: List<TextBlock>, base: TextStyle, color: Color, suffix: AnnotatedString?) {
     val colors = Chord.colors
+    val underlineLinks = LocalAppearance.current.underlineLinks
     blocks.forEachIndexed { i, block ->
         val last = i == blocks.lastIndex
         when (block) {
@@ -263,7 +278,8 @@ private fun TextBlocks(blocks: List<TextBlock>, base: TextStyle, color: Color, s
                 val text = if (last && suffix != null) {
                     remember(block, suffix) { buildAnnotatedString { append(block.text); append(suffix) } }
                 } else block.text
-                Text(text, style = base, color = color)
+                val shown = if (underlineLinks) text else remember(text) { text.withoutLinkUnderline() }
+                EmojiText(shown, base, color)
             }
             is TextBlock.Quote -> Row(Modifier.padding(vertical = 2.dp).height(IntrinsicSize.Min)) {
                 Box(Modifier.width(4.dp).fillMaxHeight().background(colors.line, RoundedCornerShape(2.dp)))
@@ -360,7 +376,7 @@ private fun ReactionChip(reaction: ReactionUi, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(reaction.emoji, style = ChordType.bodySmall)
+        EmojiLabel(reaction.emoji, ChordType.bodySmall, colors.ink)
         Text(
             reaction.count.toString(),
             style = ChordType.label.copy(fontSize = ChordType.bodySmall.fontSize),
