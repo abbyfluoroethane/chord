@@ -71,7 +71,12 @@ class FakeSpaceApi : SpaceApi {
         return SpaceRef("pubsub.example.org", "new-space")
     }
 
-    override suspend fun joinRoom(room: String, nick: String) = rec("joinRoom $room nick=$nick")
+    var failJoin = false
+
+    override suspend fun joinRoom(room: String, nick: String) {
+        if (failJoin) throw uniffi.chord_ffi.ChordException.Server("forbidden")
+        rec("joinRoom $room nick=$nick")
+    }
     override suspend fun addRoomToSpace(service: String, node: String, room: String, name: String) = rec("addRoom $node $room $name")
     override suspend fun removeRoomFromSpace(service: String, node: String, room: String) = rec("removeRoom $node $room")
     override suspend fun changeNick(room: String, nick: String) {

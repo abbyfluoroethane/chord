@@ -330,6 +330,27 @@ class SpaceViewModel(
         }
     }
 
+    /**
+     * Join a room that the list shows but that we are not in yet (a room of a space is listed
+     * before we join), as the desktop does when it opens one. A message to a room that is not
+     * joined cannot be sent. It does nothing for a room that is joined and for chats. A failure
+     * goes to the snackbar as [SpaceEvent.Message].
+     */
+    fun joinIfNeeded(channel: ChannelItem) {
+        if (channel.joined || channel.kind !is ChannelKind.Room) return
+        scope.launch {
+            try {
+                val a = requireApi()
+                a.joinRoom(channel.jid, spaceNick(null, a.account()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logWarn("SpaceViewModel", "join ${channel.jid} failed", e)
+                _events.tryEmit(SpaceEvent.Message("Could not join the channel. ${describeSpaceError(e)}"))
+            }
+        }
+    }
+
     // ---- Nickname ----
 
     /** Use [nick] in every room of the space that we joined. */
