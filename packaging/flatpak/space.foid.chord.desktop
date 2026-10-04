@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Chord
+GenericName=Chat
+Comment=Chat with spaces, channels and DMs on XMPP
+Icon=space.foid.chord
+Exec=chord-desktop %u
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=XMPP;Jabber;Chat;Messenger;Spaces;
+MimeType=x-scheme-handler/xmpp;
+StartupNotify=true
+SingleMainWindow=true

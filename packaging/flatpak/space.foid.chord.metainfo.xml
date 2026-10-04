@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>space.foid.chord</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Chord</name>
+  <summary>Chat with spaces, channels and DMs on XMPP</summary>
+  <developer id="com.bigaouette">
+    <name>Abby Bigaouette</name>
+  </developer>
+
+  <description>
+    <p>
+      Chord is a chat app for XMPP. Join spaces, talk in their channels, and send direct
+      messages. Your account works with any XMPP server, and no company owns the network.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Spaces with channels, and direct messages</li>
+      <li>Replies, reactions, file and image sharing, link previews</li>
+      <li>Desktop notifications, with quiet hours and per-chat mute</li>
+      <li>Opens xmpp: links</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">space.foid.chord.desktop</launchable>
+  <provides>
+    <binary>chord-desktop</binary>
+  </provides>
+
+  <url type="homepage">https://bigaouette.com/chord-site/</url>
+  <url type="vcs-browser">https://github.com/abbyfluoroethane/chord</url>
+  <url type="bugtracker">https://github.com/abbyfluoroethane/chord/issues</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#C47B0C</color>
+    <color type="primary" scheme_preference="dark">#111316</color>
+  </branding>
+
+  <!--
+    TODO: screenshots. Flathub requires at least one. Put the PNG files in the repository
+    (for example docs/screenshots/) and point to a fixed commit or tag, never to a branch:
+    https://raw.githubusercontent.com/abbyfluoroethane/chord/desktop-v<version>/docs/screenshots/<name>.png
+  -->
+
+  <content_rating type="oars-1.1">
+    <!-- Users talk to other people: text, images and files that the app does not filter. -->
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">mild</content_attribute>
+    <content_attribute id="social-audio">none</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+  </content_rating>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">940</display_length>
+  </requires>
+
+  <releases>
+    <!-- A release adds an entry at the top. The version is the version of desktop-v<version>. -->
+    <release version="0.1.0" date="2026-10-04">
+      <description>
+        <p>First Flatpak build.</p>
+      </description>
+    </release>
+  </releases>
+</component>

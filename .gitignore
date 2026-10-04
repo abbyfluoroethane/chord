@@ -15,3 +15,9 @@ keystore.properties
 
 # dev/releases.py
 __pycache__/
+
+# Flatpak builds (packaging/flatpak)
+.flatpak-builder/
+flatpak-build/
+flatpak-repo/
+.flatpak-work/

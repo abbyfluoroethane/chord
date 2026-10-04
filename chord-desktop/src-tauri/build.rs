@@ -56,10 +56,18 @@ fn version() {
             Some(format!("{}+dev", tag.strip_prefix("desktop-v")?))
         })
         .unwrap_or_else(|| "0.0.0+dev".to_owned());
-    let commit = git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
+    // A build without .git (the Flatpak build) gets the commit and the commit time (seconds
+    // since 1970) from CHORD_COMMIT and CHORD_COMMIT_TIME. See packaging/flatpak/space.foid.chord.yml.
+    println!("cargo:rerun-if-env-changed=CHORD_COMMIT");
+    println!("cargo:rerun-if-env-changed=CHORD_COMMIT_TIME");
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let commit = env("CHORD_COMMIT")
+        .or_else(|| git(&["rev-parse", "--short", "HEAD"]))
+        .unwrap_or_else(|| "unknown".to_owned());
     let channel = channel_of(&version);
-    let time = git(&["show", "-s", "--format=%ct", "HEAD"])
-        .and_then(|t| t.parse().ok())
+    let time = env("CHORD_COMMIT_TIME")
+        .or_else(|| git(&["show", "-s", "--format=%ct", "HEAD"]))
+        .and_then(|t| t.trim().parse().ok())
         .unwrap_or(0);
     println!("cargo:rustc-env=CHORD_VERSION={version}");
     println!("cargo:rustc-env=CHORD_COMMIT={commit}");
