@@ -65,15 +65,12 @@ fun ImageViewer(url: String, outgoing: Boolean, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val saved = stringResource(R.string.viewer_saved)
     val saveFailed = stringResource(R.string.viewer_save_failed)
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
-    ) {
+    space.foid.chord.ui.components.MotionDialog(onDismiss, space.foid.chord.ui.components.DialogMotion.Fade) { close ->
         ImageViewerContent(
             state = rememberImageState(url),
             title = fileNameOfUrl(url),
             canSave = ImageSaver.canSave,
-            onClose = onDismiss,
+            onClose = close,
             onShare = { ImageSaver.share(context, url) },
             onSave = {
                 scope.launch {

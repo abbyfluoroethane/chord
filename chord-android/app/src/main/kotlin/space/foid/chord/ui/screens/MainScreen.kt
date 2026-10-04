@@ -1,6 +1,12 @@
 package space.foid.chord.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import space.foid.chord.ui.theme.ChordEase
+import space.foid.chord.ui.theme.ChordMotion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -251,7 +257,16 @@ fun MainScreen(
                     }
                 }
             }
-            if (homePage != "") {
+            // The page slides in from the right and out to the right. It stays composed during the
+            // exit, so [shownPage] keeps the last page.
+            val lastPage = remember { arrayOf("") }
+            if (homePage != "") lastPage[0] = homePage
+            val shownPage = lastPage[0]
+            AnimatedVisibility(
+                visible = homePage != "",
+                enter = slideInHorizontally(tween(ChordMotion.SLOW, easing = ChordEase)) { it },
+                exit = slideOutHorizontally(tween(ChordMotion.SLOW, easing = ChordEase)) { it },
+            ) {
                 // Start a direct chat with an address from the Home pages.
                 val openDirect: (String, String) -> Unit = { jid, name ->
                     selectedJid = jid
@@ -261,7 +276,7 @@ fun MainScreen(
                     homePage = ""
                     scope.launch { drawer.close() }
                 }
-                if (homePage == "find") {
+                if (shownPage == "find") {
                     space.foid.chord.ui.home.FindChatScreen(
                         scope = channelScope, joinVm = joinVm, contactsVm = contactsVm,
                         onOpenChannel = { ch ->
