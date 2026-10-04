@@ -78,35 +78,35 @@
       {#if prefs.display === 'compact'}
         <span class="time meta">{clock(SAMPLE_TIME)}</span>
       {:else}
-        <Avatar name="Rin" size={40} cut="var(--surface-200)" />
+        <Avatar name="Priya Raman" size={40} cut="var(--surface-200)" />
       {/if}
     </span>
     <div>
       <div class="head">
-        <b>Rin</b>
+        <b>Priya Raman</b>
         {#if prefs.display !== 'compact'}<span class="time meta">today {clock(SAMPLE_TIME)}</span>{/if}
       </div>
-      <span class="text">Static fire moved to 14:00 tomorrow. Bring the checklist.</span>
+      <span class="text">Build 0.14.2 is up on the playtest branch.</span>
     </div>
   </div>
   <div class="msg">
     <span class="gutter"></span>
-    <span class="text">Notes are on <a href="#preview" onclick={(e) => e.preventDefault()}>chord.example/notes</a></span>
+    <span class="text">Notes are on <a href="#preview" onclick={(e) => e.preventDefault()}>lanternworks.example/notes</a></span>
   </div>
   <div class="msg gap">
     <span class="gutter">
       {#if prefs.display === 'compact'}
         <span class="time meta">{clock(SAMPLE_TIME + 60_000)}</span>
       {:else}
-        <Avatar name="Mika" size={40} cut="var(--surface-200)" />
+        <Avatar name="Kenji Ito" size={40} cut="var(--surface-200)" />
       {/if}
     </span>
     <div>
       <div class="head">
-        <b>Mika</b>
+        <b>Kenji Ito</b>
         {#if prefs.display !== 'compact'}<span class="time meta">today {clock(SAMPLE_TIME + 60_000)}</span>{/if}
       </div>
-      <span class="text" class:jumbo={prefs.jumboEmoji}><Emoji emoji="🚀" /><Emoji emoji="🎉" /></span>
+      <span class="text" class:jumbo={prefs.jumboEmoji}><Emoji emoji="👍" /><Emoji emoji="🎉" /></span>
     </div>
   </div>
 </div>

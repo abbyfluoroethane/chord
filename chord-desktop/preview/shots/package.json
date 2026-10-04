@@ -1,0 +1,12 @@
+{
+  "name": "chord-desktop-shots",
+  "private": true,
+  "type": "module",
+  "description": "Marketing screenshots of the desktop preview.",
+  "scripts": {
+    "shots": "node capture.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

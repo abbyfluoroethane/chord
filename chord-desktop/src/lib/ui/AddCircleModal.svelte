@@ -75,7 +75,7 @@
       <p class="hint">Anyone can make a space. It lives on your server and you own it.</p>
       <div class="field">
         <label for="space-name">Space name</label>
-        <input id="space-name" class="input" bind:value={name} placeholder="Launch Ops" autocomplete="off" />
+        <input id="space-name" class="input" bind:value={name} placeholder="Lantern Works" autocomplete="off" />
       </div>
       {#if live}
         <div class="field">
