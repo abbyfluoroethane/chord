@@ -8,6 +8,7 @@ chord-desktop/node_modules/
 chord-desktop/build/
 chord-desktop/.svelte-kit/
 chord-desktop/build-preview/
+chord-desktop/preview/shots/node_modules
 chord-android/keystore.properties
 keystore.properties
 *.jks

@@ -211,7 +211,8 @@
         </div>
       {/if}
       {#if item.attachment}
-        <AttachmentView file={item.attachment} embed={showMedia} />
+        <!-- The wrapper takes the full row in compact mode. The photo inside keeps its own size. -->
+        <div class="attachment"><AttachmentView file={item.attachment} embed={showMedia} /></div>
       {/if}
       {#if cards.length}
         <div class="previews">

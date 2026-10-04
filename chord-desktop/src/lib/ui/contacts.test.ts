@@ -9,8 +9,8 @@ describe('contacts store', () => {
   });
 
   it('rejects an address that is already a contact', () => {
-    const r = c.add('rin@foid.space');
-    expect(r).toEqual({ ok: false, error: 'rin@foid.space is already a contact.' });
+    const r = c.add('priya@chat.foid.space');
+    expect(r).toEqual({ ok: false, error: 'priya@chat.foid.space is already a contact.' });
   });
 
   it('sends a request and then refuses a second one', () => {
@@ -21,9 +21,9 @@ describe('contacts store', () => {
 
   it('moves an incoming request to contacts on accept', () => {
     const before = c.contacts.length;
-    c.accept('noor@chord.example');
+    c.accept('mika@xmpp.example.net');
     expect(c.contacts.length).toBe(before + 1);
-    expect(c.incoming.some((x) => x.address === 'noor@chord.example')).toBe(false);
+    expect(c.incoming.some((x) => x.address === 'mika@xmpp.example.net')).toBe(false);
   });
 
   it('blocks and unblocks', () => {

@@ -21,7 +21,7 @@ export function sampleRoomForm(): DataForm {
     instructions: 'Change the options of this room, then save.',
     fields: [
       f({ var: 'FORM_TYPE', kind: 'hidden', values: ['http://jabber.org/protocol/muc#roomconfig'] }),
-      f({ var: 'muc#roomconfig_roomname', label: 'Room title', values: ['Town hall'] }),
+      f({ var: 'muc#roomconfig_roomname', label: 'Room title', values: ['playtest'] }),
       f({ var: 'muc#roomconfig_roomdesc', label: 'Room description', kind: 'text-multi' }),
       f({ var: 'muc#roomconfig_publicroom', kind: 'boolean', label: 'Show in the room list', values: ['1'] }),
       f({ var: 'muc#roomconfig_membersonly', kind: 'boolean', label: 'Only members can join', values: ['0'] }),
@@ -62,8 +62,8 @@ export function sampleRoomForm(): DataForm {
 }
 
 export const sampleCommands: CommandItem[] = [
-  { jid: 'foid.space', node: 'http://jabber.org/protocol/admin#add-user', name: 'Add a user' },
-  { jid: 'foid.space', node: 'ping', name: 'Ping' }
+  { jid: 'chat.foid.space', node: 'http://jabber.org/protocol/admin#add-user', name: 'Add a user' },
+  { jid: 'chat.foid.space', node: 'ping', name: 'Ping' }
 ];
 
 /** The first step of a command with two steps, and the last one. */
@@ -110,13 +110,12 @@ export const sampleRegistration: RegistrationForm = {
 export function sampleAffiliations(affiliation: string): [string, string | null][] {
   if (affiliation === 'outcast') {
     return [
-      ['spam@bad.example', 'Spambot'],
-      ['troll@other.example', null]
+      ['promo@spam.example', null]
     ];
   }
   return [
-    ['rin@foid.space', 'Rin'],
-    ['bay@foid.space', 'Bay'],
-    ['kit@foid.space', null]
+    ['priya@chat.foid.space', 'Priya Raman'],
+    ['theo@chat.foid.space', 'Theo Lindqvist'],
+    ['kenji@chat.foid.space', null]
   ];
 }
