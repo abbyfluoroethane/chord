@@ -82,9 +82,14 @@ object ChordNotifications {
         )
     }
 
+    /** The brand amber for the small icon and the app name in the shade (the light or dark shade of it). */
+    private fun accent(context: Context): Int =
+        androidx.core.content.ContextCompat.getColor(context, R.color.notification_accent)
+
     fun serviceNotification(context: Context, text: String): Notification =
         NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setSmallIcon(R.drawable.ic_notification)
+            .setColor(accent(context))
             .setContentTitle("Chord")
             .setContentText(text)
             .setOngoing(true)
@@ -130,6 +135,7 @@ object ChordNotifications {
         )
         val notification = NotificationCompat.Builder(app, channelFor(n.room, n.mention))
             .setSmallIcon(R.drawable.ic_notification)
+            .setColor(accent(app))
             .setStyle(style)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setGroup(GROUP)
@@ -143,6 +149,7 @@ object ChordNotifications {
         notifySafely(nmc, n.peer.hashCode(), notification)
         val summary = NotificationCompat.Builder(app, channelFor(n.room, n.mention))
             .setSmallIcon(R.drawable.ic_notification)
+            .setColor(accent(app))
             .setGroup(GROUP)
             .setGroupSummary(true)
             .setAutoCancel(true)
