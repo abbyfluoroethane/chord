@@ -1,7 +1,7 @@
 // Sample data for the UI shell. The bridge replaces all of this later.
 // The story (people, spaces, messages) is in docs/brand/showcase/README.md. The Android
 // showcase uses the same story, so keep the two in step. The art in ./showcase is a copy of
-// the PNGs in docs/brand/showcase.
+// the art in docs/brand/showcase.
 import type { LinkPreview } from '$lib/chord/types';
 import type {
   ChannelItem,
@@ -16,21 +16,19 @@ import type {
 import { spaceKey } from '$lib/ui/types';
 import rangeClip from './range-walkthrough.mp4';
 import adaPng from './showcase/ada.png';
-import julesPng from './showcase/jules.png';
 import kenjiPng from './showcase/kenji.png';
 import luisPng from './showcase/luis.png';
 import mayaPng from './showcase/maya.png';
 import noorPng from './showcase/noor.png';
 import priyaPng from './showcase/priya.png';
 import theoPng from './showcase/theo.png';
-import lanternPng from './showcase/lantern-works.png';
+import basementPng from './showcase/basement.png';
+import nightOwlsPng from './showcase/night-owls.png';
 import darkroomPng from './showcase/darkroom.png';
 import cragPng from './showcase/crag.png';
-import readersPng from './showcase/slow-readers.png';
-import lighthousePng from './showcase/lighthouse-fog.png';
 import harborPng from './showcase/harbor-sunset.png';
 import hillsPng from './showcase/hills.png';
-import patchNotesPng from './showcase/patch-notes.png';
+import wannacryJpg from './showcase/wannacry.jpg';
 
 const SVC = 'chat.foid.space';
 
@@ -54,45 +52,44 @@ const person = (
   status: string | null = null
 ): Person => ({ address, name, avatar, show, online, status });
 
-/** Everyone in the story, keyed by first name in lower case. */
+/** Everyone in the story, keyed by nickname. The art file names come from an older cast. */
 const P: Record<string, Person> = {
-  maya: person('maya@chat.foid.space', 'Maya Okafor', mayaPng, 'chat', true, 'Playtest week'),
-  priya: person('priya@chat.foid.space', 'Priya Raman', priyaPng, 'chat', true),
-  theo: person('theo@chat.foid.space', 'Theo Lindqvist', theoPng, 'chat', true, 'Profiling saves'),
-  jules: person('jules@chat.foid.space', 'Jules Moreau', julesPng, 'away', true),
-  kenji: person('kenji@chat.foid.space', 'Kenji Ito', kenjiPng, 'chat', true),
-  ada: person('ada@chat.foid.space', 'Ada Novak', adaPng, 'dnd', true, 'Writing'),
-  noor: person('noor@xmpp.example.net', 'Noor Haddad', noorPng, 'chat', true),
-  luis: person('luis@chat.foid.space', 'Luis Ortega', luisPng, null, false),
-  sam: person('sam@chat.foid.space', 'Sam Delgado', null, 'away', true),
-  wren: person('wren@chat.foid.space', 'Wren Callahan', null, null, false),
+  nina: person('nina@chat.foid.space', 'nina', mayaPng, 'chat', true),
+  marco: person('marco@chat.foid.space', 'marco', theoPng, 'chat', true),
+  jess: person('jess@chat.foid.space', 'jess', priyaPng, 'chat', true),
+  theo: person('theo@chat.foid.space', 'theo', luisPng, 'away', true, 'at work'),
+  sam: person('sam@chat.foid.space', 'sam', null, 'chat', true),
+  kai: person('kai@xmpp.example.net', 'kai', noorPng, 'chat', true),
+  lena: person('lena@chat.foid.space', 'lena', adaPng, 'dnd', true),
+  rory: person('rory@chat.foid.space', 'rory', kenjiPng, null, false),
+  ben: person('ben@chat.foid.space', 'ben', null, null, false),
   // Not a contact: she sent a contact request. The Sandbox uses her for a stranger's message.
-  mika: person('mika@xmpp.example.net', 'Mika Sato', null, null, false)
+  mika: person('mika@xmpp.example.net', 'mika', null, null, false)
 };
 
 export const me: Me = {
-  address: P.maya.address,
-  name: P.maya.name,
-  avatar: P.maya.avatar,
-  show: P.maya.show,
-  status: P.maya.status
+  address: P.nina.address,
+  name: P.nina.name,
+  avatar: P.nina.avatar,
+  show: P.nina.show,
+  status: P.nina.status
 };
 
 // --- spaces and channels ---------------------------------------------
 
 export const spaces: SpaceItem[] = [
-  { service: SVC, node: 'lantern-works', name: 'Lantern Works', avatar: lanternPng },
-  { service: SVC, node: 'darkroom', name: 'Darkroom', avatar: darkroomPng },
-  { service: SVC, node: 'crag-club', name: 'Crag Club', avatar: cragPng },
-  { service: SVC, node: 'slow-readers', name: 'Slow Readers', avatar: readersPng },
+  { service: SVC, node: 'basement', name: 'basement', avatar: basementPng },
+  { service: SVC, node: 'night-owls', name: 'night owls', avatar: nightOwlsPng },
+  { service: SVC, node: 'film-club', name: 'film club', avatar: darkroomPng },
+  { service: SVC, node: 'climbing', name: 'climbing', avatar: cragPng },
   { service: SVC, node: 'sandbox', name: 'Sandbox', avatar: null }
 ];
 
 const K = {
-  lantern: spaceKey(spaces[0]),
-  darkroom: spaceKey(spaces[1]),
-  crag: spaceKey(spaces[2]),
-  readers: spaceKey(spaces[3]),
+  basement: spaceKey(spaces[0]),
+  owls: spaceKey(spaces[1]),
+  film: spaceKey(spaces[2]),
+  climbing: spaceKey(spaces[3]),
   sandbox: spaceKey(spaces[4])
 };
 
@@ -140,15 +137,14 @@ function dm(p: Person, extra: Partial<ChannelItem> = {}): ChannelItem {
   };
 }
 
-const LANTERN_CORE = 'lantern-core@conference.chat.foid.space';
+const SUNDAY_DINNER = 'sunday-dinner@conference.chat.foid.space';
 
 export const channels: ChannelItem[] = [
-  dm(P.theo, { unread: 1 }),
-  dm(P.priya),
+  dm(P.jess, { unread: 1 }),
   // A room outside any space: a group chat among the DMs.
   {
-    jid: LANTERN_CORE,
-    name: 'Lantern core',
+    jid: SUNDAY_DINNER,
+    name: 'sunday dinner',
     kind: 'channel',
     unread: 2,
     joined: true,
@@ -161,35 +157,23 @@ export const channels: ChannelItem[] = [
     online: false,
     members: 4
   },
-  dm(P.noor),
-  dm(P.ada),
-  dm(P.jules),
+  dm(P.marco),
+  dm(P.kai),
+  dm(P.lena),
 
-  ch(K.lantern, 'announcements', 'announcements', { unread: 1, topic: 'Builds and dates. Read only.' }),
-  ch(K.lantern, 'general', 'general', { unread: 4 }),
-  ch(K.lantern, 'playtest', 'playtest', {
-    unread: 3,
-    topic: 'Build 0.14.2 is live. Bugs go in #bugs.',
-    category: 'Playtest'
-  }),
-  ch(K.lantern, 'bugs', 'bugs', { unread: 3, category: 'Playtest' }),
-  ch(K.lantern, 'ideas', 'ideas', { category: 'Playtest' }),
-  ch(K.lantern, 'art', 'art', { unread: 1, category: 'Studio' }),
-  ch(K.lantern, 'audio', 'audio', { category: 'Studio' }),
-  ch(K.lantern, 'off-topic', 'off-topic', { muted: true, unread: 12, category: 'Studio' }),
+  ch(K.basement, 'general', 'general', { unread: 5 }),
+  ch(K.basement, 'music', 'music', { unread: 2, topic: 'post songs' }),
+  ch(K.basement, 'pics', 'pics', { unread: 4 }),
+  ch(K.basement, 'games', 'games'),
+  ch(K.basement, 'memes', 'memes', { muted: true, unread: 23 }),
 
-  ch(K.darkroom, 'general', 'general'),
-  ch(K.darkroom, 'show-and-tell', 'show-and-tell', { unread: 2 }),
-  ch(K.darkroom, 'developing', 'developing'),
-  ch(K.darkroom, 'gear-swap', 'gear-swap'),
+  ch(K.owls, 'lfg', 'lfg', { unread: 4 }),
+  ch(K.owls, 'clips', 'clips'),
 
-  ch(K.crag, 'general', 'general'),
-  ch(K.crag, 'sessions', 'sessions', { unread: 1, topic: 'Tue and Thu, 18:30' }),
+  ch(K.film, 'show-and-tell', 'show-and-tell', { unread: 3 }),
+  ch(K.film, 'general', 'general'),
 
-  ch(K.readers, 'general', 'general'),
-  ch(K.readers, 'this-month', 'this-month', {
-    topic: 'The Left Hand of Darkness, ch. 1 to 8'
-  }),
+  ch(K.climbing, 'sessions', 'sessions', { unread: 4, topic: 'tue / thu / sat' }),
 
   ch(K.sandbox, 'general', 'general', {
     topic: 'Test messages for the preview: every kind of message in one place'
@@ -245,45 +229,34 @@ function mem(p: Person, affiliation: MemberItem['affiliation']): MemberItem {
 }
 
 export const members: Record<string, MemberItem[]> = {
-  [K.lantern]: [
-    mem(P.priya, 'owner'),
-    mem(P.maya, 'admin'),
-    mem(P.theo, 'admin'),
-    mem(P.kenji, 'member'),
-    mem(P.ada, 'member'),
-    mem(P.jules, 'member'),
+  [K.basement]: [
+    mem(P.theo, 'owner'),
+    mem(P.nina, 'admin'),
+    mem(P.marco, 'member'),
+    mem(P.jess, 'member'),
     mem(P.sam, 'member'),
-    mem(P.noor, 'member'),
-    mem(P.luis, 'member'),
-    mem(P.wren, 'member')
+    mem(P.kai, 'member'),
+    mem(P.lena, 'member'),
+    mem(P.rory, 'member'),
+    mem(P.ben, 'member')
   ],
-  [K.darkroom]: [
-    mem(P.noor, 'owner'),
-    mem(P.maya, 'member'),
-    mem(P.jules, 'member'),
-    mem(P.wren, 'member'),
-    mem(P.luis, 'member')
+  [K.owls]: [
+    mem(P.marco, 'owner'),
+    mem(P.nina, 'member'),
+    mem(P.rory, 'member'),
+    mem(P.lena, 'member'),
+    mem(P.ben, 'member')
   ],
-  [K.crag]: [
-    mem(P.sam, 'owner'),
-    mem(P.theo, 'admin'),
-    mem(P.maya, 'member'),
-    mem(P.wren, 'member')
-  ],
-  [K.readers]: [
-    mem(P.ada, 'owner'),
-    mem(P.priya, 'member'),
-    mem(P.maya, 'member'),
-    mem(P.jules, 'member')
-  ],
+  [K.film]: [mem(P.lena, 'owner'), mem(P.nina, 'member'), mem(P.kai, 'member'), mem(P.theo, 'member')],
+  [K.climbing]: [mem(P.sam, 'owner'), mem(P.nina, 'member'), mem(P.jess, 'member')],
   [K.sandbox]: [
-    mem(P.maya, 'owner'),
+    mem(P.nina, 'owner'),
     mem(P.theo, 'admin'),
-    mem(P.kenji, 'member'),
-    mem(P.priya, 'member')
+    mem(P.marco, 'member'),
+    mem(P.jess, 'member')
   ],
   // The group chat on the home list keeps its members under the home key.
-  home: [mem(P.maya, 'member'), mem(P.priya, 'member'), mem(P.theo, 'member'), mem(P.kenji, 'member')]
+  home: [mem(P.nina, 'member'), mem(P.marco, 'member'), mem(P.theo, 'member'), mem(P.jess, 'member')]
 };
 
 // --- timelines -------------------------------------------------------
@@ -363,137 +336,79 @@ function tone(seconds: number, hz: number): string {
   return `data:audio/wav;base64,${btoa(bin)}`;
 }
 
-const NOTES_URL = 'https://lanternworks.example/notes/0-14';
+const SONG_URL = 'https://www.youtube.com/watch?v=Ob_EDY9Eiis';
 
 // The hero conversation. The screenshots show it.
-const playtest = build([
+const music = build([
+  { id: 'm1', who: 'nina', ts: at(0, 21, 4), body: 'new ninajirachi is out' },
   {
-    id: 'p1',
-    who: 'priya',
-    ts: at(0, 9, 12),
-    body: 'Build 0.14.2 is up on the playtest branch. New save system, controller remapping, and the lighthouse level is finally in.'
+    id: 'm2',
+    who: 'nina',
+    ts: at(0, 21, 4),
+    body: SONG_URL,
+    reactions: [{ emoji: '🔥', count: 4, mine: true }]
   },
-  { id: 'p2', who: 'priya', ts: at(0, 9, 12), body: 'Please break it 🙏' },
-  { id: 'p3', who: 'theo', ts: at(0, 9, 20), body: 'downloading' },
+  { id: 'm3', who: 'marco', ts: at(0, 21, 5), body: 'WITH PORTER??' },
+  { id: 'm4', who: 'nina', ts: at(0, 21, 5), body: 'with porter' },
+  { id: 'm5', who: 'jess', ts: at(0, 21, 7), body: 'ok this goes so hard' },
+  { id: 'm6', who: 'marco', ts: at(0, 21, 9), body: 'the drop is insane' },
   {
-    id: 'p4',
-    who: 'jules',
-    ts: at(0, 9, 47),
-    body: 'Played the lighthouse twice. The fog at the top looks great, but I lost the rope prompt both times. It spawns behind the camera.',
-    attachment: png(lighthousePng, 'lighthouse-fog.png', 1_184_000, 1280, 720)
+    id: 'm7',
+    who: 'jess',
+    ts: at(0, 21, 10),
+    body: 'is this the one from coachella',
+    replyTo: { id: 'm6', senderName: P.marco.name, body: 'the drop is insane' }
   },
+  { id: 'm8', who: 'nina', ts: at(0, 21, 10), body: 'yeah he came out for it in april' },
+  { id: 'm9', who: 'theo', ts: at(0, 21, 14), body: 'adding it to the car playlist' },
+  { id: 'm10', who: 'kai', ts: at(0, 21, 15), body: 'is she touring this year' }
+]);
+
+const general = build([
+  { id: 'g1', who: 'theo', ts: at(0, 18, 2), body: 'who left a hoodie at mine' },
+  { id: 'g2', who: 'jess', ts: at(0, 18, 10), body: 'grey one?' },
+  { id: 'g3', who: 'theo', ts: at(0, 18, 11), body: 'yeah' },
+  { id: 'g4', who: 'jess', ts: at(0, 18, 12), body: "thats sam's" },
+  { id: 'g5', who: 'sam', ts: at(0, 18, 40), body: 'i was wondering where that went' }
+]);
+
+const pics = build([
   {
-    id: 'p5',
-    who: 'priya',
-    ts: at(0, 9, 51),
-    body: "Good catch. The prompt is placed in world space, I'll pin it to the screen edge when it's off camera.",
-    replyTo: {
-      id: 'p4',
-      senderName: P.jules.name,
-      body: 'Played the lighthouse twice. The fog at the top looks great, but I lost the rope prompt both times. It spawns behind the camera.'
-    }
-  },
-  {
-    id: 'p6',
-    who: 'kenji',
-    ts: at(0, 9, 53),
-    body:
-      'something like this?\n```gdscript\nif not camera.is_position_in_frustum(prompt.global_position):\n    prompt.pin_to_edge(camera)\n```'
-  },
-  {
-    id: 'p7',
-    who: 'priya',
-    ts: at(0, 9, 54),
-    body: 'yes, almost exactly. Want to open a PR?',
-    reactions: [{ emoji: '👍', count: 3, mine: true }]
-  },
-  { id: 'p8', who: 'kenji', ts: at(0, 9, 54), body: 'on it' },
-  {
-    id: 'p9',
-    who: 'maya',
-    ts: at(0, 10, 2),
-    body: "@Theo can you check that old saves still load? I don't want to ship 0.14 if anyone loses progress."
-  },
-  {
-    id: 'p10',
+    id: 'i1',
     who: 'theo',
-    ts: at(0, 10, 5),
-    body: "On it. Three saves from 0.13 so far, all load fine. The cloud one takes about 4 s, I'll profile it."
+    ts: at(0, 19, 31),
+    body: 'sunset from the ferry',
+    attachment: png(harborPng, 'harbor-sunset.png', 968_000, 800, 1000)
   },
-  { id: 'p11', who: 'ada', ts: at(0, 10, 31), body: `Draft of the patch notes: ${NOTES_URL}` },
-  {
-    id: 'p12',
-    who: 'sam',
-    ts: at(0, 10, 40),
-    body: "Read it. I'd lead with remapping, that's what people asked for most in the survey.",
-    reactions: [{ emoji: '❤️', count: 2, mine: false }]
-  },
-  { id: 'p13', who: 'ada', ts: at(0, 10, 42), body: 'fair, swapping them' }
+  { id: 'i2', who: 'nina', ts: at(0, 19, 40), body: 'wait where is this' },
+  { id: 'i3', who: 'theo', ts: at(0, 19, 42), body: 'coming back from the island' },
+  { id: 'i4', who: 'jess', ts: at(0, 19, 50), body: 'jealous' }
 ]);
 
-const announcements = build([
-  {
-    id: 'a1',
-    who: 'priya',
-    ts: at(2, 16, 10),
-    body: '0.14.2 is out on the playtest branch. Saves from 0.13 carry over.'
-  },
-  { id: 'a2', who: 'priya', ts: at(0, 8, 30), body: 'Playtest call is Friday at 17:00 UTC.' }
-]);
-
-const bugs = build([
-  {
-    id: 'b1',
-    who: 'jules',
-    ts: at(0, 8, 14),
-    body: 'Controller remap screen: pressing B twice exits without saving.'
-  },
-  { id: 'b2', who: 'kenji', ts: at(0, 8, 40), body: "Repro'd. Fix is in 0.14.3." },
-  { id: 'b3', who: 'noor', ts: at(0, 9, 2), body: 'Same on keyboard with Esc.' }
-]);
-
-const art = build([
-  {
-    id: 'r1',
-    who: 'luis',
-    ts: at(1, 21, 15),
-    body: 'Background pass for the valley level. Too green?',
-    attachment: png(hillsPng, 'hills.png', 412_000, 1200, 800)
-  },
-  { id: 'r2', who: 'ada', ts: at(1, 21, 32), body: 'A bit. Try pulling the far hills toward blue.' },
-  { id: 'r3', who: 'luis', ts: at(1, 21, 40), body: "yeah that's better, will push tonight" }
+const lfg = build([
+  { id: 'f1', who: 'marco', ts: at(0, 20, 30), body: 'lobby in 10?' },
+  { id: 'f2', who: 'rory', ts: at(0, 20, 31), body: 'give me 15 im eating' },
+  { id: 'f3', who: 'marco', ts: at(0, 20, 31), body: 'ok 15' },
+  { id: 'f4', who: 'lena', ts: at(0, 20, 35), body: 'im in' }
 ]);
 
 const showAndTell = build([
   {
     id: 's1',
-    who: 'noor',
-    ts: at(0, 8, 5),
-    body: 'Portra 400, pushed one stop. Harbor at the end of the day.',
-    attachment: png(harborPng, 'harbor-sunset.png', 968_000, 800, 1000)
+    who: 'lena',
+    ts: at(1, 16, 20),
+    body: 'first roll from the new camera',
+    attachment: png(hillsPng, 'hills.png', 412_000, 1200, 800)
   },
-  { id: 's2', who: 'wren', ts: at(0, 8, 21), body: 'the color in the water 😮' },
-  { id: 's3', who: 'noor', ts: at(0, 8, 24), body: 'Lab scan, no edits.' },
-  { id: 's4', who: 'jules', ts: at(0, 9, 3), body: 'Which lab?' },
-  { id: 's5', who: 'noor', ts: at(0, 9, 6), body: "The one on 3rd, they're slow but careful." }
+  { id: 's2', who: 'kai', ts: at(1, 17, 2), body: 'the haze in the back 👌' },
+  { id: 's3', who: 'lena', ts: at(1, 17, 10), body: 'it was so foggy that morning' }
 ]);
 
 const sessions = build([
-  { id: 'c1', who: 'sam', ts: at(0, 7, 50), body: 'Thursday as usual?' },
-  {
-    id: 'c2',
-    who: 'theo',
-    ts: at(0, 8, 2),
-    body: "I'm in. My fingers are still recovering from Tuesday."
-  },
-  { id: 'c3', who: 'wren', ts: at(0, 8, 15), body: 'Bringing the new tape.' },
-  { id: 'c4', who: 'sam', ts: at(0, 8, 17), body: '18:30 at the wall then.' }
-]);
-
-const thisMonth = build([
-  { id: 'm1', who: 'ada', ts: at(1, 20, 4), body: 'Chapter 6 changed how I read the first five.' },
-  { id: 'm2', who: 'priya', ts: at(1, 20, 30), body: 'Same. I went back to the Ekumen report.' },
-  { id: 'm3', who: 'ada', ts: at(1, 20, 33), body: 'No spoilers past 8 please 🙂' }
+  { id: 'c1', who: 'sam', ts: at(0, 12, 15), body: 'thursday?' },
+  { id: 'c2', who: 'jess', ts: at(0, 12, 40), body: 'cant, work' },
+  { id: 'c3', who: 'sam', ts: at(0, 12, 41), body: 'saturday then' },
+  { id: 'c4', who: 'jess', ts: at(0, 12, 50), body: 'saturday works' }
 ]);
 
 // The Sandbox: one of each kind of message, for work on the preview.
@@ -502,7 +417,7 @@ const sandbox = build([
   { id: 'x1', who: 'theo', ts: at(1, 15, 2), body: 'Test: a short message.' },
   {
     id: 'x2',
-    who: 'kenji',
+    who: 'marco',
     ts: at(1, 15, 4),
     body: 'Test: a link with a preview. https://example.org/docs/save-format',
     edited: true
@@ -515,12 +430,12 @@ const sandbox = build([
   },
   {
     id: 'x4',
-    who: 'priya',
+    who: 'jess',
     ts: at(1, 15, 20),
     body: 'Test: a sound file.',
     attachment: {
       url: tone(2, 440),
-      name: 'menu-click.wav',
+      name: 'voice-note.wav',
       mime: 'audio/wav',
       size: 16_044,
       width: null,
@@ -529,7 +444,7 @@ const sandbox = build([
   },
   {
     id: 'x5',
-    who: 'kenji',
+    who: 'marco',
     ts: at(1, 15, 22),
     body: 'Test: a video.',
     attachment: {
@@ -547,8 +462,8 @@ const sandbox = build([
     ts: at(1, 15, 25),
     body: 'Test: a PDF file.',
     attachment: {
-      url: 'file:///save-format.pdf',
-      name: 'save-format-v2.pdf',
+      url: 'file:///tickets.pdf',
+      name: 'tickets.pdf',
       mime: 'application/pdf',
       size: 184_320,
       width: null,
@@ -575,29 +490,29 @@ const sandbox = build([
     id: 'x8',
     who: 'mika',
     ts: at(0, 9, 30),
-    body: 'Test: a message from someone who is not a contact. https://example.org/fan-wiki/lighthouse',
+    body: 'Test: a message from someone who is not a contact. https://example.org/wiki/test-page',
     attachment: {
       url: pic(480, 320, '#5b4bb7', '#16131f'),
-      name: 'fan-art.png',
+      name: 'photo.png',
       mime: 'image/png',
       size: 96_000,
       width: 480,
       height: 320
     }
   },
-  { id: 'x9', who: 'kenji', ts: at(0, 9, 40), body: 'This message was deleted.', retracted: true },
-  { id: 'x10', who: 'kenji', ts: at(0, 9, 41), body: '/me runs the **tests** again' },
-  { id: 'x11', who: 'maya', ts: at(0, 9, 45), body: 'Test: this message did not send.', status: 'failed' },
+  { id: 'x9', who: 'marco', ts: at(0, 9, 40), body: 'This message was deleted.', retracted: true },
+  { id: 'x10', who: 'marco', ts: at(0, 9, 41), body: '/me checks the **logs** again' },
+  { id: 'x11', who: 'nina', ts: at(0, 9, 45), body: 'Test: this message did not send.', status: 'failed' },
   {
     id: 'x12',
     who: 'theo',
     ts: at(0, 9, 50),
-    body: '@Maya test: a mention of you.',
+    body: '@nina test: a mention of you.',
     mention: true
   },
   {
     id: 'x13',
-    who: 'priya',
+    who: 'jess',
     ts: at(0, 10, 0),
     body:
       '# Heading\n' +
@@ -610,10 +525,10 @@ const sandbox = build([
   },
   {
     id: 'x14',
-    who: 'kenji',
+    who: 'marco',
     ts: at(0, 10, 5),
     body:
-      'Test: a code block.\n```python\nfor save in saves:\n    if save.version < 14:\n        migrate(save)\n        print("migrated", save.id)\n```\n' +
+      'Test: a code block.\n```python\nfor song in playlist:\n    if song.plays > 100:\n        favourites.append(song)\n        print("added", song.title)\n```\n' +
       'And a spoiler: ||the answer is 42||. A named link: [the docs](https://example.org/docs).',
     reactions: [
       { emoji: '👍', count: 2, mine: false },
@@ -622,7 +537,7 @@ const sandbox = build([
   },
   {
     id: 'x15',
-    who: 'priya',
+    who: 'jess',
     ts: at(0, 10, 10),
     body: 'Test: a link to a public space. xmpp:chat.foid.space?pubsub;action=subscribe;node=pixel-art'
   },
@@ -632,20 +547,19 @@ const sandbox = build([
     ts: at(0, 10, 12),
     body: 'Test: a link to a room. xmpp:speedrun@chat.foid.space?join'
   },
-  { id: 'x17', who: 'kenji', ts: at(0, 10, 15), body: ':tada: :fire:' }
+  { id: 'x17', who: 'marco', ts: at(0, 10, 15), body: ':tada: :fire:' }
 ]);
 
 /** Sample link previews for the browser preview, keyed by URL. There is no network. */
 export const linkPreviews: Record<string, LinkPreview> = {
-  [NOTES_URL]: {
-    url: NOTES_URL,
-    siteName: 'Lantern Works',
-    title: 'Patch notes 0.14: The Lighthouse',
-    description:
-      'Controller remapping, a new save system, and a lighthouse that took us far too long.',
-    image: patchNotesPng,
-    imageWidth: 1200,
-    imageHeight: 630
+  [SONG_URL]: {
+    url: SONG_URL,
+    siteName: 'YouTube',
+    title: 'Ninajirachi & Porter Robinson - WannaCry [Official Visualiser]',
+    description: 'Ninajirachi',
+    image: wannacryJpg,
+    imageWidth: 1280,
+    imageHeight: 720
   },
   'https://example.org/docs/save-format': {
     url: 'https://example.org/docs/save-format',
@@ -675,11 +589,11 @@ export const linkPreviews: Record<string, LinkPreview> = {
     imageWidth: null,
     imageHeight: null
   },
-  'https://example.org/fan-wiki/lighthouse': {
-    url: 'https://example.org/fan-wiki/lighthouse',
-    siteName: 'Fan Wiki',
-    title: 'The lighthouse level',
-    description: 'How to reach the top, and where the rope is.',
+  'https://example.org/wiki/test-page': {
+    url: 'https://example.org/wiki/test-page',
+    siteName: 'Example Wiki',
+    title: 'Test page',
+    description: 'A page for link preview tests.',
     image: null,
     imageWidth: null,
     imageHeight: null
@@ -690,56 +604,51 @@ export const linkPreviews: Record<string, LinkPreview> = {
 export const xmppRooms: Record<string, { name: string; subject: string | null; occupants: number | null }> = {
   'speedrun@chat.foid.space': {
     name: 'speedrun',
-    subject: 'Routes and times for the Lantern Works games',
+    subject: 'Routes and times',
     occupants: 14
   }
 };
 
 export const timelines: Record<string, TimelineItem[]> = {
-  [room(K.lantern, 'announcements')]: announcements,
-  [room(K.lantern, 'general')]: [],
-  [room(K.lantern, 'playtest')]: playtest,
-  [room(K.lantern, 'bugs')]: bugs,
-  [room(K.lantern, 'art')]: art,
-  [room(K.darkroom, 'show-and-tell')]: showAndTell,
-  [room(K.crag, 'sessions')]: sessions,
-  [room(K.readers, 'this-month')]: thisMonth,
+  [room(K.basement, 'general')]: general,
+  [room(K.basement, 'music')]: music,
+  [room(K.basement, 'pics')]: pics,
+  [room(K.owls, 'lfg')]: lfg,
+  [room(K.film, 'show-and-tell')]: showAndTell,
+  [room(K.climbing, 'sessions')]: sessions,
   [room(K.sandbox, 'general')]: sandbox,
-  [P.theo.address]: build([
-    { id: 'd1', who: 'theo', ts: at(0, 10, 50), body: 'lunch after the playtest call?' },
-    { id: 'd2', who: 'maya', ts: at(0, 10, 52), body: 'Yes. Ramen place?' },
-    { id: 'd3', who: 'theo', ts: at(0, 10, 53), body: 'perfect' }
+  [P.jess.address]: build([
+    { id: 'd1', who: 'jess', ts: at(0, 17, 20), body: 'are you going to the show on the 18th' },
+    { id: 'd2', who: 'nina', ts: at(0, 17, 31), body: 'if i can get off work' },
+    { id: 'd3', who: 'jess', ts: at(0, 17, 32), body: 'ill grab 2 just in case' }
   ]),
-  [LANTERN_CORE]: build([
-    { id: 'l1', who: 'kenji', ts: at(0, 10, 20), body: 'PR is up for the rope prompt.' },
-    { id: 'l2', who: 'priya', ts: at(0, 10, 24), body: 'Reviewing after standup.' }
+  [SUNDAY_DINNER]: build([
+    { id: 'l1', who: 'marco', ts: at(0, 16, 5), body: 'still on for sunday?' },
+    { id: 'l2', who: 'theo', ts: at(0, 16, 20), body: 'yes my place' },
+    { id: 'l3', who: 'theo', ts: at(0, 16, 20), body: 'bring chairs if you have them' }
   ]),
-  [P.priya.address]: build([
-    { id: 'q1', who: 'maya', ts: at(1, 17, 40), body: 'Can you send me the build notes when they are ready?' },
-    { id: 'q2', who: 'priya', ts: at(1, 17, 52), body: 'Will do, tomorrow morning.' }
+  [P.marco.address]: build([
+    { id: 'q1', who: 'marco', ts: at(2, 22, 10), body: 'you up for games tmrw' },
+    { id: 'q2', who: 'nina', ts: at(2, 22, 30), body: 'yeah after 8' }
   ]),
-  [P.noor.address]: build([
-    { id: 'n1', who: 'noor', ts: at(6, 19, 2), body: 'Thanks for the invite to the playtest.' },
-    { id: 'n2', who: 'maya', ts: at(6, 19, 10), body: 'Glad you could join. Bugs go in #bugs.' }
+  [P.kai.address]: build([
+    { id: 'n1', who: 'kai', ts: at(5, 13, 2), body: 'sent you the photos' },
+    { id: 'n2', who: 'nina', ts: at(5, 13, 40), body: 'got them thanks' }
   ]),
-  [P.ada.address]: build([
-    { id: 'e1', who: 'ada', ts: at(4, 11, 15), body: 'Patch notes draft by Thursday, ok?' },
-    { id: 'e2', who: 'maya', ts: at(4, 11, 20), body: 'Ok, thanks.' }
-  ]),
-  [P.jules.address]: build([
-    { id: 'j1', who: 'maya', ts: at(9, 14, 0), body: 'Can you test the lighthouse level this week?' },
-    { id: 'j2', who: 'jules', ts: at(9, 15, 30), body: 'Sure, send me the build.' }
+  [P.lena.address]: build([
+    { id: 'e1', who: 'nina', ts: at(8, 10, 15), body: 'can i borrow your 50mm on saturday' },
+    { id: 'e2', who: 'lena', ts: at(8, 11, 0), body: 'sure' }
   ])
 };
 
 /** Read state: the first unread message per channel, for the "new" divider. */
 export const firstUnread: Record<string, string> = {
-  [room(K.lantern, 'playtest')]: 'p11',
-  [P.theo.address]: 'd3'
+  [room(K.basement, 'music')]: 'm9',
+  [P.jess.address]: 'd3'
 };
 
 export const typing: Record<string, string[]> = {
-  [room(K.lantern, 'playtest')]: [P.kenji.name]
+  [room(K.basement, 'music')]: [P.marco.name]
 };
 
 // --- contacts --------------------------------------------------------
@@ -757,21 +666,20 @@ function contact(p: Person, daysAgo: number | null = null): ContactItem {
 }
 
 export const contacts: ContactItem[] = [
-  contact(P.priya, 420),
-  contact(P.theo, 380),
-  contact(P.jules, 95),
-  contact(P.kenji, 300),
-  contact(P.ada, 260),
-  contact(P.noor, 40),
-  contact(P.luis, 150),
-  contact(P.sam, 210),
-  contact(P.wren, 70)
+  contact(P.marco, 900),
+  contact(P.jess, 870),
+  contact(P.theo, 820),
+  contact(P.sam, 600),
+  contact(P.kai, 140),
+  contact(P.lena, 330),
+  contact(P.rory, 410),
+  contact(P.ben, 75)
 ];
 
 export const incomingRequests: ContactItem[] = [contact(P.mika)];
 
 export const outgoingRequests: ContactItem[] = [
-  contact(person('ines@xmpp.example.net', 'Ines Duarte', null, null, false))
+  contact(person('ines@xmpp.example.net', 'ines', null, null, false))
 ];
 
 export const blockedContacts: ContactItem[] = [
@@ -780,12 +688,11 @@ export const blockedContacts: ContactItem[] = [
 
 /** Contacts you and this address both have. Sample data only. */
 export const sharedContacts: Record<string, string[]> = {
-  [P.priya.address]: [P.theo.address, P.kenji.address, P.ada.address],
-  [P.theo.address]: [P.priya.address, P.kenji.address, P.sam.address],
-  [P.kenji.address]: [P.priya.address, P.theo.address],
-  [P.ada.address]: [P.priya.address],
-  [P.noor.address]: [P.jules.address, P.wren.address],
-  [P.jules.address]: [P.noor.address, P.priya.address]
+  [P.jess.address]: [P.marco.address, P.theo.address, P.sam.address],
+  [P.marco.address]: [P.jess.address, P.theo.address, P.rory.address],
+  [P.theo.address]: [P.marco.address, P.jess.address],
+  [P.kai.address]: [P.lena.address],
+  [P.lena.address]: [P.kai.address, P.rory.address]
 };
 
 /** Sample GIF results for the picker in the preview. Real results come from KLIPY. */

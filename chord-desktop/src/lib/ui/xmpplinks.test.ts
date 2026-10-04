@@ -94,13 +94,13 @@ describe('the sample answers', () => {
   // The tests above started other links. Each link asks once, so this test uses new ones.
   it('knows a public space and a room, and refuses the rest', async () => {
     const space = { kind: 'space', service: 'chat.foid.space', node: 'pixel-art' } as const;
-    const room = { kind: 'room', jid: 'lantern-works-bugs@chat.foid.space', password: null } as const;
+    const room = { kind: 'room', jid: 'basement-pics@chat.foid.space', password: null } as const;
     const gone = { kind: 'space', service: 'chat.foid.space', node: 'nothing' } as const;
     for (const l of [space, room, gone]) xmppLinks.request(l);
     expect(xmppLinks.get(space)).toBeUndefined();
     await vi.advanceTimersByTimeAsync(300);
     expect(xmppLinks.get(space)).toMatchObject({ kind: 'space', name: 'Pixel Art' });
-    expect(xmppLinks.get(room)).toMatchObject({ kind: 'room', name: 'bugs' });
+    expect(xmppLinks.get(room)).toMatchObject({ kind: 'room', name: 'pics' });
     expect(xmppLinks.get(gone)).toBeNull();
   });
 });

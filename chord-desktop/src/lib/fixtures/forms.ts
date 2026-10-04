@@ -21,7 +21,7 @@ export function sampleRoomForm(): DataForm {
     instructions: 'Change the options of this room, then save.',
     fields: [
       f({ var: 'FORM_TYPE', kind: 'hidden', values: ['http://jabber.org/protocol/muc#roomconfig'] }),
-      f({ var: 'muc#roomconfig_roomname', label: 'Room title', values: ['playtest'] }),
+      f({ var: 'muc#roomconfig_roomname', label: 'Room title', values: ['music'] }),
       f({ var: 'muc#roomconfig_roomdesc', label: 'Room description', kind: 'text-multi' }),
       f({ var: 'muc#roomconfig_publicroom', kind: 'boolean', label: 'Show in the room list', values: ['1'] }),
       f({ var: 'muc#roomconfig_membersonly', kind: 'boolean', label: 'Only members can join', values: ['0'] }),
@@ -114,8 +114,8 @@ export function sampleAffiliations(affiliation: string): [string, string | null]
     ];
   }
   return [
-    ['priya@chat.foid.space', 'Priya Raman'],
-    ['theo@chat.foid.space', 'Theo Lindqvist'],
-    ['kenji@chat.foid.space', null]
+    ['marco@chat.foid.space', 'marco'],
+    ['jess@chat.foid.space', 'jess'],
+    ['sam@chat.foid.space', null]
   ];
 }

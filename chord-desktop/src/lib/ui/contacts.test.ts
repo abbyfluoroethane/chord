@@ -9,8 +9,8 @@ describe('contacts store', () => {
   });
 
   it('rejects an address that is already a contact', () => {
-    const r = c.add('priya@chat.foid.space');
-    expect(r).toEqual({ ok: false, error: 'priya@chat.foid.space is already a contact.' });
+    const r = c.add('jess@chat.foid.space');
+    expect(r).toEqual({ ok: false, error: 'jess@chat.foid.space is already a contact.' });
   });
 
   it('sends a request and then refuses a second one', () => {

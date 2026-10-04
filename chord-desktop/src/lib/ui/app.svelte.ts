@@ -69,7 +69,7 @@ class AppState {
   myProfile = $state(
     live
       ? { fullName: '', about: '', website: '', pronouns: '' }
-      : { fullName: 'Maya Okafor', about: 'Producer at Lantern Works.', website: 'https://lanternworks.example', pronouns: 'she/her' }
+      : { fullName: 'nina', about: '', website: '', pronouns: 'she/her' }
   );
   spaces = $state<SpaceItem[]>(live ? [] : clone(fx.spaces));
   // The big lists are raw: Svelte does not wrap each row in a proxy. A change builds a new
@@ -107,7 +107,7 @@ class AppState {
 
   selectedSpace = $state<string>(HOME);
   private lastChannel: Record<string, string> = {};
-  selectedJid = $state<string>(live ? '' : 'lantern-works-playtest@chat.foid.space');
+  selectedJid = $state<string>(live ? '' : 'basement-music@chat.foid.space');
 
   replyingTo = $state<TimelineItem | null>(null);
   editingId = $state<string | null>(null);
