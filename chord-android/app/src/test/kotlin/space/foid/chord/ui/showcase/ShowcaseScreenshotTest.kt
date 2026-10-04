@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -143,7 +142,7 @@ class ShowcaseScreenshotTest {
 
     // ---------------------------------------------------------------- the phone frame
 
-    private fun shot(name: String, dark: Boolean, clock: String = "10:44", after: () -> Unit = {}, content: @Composable () -> Unit) {
+    private fun shot(name: String, dark: Boolean, clock: String = "21:16", after: () -> Unit = {}, content: @Composable () -> Unit) {
         compose.runOnUiThread { WindowCompat.setDecorFitsSystemWindows(compose.activity.window, false) }
         val entry = TestThemes.entry(if (dark) "chord-dark" else "chord-light")
         compose.setContent {
@@ -216,10 +215,10 @@ class ShowcaseScreenshotTest {
 
     // ---------------------------------------------------------------- the screens
 
-    @Composable private fun Playtest(listState: LazyListState? = null) {
+    @Composable private fun Music() {
         val palette = Chord.colors.formatPalette()
-        val rows = remember(palette) { ShowcaseData.playtestRows(palette) }
-        Timeline(rows, "playtest", topic = "Build 0.14.2 is live. Bugs go in #bugs.", typing = typingText(listOf("Kenji")), listState = listState)
+        val rows = remember(palette) { ShowcaseData.musicRows(palette) }
+        Timeline(rows, "music", topic = "post songs", typing = typingText(listOf("marco")))
     }
 
     @Composable private fun Timeline(
@@ -230,34 +229,31 @@ class ShowcaseScreenshotTest {
         isRoom: Boolean = true,
         presence: space.foid.chord.ui.components.Presence? = null,
         reachedStart: Boolean = false,
-        listState: LazyListState? = null,
     ) {
-        val state = listState ?: androidx.compose.foundation.lazy.rememberLazyListState()
         TimelineContent(
             rows = rows, title = title, isRoom = isRoom, topic = topic, presence = presence, typing = typing,
-            reachedStart = reachedStart, listState = state,
-            mentionNicks = ShowcaseData.lanternMembers.map { it.name },
-            // A scrolled list shows "Jump to present" over the last row. The promo shot hides it.
+            reachedStart = reachedStart,
+            mentionNicks = ShowcaseData.basementMembers.map { it.name },
             jumpToPresent = false,
         )
     }
 
-    @Composable private fun LanternDrawer() = ChannelDrawerContent(
+    @Composable private fun BasementDrawer() = ChannelDrawerContent(
         spaces = ShowcaseData.spaces,
-        scope = ChannelScope.Space(ShowcaseData.SPACES, "lantern-works"),
+        scope = ChannelScope.Space(ShowcaseData.SPACES, "basement"),
         onScope = {},
-        channels = ShowcaseData.lanternChannels,
+        channels = ShowcaseData.basementChannels,
         loaded = true,
-        selectedJid = ShowcaseData.playtest.jid,
+        selectedJid = ShowcaseData.music.jid,
         onSelect = {},
         account = ShowcaseData.account,
         onSignOut = {},
         spaceUnread = ShowcaseData.spaceUnread,
         homeUnread = ShowcaseData.HOME_UNREAD,
-        status = StatusState(status = ShowcaseData.maya.status),
+        status = StatusState(),
         contacts = ShowcaseData.contacts,
         pendingContacts = ShowcaseData.PENDING_CONTACTS,
-        mutedJids = ShowcaseData.mutedLantern,
+        mutedJids = ShowcaseData.mutedBasement,
         onCreateChannel = {},
     )
 
@@ -273,21 +269,21 @@ class ShowcaseScreenshotTest {
         onSignOut = {},
         spaceUnread = ShowcaseData.spaceUnread,
         homeUnread = ShowcaseData.HOME_UNREAD,
-        status = StatusState(status = ShowcaseData.maya.status),
+        status = StatusState(),
         contacts = ShowcaseData.contacts,
         pendingContacts = ShowcaseData.PENDING_CONTACTS,
     )
 
-    @Composable private fun TheoDm() {
+    @Composable private fun JessDm() {
         val palette = Chord.colors.formatPalette()
-        val rows = remember(palette) { ShowcaseData.theoRows(palette) }
-        Timeline(rows, ShowcaseData.theo.name, isRoom = false, presence = ShowcaseData.theo.presence, reachedStart = true)
+        val rows = remember(palette) { ShowcaseData.jessRows(palette) }
+        Timeline(rows, ShowcaseData.jess.name, isRoom = false, presence = ShowcaseData.jess.presence, reachedStart = true)
     }
 
-    @Composable private fun ShowAndTell() {
+    @Composable private fun Pics() {
         val palette = Chord.colors.formatPalette()
-        val rows = remember(palette) { ShowcaseData.showAndTellRows(palette) }
-        Timeline(rows, "show-and-tell")
+        val rows = remember(palette) { ShowcaseData.picsRows(palette) }
+        Timeline(rows, "pics")
     }
 
     /** A drawer container with [pane] open. */
@@ -298,49 +294,42 @@ class ShowcaseScreenshotTest {
 
     // ---------------------------------------------------------------- the shots
 
-    /**
-     * The hero slice of #playtest: from Jules' lighthouse shot down to Kenji's "on it". The list is
-     * newest first, so index [HERO_INDEX] is the row at the bottom edge.
-     */
-    private fun timeline(dark: Boolean) {
-        val list = LazyListState()
-        shot("01-timeline", dark, after = { list.requestScrollToItem(HERO_INDEX, HERO_OFFSET) }) { Playtest(list) }
-    }
+    private fun timeline(dark: Boolean) = shot("01-timeline", dark) { Music() }
 
     private fun drawer(dark: Boolean) = shot("02-drawer", dark) {
-        Drawers(DrawerPane.Left, left = { LanternDrawer() }, right = {}) { Playtest() }
+        Drawers(DrawerPane.Left, left = { BasementDrawer() }, right = {}) { Music() }
     }
 
     private fun members(dark: Boolean) = shot("03-members", dark) {
         Drawers(
             DrawerPane.Right, left = {},
-            right = { MemberDrawerContent("playtest", ShowcaseData.lanternMembers, loaded = true) },
-        ) { Playtest() }
+            right = { MemberDrawerContent("music", ShowcaseData.basementMembers, loaded = true) },
+        ) { Music() }
     }
 
-    private fun home(dark: Boolean) = shot("04-home", dark, clock = "11:52") {
-        Drawers(DrawerPane.Left, left = { HomeDrawer() }, right = {}) { Playtest() }
+    private fun home(dark: Boolean) = shot("04-home", dark) {
+        Drawers(DrawerPane.Left, left = { HomeDrawer() }, right = {}) { Music() }
     }
 
-    private fun dm(dark: Boolean) = shot("05-dm", dark, clock = "11:52") { TheoDm() }
+    private fun dm(dark: Boolean) = shot("05-dm", dark) { JessDm() }
 
-    private fun darkroom(dark: Boolean) = shot("06-darkroom", dark, clock = "9:12") { ShowAndTell() }
+    private fun pics(dark: Boolean) = shot("06-pics", dark) { Pics() }
 
     private fun profile(dark: Boolean) = shot("07-profile", dark) {
         Box(Modifier.fillMaxSize()) {
-            Playtest()
+            Music()
             Box(Modifier.fillMaxSize().background(Chord.colors.scrim))
             Box(Modifier.align(Alignment.BottomCenter)) {
                 SheetFrame {
                     Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = ChordSpace.s4)) {
-                        ProfileContent(ShowcaseData.priyaProfile, ProfileVariant.Sheet, ProfileCallbacks(), Chord.colors.surface200)
+                        ProfileContent(ShowcaseData.jessProfile, ProfileVariant.Sheet, ProfileCallbacks(), Chord.colors.surface200)
                     }
                 }
             }
         }
     }
 
-    private fun appearance(dark: Boolean) = shot("08-appearance", dark, clock = "10:50") {
+    private fun appearance(dark: Boolean) = shot("08-appearance", dark) {
         val prefs = AppPrefs(theme = if (dark) ThemeMode.Dark else ThemeMode.Light)
         Column(Modifier.fillMaxSize().background(Chord.colors.surface100).statusBarsPadding()) {
             SettingsTopBar(stringResource(R.string.settings_appearance)) {}
@@ -353,9 +342,9 @@ class ShowcaseScreenshotTest {
         }
     }
 
-    private fun signIn(dark: Boolean) = shot("09-signin", dark, clock = "8:58") {
+    private fun signIn(dark: Boolean) = shot("09-signin", dark, clock = "20:12") {
         SignInContent(
-            state = SignInState(jid = ShowcaseData.maya.jid, password = "lantern-works-0.14"),
+            state = SignInState(jid = ShowcaseData.nina.jid, password = "basement-sunday-dinner"),
             onJidChange = {}, onPasswordChange = {}, onServerChange = {}, onSubmit = {},
         )
     }
@@ -370,8 +359,8 @@ class ShowcaseScreenshotTest {
     @Test fun home_light() = home(false)
     @Test fun dm_dark() = dm(true)
     @Test fun dm_light() = dm(false)
-    @Test fun darkroom_dark() = darkroom(true)
-    @Test fun darkroom_light() = darkroom(false)
+    @Test fun pics_dark() = pics(true)
+    @Test fun pics_light() = pics(false)
     @Test fun profile_dark() = profile(true)
     @Test fun profile_light() = profile(false)
     @Test fun appearance_dark() = appearance(true)
@@ -384,7 +373,5 @@ class ShowcaseScreenshotTest {
         const val OUT = "../../docs/brand/screenshots/android"
         const val STATUS_DP = 32
         const val NAV_DP = 20
-        const val HERO_INDEX = 5
-        const val HERO_OFFSET = 0
     }
 }
