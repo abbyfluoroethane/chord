@@ -297,29 +297,11 @@ private fun RoundButton(
     ) { glyph() }
 }
 
-// The glyphs are drawn, so the app needs no icon library.
+@Composable
+private fun PlusGlyph(color: Color) = LucideIcon(LucideIcons.Plus, color, size = 22.dp)
 
 @Composable
-private fun PlusGlyph(color: Color) {
-    Box(
-        Modifier.size(18.dp).drawBehind {
-            val w = 2.dp.toPx()
-            drawLine(color, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), w, StrokeCap.Round)
-            drawLine(color, Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), w, StrokeCap.Round)
-        },
-    )
-}
-
-@Composable
-private fun CloseGlyph(color: Color) {
-    Box(
-        Modifier.size(12.dp).drawBehind {
-            val w = 2.dp.toPx()
-            drawLine(color, Offset(0f, 0f), Offset(size.width, size.height), w, StrokeCap.Round)
-            drawLine(color, Offset(size.width, 0f), Offset(0f, size.height), w, StrokeCap.Round)
-        },
-    )
-}
+private fun CloseGlyph(color: Color) = LucideIcon(LucideIcons.X, color, size = 16.dp)
 
 @Composable
 private fun SendGlyph(color: Color) {

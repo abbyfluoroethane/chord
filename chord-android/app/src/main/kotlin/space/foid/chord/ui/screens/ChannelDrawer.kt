@@ -1,5 +1,7 @@
 package space.foid.chord.ui.screens
 
+import space.foid.chord.ui.components.LucideIcon
+import space.foid.chord.ui.components.LucideIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -499,24 +501,6 @@ internal fun UserPanel(
                 .semantics { contentDescription = settingsCd }
                 .testTag("open_settings"),
             contentAlignment = Alignment.Center,
-        ) { GearGlyph(c.inkMuted) }
-    }
-}
-
-/** A gear: a ring with eight teeth. */
-@Composable
-private fun GearGlyph(color: Color) {
-    Canvas(Modifier.size(22.dp)) {
-        val k = size.width / 24f
-        val st = 1.8f * k
-        val mid = Offset(12 * k, 12 * k)
-        drawCircle(color, 3.2f * k, mid, style = androidx.compose.ui.graphics.drawscope.Stroke(st))
-        drawCircle(color, 6.6f * k, mid, style = androidx.compose.ui.graphics.drawscope.Stroke(st))
-        for (i in 0 until 8) {
-            val a = Math.toRadians(i * 45.0)
-            val dx = Math.cos(a).toFloat()
-            val dy = Math.sin(a).toFloat()
-            drawLine(color, mid + Offset(dx * 7.4f * k, dy * 7.4f * k), mid + Offset(dx * 10 * k, dy * 10 * k), st * 1.4f, StrokeCap.Round)
-        }
+        ) { LucideIcon(LucideIcons.Settings, c.inkMuted, size = 22.dp) }
     }
 }
