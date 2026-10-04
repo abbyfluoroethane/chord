@@ -6,7 +6,8 @@ name: Build Flatpak
 # single-file bundle that installs from that repository and updates from it.
 # release.yml and nightly.yml call it. See docs/updates.md.
 #
-# Secrets: CHORD_FLATPAK_GPG_KEY (signs the repository), CHORD_RELEASES_TOKEN (pushes gh-pages).
+# Secrets: CHORD_FLATPAK_GPG_KEY (signs the repository), CHORD_RELEASES_TOKEN (pushes gh-pages),
+# CHORD_KLIPY_KEY (GIF search, docs/gifs.md).
 
 on:
   workflow_call:
@@ -37,7 +38,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Point the manifest at this commit and version
+      - name: Point the manifest at this commit, version and GIF key
+        env:
+          CHORD_KLIPY_KEY: ${{ secrets.CHORD_KLIPY_KEY }}
         run: |
           git config --global --add safe.directory "$PWD"
           sha=$(git rev-parse HEAD)
@@ -45,8 +48,10 @@ jobs:
                  -e "s|^\( *\)CHORD_VERSION: .*|\1CHORD_VERSION: '$VERSION'|" \
                  -e "s|^\( *\)CHORD_COMMIT: .*|\1CHORD_COMMIT: '${sha:0:7}'|" \
                  -e "s|^\( *\)CHORD_COMMIT_TIME: .*|\1CHORD_COMMIT_TIME: '$(git show -s --format=%ct HEAD)'|" \
+                 -e "s|^\( *\)CHORD_KLIPY_KEY: .*|\1CHORD_KLIPY_KEY: '$CHORD_KLIPY_KEY'|" \
             packaging/flatpak/space.foid.chord.yml
           grep -nE "commit:|CHORD_(VERSION|COMMIT|COMMIT_TIME):" packaging/flatpak/space.foid.chord.yml
+          [[ -n "$CHORD_KLIPY_KEY" ]] || echo "::warning::The CHORD_KLIPY_KEY secret is missing: GIF search is off."
       - uses: actions/cache@v4
         with:
           path: .flatpak-builder

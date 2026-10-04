@@ -82,6 +82,9 @@ modules:
         CHORD_VERSION: '0.0.0+dev'
         CHORD_COMMIT: ''
         CHORD_COMMIT_TIME: ''
+        # The GIF search key for build.rs (docs/gifs.md). CI puts the secret here. Empty: GIF
+        # search is off.
+        CHORD_KLIPY_KEY: ''
         # Offline: crates from cargo-sources.json, npm packages from node-sources.json.
         CARGO_HOME: /run/build/chord/cargo
         CARGO_NET_OFFLINE: 'true'

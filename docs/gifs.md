@@ -18,7 +18,7 @@ Without a key, the app works, and the GIF tab says that GIF search is off.
 
 ## Release builds
 
-The release workflow gives the key from a CI secret named `CHORD_KLIPY_KEY`. Anyone can read a key out of an app file, so do not use a key that you cannot replace.
+The release and nightly workflows give the key from a CI secret named `CHORD_KLIPY_KEY`. The Windows and macOS builds read it from the environment. The Flatpak build writes it into `CHORD_KLIPY_KEY` in `packaging/flatpak/space.foid.chord.yml`, because the Flatpak sandbox gets no outside variables. Anyone can read a key out of an app file, so do not use a key that you cannot replace.
 
 ## Keep the key out of the app (a proxy)
 
