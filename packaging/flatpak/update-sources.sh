@@ -36,6 +36,10 @@ fi
 "$cache/venv/bin/python" "$tools/cargo/flatpak-cargo-generator.py" \
     "$root/Cargo.lock" -o "$here/cargo-sources.json"
 
+# The offline build needs the tarball URL and the integrity of each npm package in the
+# lockfile. Add the ones that npm left out (no version changes). Commit the lockfile too.
+python3 "$here/fill-lock.py" "$root/chord-desktop/package-lock.json"
+
 # The generator reads the lockfile only. It wants no node_modules next to it, so give it a
 # copy of the lockfile in an empty directory.
 tmp=$(mktemp -d)
