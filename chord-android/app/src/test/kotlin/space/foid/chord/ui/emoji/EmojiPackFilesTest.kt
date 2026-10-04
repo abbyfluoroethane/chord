@@ -77,7 +77,9 @@ class EmojiPackFilesTest {
         assertEquals("1f44b-1f3fb", codes["waving-hand-light"])
         assertEquals("1f468-1f3fb-200d-1f9b2", codes["man-light-bald"])
 
+        // Like the real Fluent tarball: chars.json is there but empty.
         val tgz = tarGz(
+            "package/chars.json" to "{}",
             "package/icons.json" to
                 """{"prefix":"fluent-emoji","icons":{"grinning-face":{"body":"<circle cx='16' cy='16' r='14' fill='#fc0'/>"},""" +
                 """"waving-hand-light":{"body":"<rect width='20' height='20' fill='#c96'/>","width":24,"height":24}},""" +
@@ -85,12 +87,20 @@ class EmojiPackFilesTest {
         )
         val target = File(tmp.newFolder(), "fluent")
         installPack(ByteArrayInputStream(tgz), target, twemoji)
+        assertTrue(PackIndex.isInstalled(target))
         val index = PackIndex(target)
         assertTrue(index.has("😀"))
         assertTrue(index.has("👋🏻"))
         assertFalse(index.has("👨🏻‍🦲"))
         assertTrue(index.svg("👋🏻")!!.contains("viewBox=\"0 0 24 24\""))
         assertTrue(index.svg("😀")!!.contains("viewBox=\"0 0 32 32\""))
+    }
+
+    @Test fun aPackThatMapsNoEmojiDoesNotCountAsInstalled() {
+        val dir = File(tmp.newFolder(), "fluent").also { it.mkdirs() }
+        File(dir, "chars.json").writeText("{}")
+        File(dir, ".installed").writeText("ok")
+        assertFalse(PackIndex.isInstalled(dir))
     }
 
     @Test fun aPackWithoutAMapOrIconsFailsAndKeepsTheOldOne() {

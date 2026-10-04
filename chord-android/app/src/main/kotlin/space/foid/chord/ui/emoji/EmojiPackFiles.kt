@@ -210,13 +210,15 @@ fun installPack(tgz: InputStream, target: File, twemojiChars: Map<String, String
         }
     }
     if (iconNames.isEmpty()) throw PackException("the pack has no icons")
-    val map = chars ?: run {
+    // The Fluent tarball has a chars.json, but it is empty: take the codes from the names then.
+    val map = chars?.takeIf { it.isNotEmpty() } ?: run {
         val codes = codesByName(twemojiChars ?: throw PackException("no code point map for this pack"))
         val out = LinkedHashMap<String, String>()
         for (name in iconNames + aliases.keys) codes[name]?.let { out.putIfAbsent(it, name) }
         out
     }
     val clean = map.filterKeys { HEX_KEY.matches(it) }
+    if (clean.isEmpty()) throw PackException("the pack maps no emoji")
     File(temp, PackLayout.CHARS).writeText(JSONObject(clean as Map<*, *>).toString())
     File(temp, PackLayout.ALIASES).writeText(JSONObject(aliases as Map<*, *>).toString())
     File(temp, PackLayout.META).writeText("${num(width)} ${num(height)}")
@@ -329,8 +331,12 @@ class PackIndex(private val dir: File) {
     }
 
     companion object {
-        /** True if [dir] holds a complete pack. */
-        fun isInstalled(dir: File): Boolean = File(dir, PackLayout.DONE).isFile
+        /**
+         * True if [dir] holds a complete pack. A pack that maps no emoji does not count: builds
+         * before 2026-10-03 installed Fluent that way, and it downloads again.
+         */
+        fun isInstalled(dir: File): Boolean =
+            File(dir, PackLayout.DONE).isFile && !readChars(dir).isNullOrEmpty()
 
         /** The hex to name map of an installed pack, for the packs that need Twemoji's names. */
         fun readChars(dir: File): Map<String, String>? = try {

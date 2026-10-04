@@ -31,6 +31,7 @@ import space.foid.chord.ui.theme.MotionMode
 import space.foid.chord.ui.theme.TestThemes
 import space.foid.chord.ui.theme.ThemeEntry
 import space.foid.chord.ui.theme.TimeFormat
+import space.foid.chord.ui.text.emojiRuns
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
@@ -50,7 +51,10 @@ class AppearanceScreenshotTest {
     private fun twemoji(): EmojiImages {
         val target = File(tmp.newFolder(), "twemoji")
         installPack(File("../../chord-desktop/src-tauri/resources/twemoji-1.2.5.tgz").inputStream(), target, null)
-        return EmojiImages(EmojiPack.Twemoji, PackIndex(target), px = 64)
+        // Draw the card's sample now, so the shot never catches the row while it loads.
+        return EmojiImages(EmojiPack.Twemoji, PackIndex(target), px = 64).also { images ->
+            emojiRuns(SAMPLE).forEach { images.loadNow(SAMPLE.substring(it.first, it.last + 1)) }
+        }
     }
 
     @Composable private fun Page(model: AppearanceModel) {

@@ -550,7 +550,7 @@ private fun PackCard(pack: EmojiPack, model: AppearanceModel, a: AppearanceActio
     }
 }
 
-private const val SAMPLE = "😀👋🏽❤️🎉🚀"
+internal const val SAMPLE = "😀👋🏽❤️🎉🚀"
 
 // ---------------------------------------------------------------- import dialog
 
