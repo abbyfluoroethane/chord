@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_on">On</string>
+    <string name="settings_off">Off</string>
+
+    <!-- Home -->
+    <string name="settings_group_user">User settings</string>
+    <string name="settings_group_app">App settings</string>
+    <string name="settings_my_account">My account</string>
+    <string name="settings_my_account_hint">Profile, address and password</string>
+    <string name="settings_header_open">Edit your profile</string>
+
+    <!-- My account -->
+    <string name="settings_tab_profile">Profile</string>
+    <string name="settings_tab_account">Account</string>
+    <string name="settings_preview">Preview</string>
+    <string name="settings_profile">Profile</string>
+    <string name="settings_avatar_change">Change photo</string>
+    <string name="settings_avatar_remove">Remove</string>
+    <string name="settings_nickname">Display name</string>
+    <string name="settings_nickname_hint">Shown to people who add you</string>
+    <string name="settings_profile_note">Your contacts see this name and photo.</string>
+    <string name="settings_reset">Reset</string>
+    <string name="settings_at_sign_in">At sign-in</string>
+    <string name="settings_at_sign_in_hint">Chord sets this each time it signs in. Change your status any time from the menu.</string>
+    <string name="settings_availability">Availability</string>
+    <string name="settings_sign_in_last">Last used</string>
+    <string name="settings_available">Available</string>
+    <string name="settings_away">Away</string>
+    <string name="settings_dnd">Do not disturb</string>
+    <string name="settings_invisible">Invisible</string>
+    <string name="settings_status">Status text</string>
+    <string name="settings_status_hint">No text</string>
+    <string name="settings_status_none">No status</string>
+
+    <string name="settings_sign_in">Sign-in</string>
+    <string name="settings_jid">Address</string>
+    <string name="settings_copy">Copy</string>
+    <string name="settings_copied">Copied</string>
+    <string name="settings_password">Password</string>
+    <string name="settings_password_change">Change password</string>
+    <string name="settings_password_new">New password</string>
+    <string name="settings_password_repeat">Repeat the new password</string>
+    <string name="settings_password_note">The server changes your password at once. Your other devices must sign in again.</string>
+    <string name="settings_password_empty">Type a new password.</string>
+    <string name="settings_password_mismatch">The two passwords are not the same.</string>
+    <string name="settings_password_done">Your password is changed.</string>
+    <string name="settings_password_failed">Chord changed the password, but could not save it on this phone. Sign in again with the new password.</string>
+
+    <!-- Privacy -->
+    <string name="settings_privacy">Privacy</string>
+    <string name="settings_activity">Activity</string>
+    <string name="settings_share_idle">Share when you are idle</string>
+    <string name="settings_share_idle_hint">Contacts see that you have been away from Chord for a while.</string>
+    <string name="settings_idle_after">Idle after</string>
+    <string name="settings_minutes">%1$d min</string>
+    <string name="settings_software">Software information</string>
+    <string name="settings_share_info">Share app version and time</string>
+    <string name="settings_share_info_hint">Let contacts and the server ask which app you use and your local time.</string>
+    <string name="settings_blocked">Blocked addresses</string>
+    <string name="settings_blocked_none">You have not blocked anyone.</string>
+    <string name="settings_unblock">Unblock</string>
+    <string name="settings_unblock_all">Unblock all</string>
+    <string name="settings_unblock_all_title">Unblock all</string>
+    <plurals name="settings_unblock_all_body">
+        <item quantity="one">Unblock %1$d address? This person can write to you again.</item>
+        <item quantity="other">Unblock %1$d addresses? These people can write to you again.</item>
+    </plurals>
+
+    <!-- Notifications -->
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notifications_on">Notifications are on.</string>
+    <string name="settings_notifications_off">Notifications are off. You will not see new messages.</string>
+    <string name="settings_notifications_open">Open system settings</string>
+    <string name="settings_notice_preview">Show message text</string>
+    <string name="settings_notice_preview_hint">When off, a notice only says that a message came.</string>
+    <string name="settings_notice_hidden">New message</string>
+    <string name="settings_quiet">Quiet hours</string>
+    <string name="settings_quiet_on">Quiet hours</string>
+    <string name="settings_quiet_hint">No notices between these times.</string>
+    <string name="settings_quiet_from">From</string>
+    <string name="settings_quiet_until">Until</string>
+
+    <!-- Appearance -->
+    <string name="settings_appearance">Appearance</string>
+    <string name="settings_mode">Mode</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_interface">Interface</string>
+    <string name="settings_show_presence">Show status dots</string>
+    <string name="settings_show_presence_hint">A small mark on each avatar shows if the person is online.</string>
+
+    <!-- Advanced -->
+    <string name="settings_advanced">Advanced</string>
+    <string name="settings_connection">Connection</string>
+    <string name="settings_connection_status">Status</string>
+    <string name="settings_conn_connected">Connected</string>
+    <string name="settings_conn_connecting">Connecting</string>
+    <string name="settings_conn_offline">Offline</string>
+    <string name="settings_troubleshooting">Troubleshooting</string>
+    <string name="settings_reset_settings">Reset settings</string>
+    <string name="settings_reset_settings_hint">Puts every setting on this phone back to its default. Your account stays.</string>
+    <string name="settings_reset_title">Reset all settings</string>
+    <string name="settings_reset_body">Every setting on this phone goes back to its default. Your account, contacts and messages stay.</string>
+
+    <!-- About -->
+    <string name="settings_about">About</string>
+    <string name="settings_website">Website and source code</string>
+    <string name="settings_licenses">Open source licences</string>
+
+    <!-- Log out -->
+    <string name="settings_sign_out">Log out</string>
+    <string name="settings_sign_out_title">Log out of Chord?</string>
+    <string name="settings_sign_out_body">You need your password to sign in again. Chord forgets it on this phone. Your messages stay on the server.</string>
+</resources>

@@ -33,6 +33,12 @@ pub struct StorageInfo {
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub version: &'static str,
+    /// The short hash of the commit that the app was built from.
+    pub commit: &'static str,
+    /// The build number (see docs/updates.md).
+    pub build: i64,
+    /// The channel the build came from: `stable`, `beta`, `nightly` or `dev`.
+    pub channel: &'static str,
     pub os: &'static str,
     pub arch: &'static str,
 }
@@ -191,7 +197,10 @@ pub async fn server_features(state: State<'_, AppState>) -> Res<Vec<String>> {
 #[tauri::command]
 pub fn app_info() -> AppInfo {
     AppInfo {
-        version: env!("CARGO_PKG_VERSION"),
+        version: env!("CHORD_VERSION"),
+        commit: env!("CHORD_COMMIT"),
+        build: crate::updates::current_build(),
+        channel: crate::updates::BUILD_CHANNEL,
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
     }

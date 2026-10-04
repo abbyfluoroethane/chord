@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="people_members">Members</string>
+    <string name="people_profile">Profile</string>
+    <string name="people_nobody">Nobody here</string>
+    <string name="people_loading">Loading</string>
+    <string name="people_group_owners">Owners</string>
+    <string name="people_group_admins">Admins</string>
+    <string name="people_group_online">Online</string>
+    <string name="people_group_visitors">Visitors</string>
+    <string name="people_group_offline">Offline</string>
+    <string name="people_moderator">Moderator</string>
+
+    <string name="people_message">Message</string>
+    <string name="people_edit_profile">Edit profile</string>
+    <string name="people_add_contact">Add contact</string>
+    <string name="people_contact">Contact</string>
+    <string name="people_unblock">Unblock</string>
+    <string name="people_blocked">Blocked</string>
+    <string name="people_more">More actions</string>
+    <string name="people_copy_address">Copy address</string>
+    <string name="people_address_hidden">This room hides the real address.</string>
+    <string name="people_full_name">Full name</string>
+    <string name="people_nickname">Nickname</string>
+    <string name="people_roles">Roles</string>
+    <string name="people_shared_spaces">Shared spaces</string>
+    <string name="people_no_shared_spaces">You share no spaces.</string>
+    <string name="people_you">You</string>
+
+    <string name="people_invite_to_space">Invite to space</string>
+    <string name="people_rename_contact">Rename contact</string>
+    <string name="people_remove_contact">Remove contact</string>
+    <string name="people_block">Block</string>
+    <string name="people_rename_title">Rename contact</string>
+    <string name="people_rename_hint">Name</string>
+    <string name="people_save">Save</string>
+    <string name="people_cancel">Cancel</string>
+    <string name="people_back">Back</string>
+    <string name="people_hidden_why">This room hides the real address of the person.</string>
+
+    <string name="people_notice_added">Added to your contacts.</string>
+    <string name="people_notice_removed">Removed from your contacts.</string>
+    <string name="people_notice_renamed">Contact renamed.</string>
+    <string name="people_notice_blocked">Blocked.</string>
+    <string name="people_notice_unblocked">Unblocked.</string>
+    <string name="people_notice_invited">Invited to the space.</string>
+    <string name="people_notice_failed">That did not work. Try again.</string>
+    <string name="people_copied">Address copied.</string>
+
+    <string name="people_presence_online">Online</string>
+    <string name="people_presence_away">Away</string>
+    <string name="people_presence_dnd">Do not disturb</string>
+    <string name="people_presence_offline">Offline</string>
+</resources>

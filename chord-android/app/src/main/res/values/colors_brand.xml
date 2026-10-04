@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The dark square behind the launcher icon. -->
+    <color name="ic_launcher_background">#111316</color>
+    <!-- The accent of the notification: the app name and the small icon in the shade. -->
+    <color name="notification_accent">#C47B0C</color>
+</resources>

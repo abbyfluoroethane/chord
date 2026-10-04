@@ -37,11 +37,10 @@ use {
     tokio_rustls::{
         rustls::pki_types::ServerName,
         rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        rustls::client::WebPkiServerVerifier,
         rustls::pki_types::{CertificateDer, UnixTime},
         rustls::{
             CertificateError, ClientConfig, DigitallySignedStruct, Error as RustlsError,
-            OtherError, RootCertStore, SignatureScheme,
+            OtherError, SignatureScheme,
         },
         TlsConnector,
     },
@@ -117,7 +116,7 @@ impl StdError for CertCheckError {}
 #[cfg(all(feature = "rustls-any-backend", not(feature = "native-tls")))]
 #[derive(Debug)]
 struct PinnedVerifier {
-    inner: Arc<WebPkiServerVerifier>,
+    inner: Arc<dyn ServerCertVerifier>,
     check: CertCheck,
 }
 
@@ -256,6 +255,51 @@ pub async fn establish_tls_connection_with<S: TlsAsyncStream>(
     Ok((tls_stream, ChannelBinding::None))
 }
 
+/// CHORD PATCH: the normal certificate verifier. It checks the chain, the name and the dates.
+/// On Android it is the system verifier (`rustls-platform-verifier`): `rustls-native-certs`
+/// finds no root on Android, because the system keeps them in `/apex/com.android.conscrypt/cacerts`
+/// and `/system/etc/security/cacerts`, in a form that the crate does not look for. The app must
+/// call the JNI init of `chord-ffi` before the first connection. On the other systems it is
+/// `WebPkiServerVerifier` with the roots that the features choose.
+#[cfg(all(
+    feature = "rustls-any-backend",
+    not(feature = "native-tls"),
+    target_os = "android"
+))]
+fn server_verifier() -> Result<Arc<dyn ServerCertVerifier>, Error> {
+    let provider = ClientConfig::builder().crypto_provider().clone();
+    let verifier = rustls_platform_verifier::Verifier::new(provider).map_err(|e| {
+        Error::Io(std::io::Error::other(format!("cannot build the verifier: {e}")))
+    })?;
+    Ok(Arc::new(verifier))
+}
+
+#[cfg(all(
+    feature = "rustls-any-backend",
+    not(feature = "native-tls"),
+    not(target_os = "android")
+))]
+fn server_verifier() -> Result<Arc<dyn ServerCertVerifier>, Error> {
+    use tokio_rustls::rustls::{client::WebPkiServerVerifier, RootCertStore};
+
+    let mut root_store = RootCertStore::empty();
+
+    #[cfg(feature = "webpki-roots")]
+    {
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
+    #[cfg(feature = "rustls-native-certs")]
+    {
+        root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+    }
+
+    let verifier = WebPkiServerVerifier::builder(Arc::new(root_store))
+        .build()
+        .map_err(|e| Error::Io(std::io::Error::other(format!("cannot build the verifier: {e}"))))?;
+    Ok(verifier)
+}
+
 /// Establish TLS connection using rustls
 #[cfg(all(feature = "rustls-any-backend", not(feature = "native-tls")))]
 pub async fn establish_tls_connection<S: TlsAsyncStream>(
@@ -287,37 +331,21 @@ pub async fn establish_tls_connection_with<S: TlsAsyncStream>(
 ) -> Result<(TlsStream<S>, ChannelBinding), Error> {
     let domain =
         ServerName::try_from(domain.to_owned()).map_err(TlsConnectorError::DnsNameError)?;
-    let mut root_store = RootCertStore::empty();
-
-    #[cfg(feature = "webpki-roots")]
-    {
-        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    }
-
-    #[cfg(feature = "rustls-native-certs")]
-    {
-        root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
-    }
+    let inner = server_verifier()?;
 
     #[allow(unused_mut, reason = "This config is mutable when using ktls")]
     let mut config = match check {
         // CHORD PATCH: a verifier that wraps the normal one. See `PinnedVerifier`.
-        Some(check) => {
-            let inner = WebPkiServerVerifier::builder(Arc::new(root_store))
-                .build()
-                .map_err(|e| {
-                    Error::Io(std::io::Error::other(format!("cannot build the verifier: {e}")))
-                })?;
-            ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(PinnedVerifier {
-                    inner,
-                    check: check.clone(),
-                }))
-                .with_no_client_auth()
-        }
+        Some(check) => ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinnedVerifier {
+                inner,
+                check: check.clone(),
+            }))
+            .with_no_client_auth(),
         None => ClientConfig::builder()
-            .with_root_certificates(root_store)
+            .dangerous()
+            .with_custom_certificate_verifier(inner)
             .with_no_client_auth(),
     };
 

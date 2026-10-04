@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- New conversation sheet -->
+    <string name="join_button">New conversation</string>
+    <string name="join_title">New conversation</string>
+    <string name="join_tab_room">Join room</string>
+    <string name="join_tab_person">Message</string>
+    <string name="join_tab_spaces">Spaces</string>
+    <string name="join_room_hint">Join a room. Type its address, or paste an xmpp: link.</string>
+    <string name="join_address">Address</string>
+    <string name="join_address_placeholder">room@conference.example.org</string>
+    <string name="join_nick">Nickname (optional)</string>
+    <string name="join_nick_placeholder">Default nickname</string>
+    <string name="join_password">Room password</string>
+    <string name="join_password_needed">This room needs a password. Enter it to join.</string>
+    <string name="join_submit">Join room</string>
+    <string name="join_joining">Joining</string>
+    <string name="join_person_hint">Message someone. If they are not in your contacts, Chord asks them to share their presence with you.</string>
+    <string name="join_person_placeholder">name@example.org</string>
+    <string name="join_person_name">Name (optional)</string>
+    <string name="join_person_name_placeholder">How you want to see them</string>
+    <string name="join_person_submit">Open chat</string>
+    <string name="join_opening">Opening</string>
+    <string name="join_spaces_hint">Spaces on your server. Join one to see its rooms.</string>
+    <string name="join_spaces_empty">There are no spaces to join on this server.</string>
+    <string name="join_retry">Try again</string>
+    <string name="join_space_join">Join</string>
+    <string name="join_space_joining">Joining</string>
+    <string name="join_space_requested">Requested</string>
+    <string name="join_space_private">Needs approval from the owner</string>
+
+    <!-- Channel actions sheet -->
+    <string name="actions_mark_read">Mark as read</string>
+    <string name="actions_notifications">Notifications</string>
+    <string name="actions_level_all">All messages</string>
+    <string name="actions_level_mentions">Only mentions</string>
+    <string name="actions_level_none">Nothing</string>
+    <string name="actions_copy">Copy address</string>
+    <string name="actions_leave">Leave room</string>
+    <string name="actions_remove">Remove contact</string>
+    <string name="actions_cancel">Cancel</string>
+    <string name="actions_leave_title">Leave %1$s?</string>
+    <string name="actions_leave_text">You will not get its messages any more. You can join again later.</string>
+    <string name="actions_remove_title">Remove %1$s?</string>
+    <string name="actions_remove_text">This person leaves your contacts. You will not see when they are online.</string>
+
+    <!-- Inbox -->
+    <string name="inbox_button">Inbox</string>
+    <plurals name="inbox_button_count">
+        <item quantity="one">Inbox, %1$d request</item>
+        <item quantity="other">Inbox, %1$d requests</item>
+    </plurals>
+    <string name="inbox_title">Inbox</string>
+    <string name="inbox_empty">Nothing waits for you. Contact requests and room invitations show here.</string>
+    <string name="inbox_requests">Contact requests</string>
+    <string name="inbox_request_text">Wants to see when you are online.</string>
+    <string name="inbox_add_back">Add back</string>
+    <string name="inbox_accept">Accept</string>
+    <string name="inbox_deny">Deny</string>
+    <string name="inbox_invites">Room invitations</string>
+    <string name="inbox_invite_from">Invited by %1$s</string>
+    <string name="inbox_join">Join</string>
+    <string name="inbox_decline">Decline</string>
+    <string name="inbox_pending">Waiting for approval</string>
+    <string name="inbox_pending_text">You asked to join. The owner has not answered yet.</string>
+</resources>

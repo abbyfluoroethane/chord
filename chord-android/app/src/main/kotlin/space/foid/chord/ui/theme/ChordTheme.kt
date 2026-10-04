@@ -1,0 +1,111 @@
+package space.foid.chord.ui.theme
+
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import space.foid.chord.R
+
+/** --ease-out: cubic-bezier(0.2, 0, 0, 1). */
+val ChordEase = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
+/**
+ * Type styles. The desktop uses IBM Plex Sans, IBM Plex Mono and Bricolage Grotesque.
+ * The fonts are in res/font. All three are under the SIL OFL (assets/licenses).
+ */
+object ChordType {
+    val sans: FontFamily = FontFamily(
+        Font(R.font.ibm_plex_sans_regular, FontWeight.Normal),
+        Font(R.font.ibm_plex_sans_medium, FontWeight.Medium),
+        Font(R.font.ibm_plex_sans_semibold, FontWeight.SemiBold),
+        // No Bold file: bold text uses the 600 face.
+        Font(R.font.ibm_plex_sans_semibold, FontWeight.Bold),
+    )
+    val mono: FontFamily = FontFamily(Font(R.font.ibm_plex_mono_regular, FontWeight.Normal))
+    // One variable font file. The wght axis is set to 700.
+    @OptIn(ExperimentalTextApi::class)
+    val display: FontFamily = FontFamily(
+        Font(
+            R.font.bricolage_grotesque,
+            FontWeight.Bold,
+            variationSettings = FontVariation.Settings(FontVariation.weight(700)),
+        ),
+    )
+
+    val body = TextStyle(fontFamily = sans, fontSize = 15.sp, lineHeight = 22.sp)
+    val bodySmall = TextStyle(fontFamily = sans, fontSize = 13.sp, lineHeight = 18.sp)
+    val label = TextStyle(fontFamily = sans, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium)
+    val name = TextStyle(fontFamily = sans, fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+    val caption = TextStyle(fontFamily = sans, fontSize = 12.sp, lineHeight = 16.sp)
+    val title = TextStyle(fontFamily = display, fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
+    val code = TextStyle(fontFamily = mono, fontSize = 14.sp, lineHeight = 20.sp)
+}
+
+private val LocalChordColors = staticCompositionLocalOf { ChordDark }
+
+/** Access the tokens: `Chord.colors.ink`. */
+object Chord {
+    val colors: ChordColors
+        @Composable @ReadOnlyComposable get() = LocalChordColors.current
+}
+
+/**
+ * The Chord theme. Material 3 gets a colour scheme mapped from the tokens, so the Material
+ * plumbing (sheets, dialogs, text fields, navigation) uses Chord colours.
+ */
+@Composable
+fun ChordTheme(
+    dark: Boolean = isSystemInDarkTheme(),
+    /** The colours of the picked theme. Null: the Chord theme of the mode. */
+    colors: ChordColors? = null,
+    appearance: Appearance = Appearance(),
+    content: @Composable () -> Unit,
+) {
+    val c = colors ?: if (dark) ChordDark else ChordLight
+    val scheme = if (c.isDark) {
+        darkColorScheme(
+            primary = c.brand, onPrimary = c.onBrand, primaryContainer = c.brandSoft, onPrimaryContainer = c.brandInk,
+            secondary = c.accent, onSecondary = c.surface100,
+            background = c.surface100, onBackground = c.ink,
+            surface = c.surface200, onSurface = c.ink, surfaceVariant = c.surface300, onSurfaceVariant = c.inkMuted,
+            surfaceContainer = c.surface200, surfaceContainerHigh = c.surface300, surfaceContainerLow = c.surface100,
+            outline = c.lineStrong, outlineVariant = c.line,
+            error = c.danger, onError = c.onDanger, scrim = c.scrim,
+        )
+    } else {
+        lightColorScheme(
+            primary = c.brand, onPrimary = c.onBrand, primaryContainer = c.brandSoft, onPrimaryContainer = c.brandInk,
+            secondary = c.accent, onSecondary = c.surface100,
+            background = c.surface100, onBackground = c.ink,
+            surface = c.surface200, onSurface = c.ink, surfaceVariant = c.surface300, onSurfaceVariant = c.inkMuted,
+            surfaceContainer = c.surface200, surfaceContainerHigh = c.surface300, surfaceContainerLow = c.surface100,
+            outline = c.lineStrong, outlineVariant = c.line,
+            error = c.danger, onError = c.onDanger, scrim = c.scrim,
+        )
+    }
+    // The text size scales every sp, so all of ChordType follows it.
+    val density = LocalDensity.current
+    val scaled = Density(density.density, density.fontScale * appearance.fontFactor)
+    CompositionLocalProvider(
+        LocalChordColors provides c,
+        LocalAppearance provides appearance,
+        LocalReduceMotion provides appearance.reduceMotion,
+        LocalDensity provides scaled,
+    ) {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
+}

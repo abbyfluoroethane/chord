@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sign_in_title">Sign in</string>
+    <string name="sign_in_intro">Use the address and password of your chat account.</string>
+    <string name="sign_in_address">Address</string>
+    <string name="sign_in_password">Password</string>
+    <string name="sign_in_show">Show</string>
+    <string name="sign_in_hide">Hide</string>
+    <string name="sign_in_advanced">Advanced</string>
+    <string name="sign_in_server">Server</string>
+    <string name="sign_in_server_hint">Automatic</string>
+    <string name="sign_in_server_help">Leave empty to find the server from your address. Or enter a host, or starttls://host:port.</string>
+    <string name="sign_in_submit">Sign in</string>
+    <string name="sign_in_submitting">Signing in…</string>
+</resources>

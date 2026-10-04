@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Chord" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/surface_100</item>
+    </style>
+    <color name="surface_100">#111316</color>
+</resources>

@@ -293,3 +293,11 @@ describe('shortcodes in text', () => {
     expect(inl('`:smile:`', { shortcodes: codes })).toEqual([{ t: 'code', v: ':smile:' }]);
   });
 });
+
+describe('speed', () => {
+  it('reads a message full of unclosed markers quickly', () => {
+    const start = performance.now();
+    parseMarkdown('*a '.repeat(3000));
+    expect(performance.now() - start).toBeLessThan(2000);
+  });
+});

@@ -437,8 +437,41 @@ export interface StorageInfo {
 /** The app version and the system (Rust `AppInfo`). */
 export interface AppInfo {
   version: string;
+  /** The short hash of the commit that the app was built from. */
+  commit: string;
+  /** The build number. A newer commit has a higher number (docs/updates.md). */
+  build: number;
+  /** The channel the build came from. A dev build does not update itself. */
+  channel: BuildChannel;
   os: string;
   arch: string;
+}
+
+/** The update channels that the user can pick. */
+export type UpdateChannel = 'stable' | 'beta' | 'nightly';
+/** The channel of a build: a channel, or `dev` for a build that is not a release. */
+export type BuildChannel = UpdateChannel | 'dev';
+
+/** An update found by a check (Rust `UpdateInfo`). */
+export interface UpdateInfo {
+  /** The version without the build number, for example `0.3.0-beta.2`. */
+  version: string;
+  build: number;
+  channel: string | null;
+  commit: string | null;
+  /** Markdown. */
+  notes: string | null;
+  pubDate: string | null;
+  releaseUrl: string | null;
+  /** False for a .deb or .rpm install on Linux: link to `releaseUrl` instead. */
+  canInstall: boolean;
+}
+
+/** The download progress of an update (Rust `UpdateProgress`). */
+export interface UpdateProgress {
+  downloaded: number;
+  /** Null when the server does not send the size. */
+  total: number | null;
 }
 
 /** The preview of a link (Rust `LinkPreview`). Every field but `url` can be null. */

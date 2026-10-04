@@ -203,6 +203,11 @@ pub(crate) enum Command {
         owner: BareJid,
         reply: oneshot::Sender<Result<Option<Avatar>, ClientError>>,
     },
+    /// `Get` for a view key: a hash or an owner key (see `load_by_key`).
+    GetKey {
+        key: String,
+        reply: oneshot::Sender<Result<Option<Avatar>, ClientError>>,
+    },
     Refresh {
         owner: BareJid,
         reply: Reply,
@@ -232,6 +237,17 @@ impl ClientHandle {
     pub async fn avatar(&self, owner: BareJid) -> Result<Option<Avatar>, ClientError> {
         let (reply, answer) = oneshot::channel();
         self.feature(FeatureCommand::Avatars(Command::Get { owner, reply }))?;
+        answer.await.map_err(|_| ClientError::ActorGone)?
+    }
+
+    /// The stored avatar for a view key, or `None`. `key` is what a view item carries or
+    /// an owner key: an avatar hash (40 hex digits, as in `TimelineItem.avatar`), a bare
+    /// JID, `room@service/nick` for an occupant, or `service/node` for a space. See
+    /// `load_by_key`. It reads the store and needs a session, as `avatar` does. The caller
+    /// checks the syntax of `key`; the store takes it as a plain value.
+    pub async fn avatar_by_key(&self, key: String) -> Result<Option<Avatar>, ClientError> {
+        let (reply, answer) = oneshot::channel();
+        self.feature(FeatureCommand::Avatars(Command::GetKey { key, reply }))?;
         answer.await.map_err(|_| ClientError::ActorGone)?
     }
 
@@ -310,6 +326,35 @@ pub fn load_key(store: &Store, account_id: i64, owner: &str) -> rusqlite::Result
         .query_row(
             "SELECT hash, mime, data FROM avatars WHERE account_id = ?1 AND owner = ?2",
             params![account_id, owner],
+            |row| {
+                Ok(Avatar {
+                    hash: row.get(0)?,
+                    mime: row.get(1)?,
+                    data: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+}
+
+/// True if `key` is an avatar hash: 40 hex digits.
+pub fn is_hash(key: &str) -> bool {
+    key.len() == 40 && key.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The stored avatar for a view key. A hash finds the image with that hash (only one
+/// whose data is stored, as the views show a hash only then). Any other key is an owner
+/// key, as in `load_key`. This is what the desktop does for the `chord-avatar` scheme.
+pub fn load_by_key(store: &Store, account_id: i64, key: &str) -> rusqlite::Result<Option<Avatar>> {
+    if !is_hash(key) {
+        return load_key(store, account_id, key);
+    }
+    store
+        .conn()
+        .query_row(
+            "SELECT hash, mime, data FROM avatars
+             WHERE account_id = ?1 AND hash = ?2 AND data IS NOT NULL LIMIT 1",
+            params![account_id, key.to_ascii_lowercase()],
             |row| {
                 Ok(Avatar {
                     hash: row.get(0)?,
@@ -942,6 +987,11 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
                 .map_err(|e| ClientError::Invalid(format!("store error: {e}")));
             let _ = reply.send(result);
         }
+        Command::GetKey { key, reply } => {
+            let result = load_by_key(ctx.store, ctx.account_id, &key)
+                .map_err(|e| ClientError::Invalid(format!("store error: {e}")));
+            let _ = reply.send(result);
+        }
         Command::Refresh { owner, reply } => fetch_metadata(ctx, owner, Some(reply)),
         Command::VCardPhoto { image, reply } => {
             let image = match image {
@@ -1121,7 +1171,7 @@ fn publish_iq(node: &str, item: Item) -> Iq {
 /// A command while no session is up. Answer each reply channel with an error.
 pub(crate) fn offline(command: Command) {
     match command {
-        Command::Get { reply, .. } => {
+        Command::Get { reply, .. } | Command::GetKey { reply, .. } => {
             let _ = reply.send(Err(ClientError::NotConnected));
         }
         Command::Refresh { reply, .. }
@@ -1551,6 +1601,36 @@ mod tests {
         h.answer(is_data, Some(data_result(image)));
         assert_eq!(stored(&h).unwrap().data.as_deref(), Some(&image[..]));
         assert!(h.take_dirty().contains(&ViewKey::Timeline(bob())));
+    }
+
+    #[test]
+    fn a_view_key_finds_an_avatar_by_hash_or_by_owner() {
+        let h = Harness::new();
+        let image = b"\x89PNG\r\n\x1a\nimage bytes";
+        let hash = sha1_hex(image);
+        // An occupant and a space have owner keys with a slash.
+        for owner in ["room@muc.example/nick", "pubsub.example/node"] {
+            store_metadata(&h.store, h.account_id, owner, &hash, Some("image/png")).unwrap();
+            // No data yet: a hash does not find it, an owner key finds the hash only.
+            assert_eq!(load_by_key(&h.store, h.account_id, &hash).unwrap(), None);
+            assert_eq!(
+                load_by_key(&h.store, h.account_id, owner)
+                    .unwrap()
+                    .unwrap()
+                    .data,
+                None
+            );
+            store_data(&h.store, h.account_id, owner, &hash, image).unwrap();
+            let by_owner = load_by_key(&h.store, h.account_id, owner).unwrap().unwrap();
+            assert_eq!(by_owner.data.as_deref(), Some(&image[..]));
+            let by_hash = load_by_key(&h.store, h.account_id, &hash.to_uppercase()).unwrap();
+            assert_eq!(by_hash.unwrap().data.as_deref(), Some(&image[..]));
+            remove(&h.store, h.account_id, owner).unwrap();
+        }
+        assert_eq!(
+            load_by_key(&h.store, h.account_id, "nobody@example/x").unwrap(),
+            None
+        );
     }
 
     #[test]

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_offline">Offline. Reconnecting…</string>
+    <string name="connection_signed_out">Signed out by the server. Tap to sign in again.</string>
+    <string name="connection_dot_connected">Connected</string>
+</resources>

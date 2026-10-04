@@ -27,6 +27,7 @@ You need Rust, Node 22, and the [Tauri prerequisites](https://v2.tauri.app/start
 | `chord-desktop` | Desktop app (Tauri and Svelte) |
 | `chord-cli` | Command-line client |
 | `chord-ffi` | Kotlin bindings |
+| `chord-android` | Android app (Kotlin and Compose) |
 
 Check changes with `./dev/quick-check.sh`.
 

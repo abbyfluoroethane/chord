@@ -926,7 +926,8 @@ mod tests {
 
     #[test]
     fn the_fetches_have_a_cap_of_four() {
-        assert_eq!(fetch_permits().available_permits(), MAX_PARALLEL_FETCHES);
+        // Other tests can hold a permit at the same time, so the count can be lower, never higher.
+        assert!(fetch_permits().available_permits() <= MAX_PARALLEL_FETCHES);
         assert_eq!(MAX_PARALLEL_FETCHES, 4);
     }
 }

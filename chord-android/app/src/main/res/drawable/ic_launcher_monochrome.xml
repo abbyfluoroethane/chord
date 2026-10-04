@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mark in one colour, for themed icons (Android 13+). Heavier strokes so it reads small. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="32"
+        android:pivotY="32"
+        android:scaleX="1.08"
+        android:scaleY="1.08"
+        android:translateX="22"
+        android:translateY="22">
+        <path
+            android:pathData="M32,10 A22,22 0 1,1 32,54 A22,22 0 1,1 32,10 Z"
+            android:strokeWidth="5"
+            android:strokeColor="#FFFFFF" />
+        <path
+            android:pathData="M11.3,39.5 L39.5,11.3"
+            android:strokeWidth="5"
+            android:strokeLineCap="round"
+            android:strokeColor="#FFFFFF" />
+        <path
+            android:pathData="M5.3,39.5 A6,6 0 1,1 17.3,39.5 A6,6 0 1,1 5.3,39.5 Z"
+            android:fillColor="#FFFFFF" />
+        <path
+            android:pathData="M33.5,11.3 A6,6 0 1,1 45.5,11.3 A6,6 0 1,1 33.5,11.3 Z"
+            android:fillColor="#FFFFFF" />
+    </group>
+</vector>

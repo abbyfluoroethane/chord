@@ -1,0 +1,336 @@
+import org.gradle.process.ExecOperations
+import java.util.Properties
+import javax.inject.Inject
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.roborazzi)
+}
+
+// The Rust workspace is the parent of chord-android.
+val repoRoot: File = rootDir.parentFile
+
+// Version. A release passes it: -Pchord.version=0.3.0, 0.3.0-beta.2 or 0.3.0-nightly.20261004
+// (dev/release.sh and the nightly workflow). Without it, a build takes the last android-v tag and
+// adds "+dev". No tag (a shallow CI clone or a source archive) gives 0.0.0+dev.
+// See docs/releasing.md. providers.exec is configuration-cache safe.
+fun gitOutput(vararg args: String): Provider<String> =
+    providers.exec {
+        commandLine("git", *args)
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { it.trim() }
+val gitShortSha: String = gitOutput("rev-parse", "--short", "HEAD").orNull.orEmpty()
+val gitCommitTime: Long = gitOutput("show", "-s", "--format=%ct", "HEAD").orNull?.toLongOrNull() ?: 0L
+val releaseVersion: String? = (providers.gradleProperty("chord.version").orNull ?: System.getenv("CHORD_VERSION"))
+    ?.takeIf { it.isNotBlank() }
+val chordVersion: String = releaseVersion
+    ?: gitOutput("describe", "--tags", "--abbrev=0", "--match", "android-v*").orNull
+        ?.removePrefix("android-v")?.takeIf { it.isNotEmpty() }?.let { "$it+dev" }
+    ?: "0.0.0+dev"
+
+/** The update channel of a version: stable, beta, nightly, or dev for a build that is not a release. */
+fun channelOf(version: String): String {
+    val m = Regex("""^\d+\.\d+\.\d+(?:-(beta\.\d+|nightly\.\d{8}))?(\+[0-9A-Za-z.-]+)?$""").matchEntire(version)
+        ?: throw GradleException("Version $version is not MAJOR.MINOR.PATCH, -beta.N or -nightly.YYYYMMDD")
+    return when {
+        m.groupValues[2].contains("dev") -> "dev"
+        m.groupValues[1].startsWith("beta") -> "beta"
+        m.groupValues[1].startsWith("nightly") -> "nightly"
+        else -> "stable"
+    }
+}
+val chordChannel: String = channelOf(chordVersion)
+
+/**
+ * The build number, which is also the versionCode: the minutes from 2026-01-01 to the commit,
+ * times 4, plus 2 for a release, 1 for a beta, 0 for a nightly or a dev build. A newer commit
+ * always has a higher number, in any channel, so a phone can move between the update channels.
+ * A release made from the same commit as a beta or a nightly is still an update.
+ * The same rule is in chord-desktop/src-tauri/build.rs.
+ */
+fun buildNumberOf(commitTime: Long, channel: String): Int {
+    val minutes = ((commitTime - 1_767_225_600L) / 60).coerceAtLeast(0)
+    val slot = when (channel) { "stable" -> 2; "beta" -> 1; else -> 0 }
+    return Math.toIntExact(minutes * 4 + slot)
+}
+val chordBuild: Int = buildNumberOf(gitCommitTime, chordChannel)
+
+// Release signing. Read keystore.properties (gitignored) or the CHORD_KEYSTORE_* variables for CI.
+// Without either, the release build stays unsigned.
+val keystoreProps = Properties().apply {
+    file("../keystore.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+fun signingValue(prop: String, env: String): String? =
+    keystoreProps.getProperty(prop)?.takeIf { it.isNotBlank() } ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+val releaseStoreFile: String? = signingValue("storeFile", "CHORD_KEYSTORE_FILE")
+val releaseStorePassword: String? = signingValue("storePassword", "CHORD_KEYSTORE_PASSWORD")
+val releaseKeyAlias: String? = signingValue("keyAlias", "CHORD_KEY_ALIAS")
+val releaseKeyPassword: String? = signingValue("keyPassword", "CHORD_KEY_PASSWORD")
+val canSignRelease: Boolean =
+    listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null } &&
+        File(releaseStoreFile!!).isFile
+
+// ABIs for the native core. Override with -Pchord.abis=x86_64 for a fast emulator-only build.
+val rustAbis: List<String> =
+    (findProperty("chord.abis") as String? ?: "arm64-v8a,x86_64").split(",").map { it.trim() }
+
+/** Builds chord-ffi with cargo-ndk and copies one libchord_ffi.so per ABI to [outputDir]. */
+abstract class CargoNdkTask : DefaultTask() {
+    @get:Inject abstract val exec: ExecOperations
+    @get:Input abstract val abis: ListProperty<String>
+    @get:Input abstract val minSdk: Property<Int>
+    @get:Internal abstract val workspace: DirectoryProperty
+    @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE) abstract val sources: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun build() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        exec.exec {
+            workingDir = workspace.get().asFile
+            commandLine(
+                buildList {
+                    addAll(listOf("cargo", "ndk"))
+                    abis.get().forEach { addAll(listOf("-t", it)) }
+                    addAll(listOf("-P", minSdk.get().toString(), "-o", out.absolutePath))
+                    addAll(listOf("build", "-p", "chord-ffi", "--profile", "android"))
+                },
+            )
+        }
+    }
+}
+
+/**
+ * Generates the Kotlin bindings with uniffi-bindgen. It reads the unstripped library in the
+ * cargo target directory: cargo-ndk strips the copy in jniLibs, and that removes the UniFFI
+ * metadata.
+ */
+abstract class UniffiBindgenTask : DefaultTask() {
+    @get:Inject abstract val exec: ExecOperations
+    @get:Internal abstract val workspace: DirectoryProperty
+    // Only an input to order this task after cargoNdk and rerun it when the library changes.
+    @get:InputDirectory @get:PathSensitive(PathSensitivity.RELATIVE) abstract val nativeLibs: DirectoryProperty
+    @get:Input abstract val rustTarget: Property<String>
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        val targetDir = System.getenv("CARGO_TARGET_DIR")?.let(::File) ?: workspace.get().asFile.resolve("target")
+        val lib = targetDir.resolve("${rustTarget.get()}/android/libchord_ffi.so")
+        exec.exec {
+            workingDir = workspace.get().asFile
+            commandLine(
+                "cargo", "run", "-q", "-p", "chord-ffi", "--bin", "uniffi-bindgen", "--",
+                "generate", "--library", lib.absolutePath, "--language", "kotlin",
+                "--no-format", "--out-dir", out.absolutePath,
+            )
+        }
+    }
+}
+
+val rustSources = files(
+    repoRoot.resolve("Cargo.toml"),
+    repoRoot.resolve("Cargo.lock"),
+    fileTree(repoRoot.resolve("chord-core")) { exclude("target/**") },
+    fileTree(repoRoot.resolve("chord-ffi")) { exclude("target/**", "kotlin-test/**") },
+    fileTree(repoRoot.resolve("vendor")),
+)
+
+val cargoNdk = tasks.register<CargoNdkTask>("cargoNdk") {
+    abis.set(rustAbis)
+    minSdk.set(26)
+    workspace.set(repoRoot)
+    sources.from(rustSources)
+    outputDir.set(layout.buildDirectory.dir("rust/jniLibs"))
+}
+
+val uniffiBindgen = tasks.register<UniffiBindgenTask>("uniffiBindgen") {
+    workspace.set(repoRoot)
+    nativeLibs.set(cargoNdk.flatMap { it.outputDir })
+    rustTarget.set(
+        when (rustAbis.first()) {
+            "arm64-v8a" -> "aarch64-linux-android"
+            "x86_64" -> "x86_64-linux-android"
+            else -> error("unsupported ABI: ${rustAbis.first()}")
+        },
+    )
+    outputDir.set(layout.buildDirectory.dir("generated/uniffi"))
+}
+
+android {
+    namespace = "space.foid.chord"
+    compileSdk = 37
+    // The same NDK builds the core (cargo-ndk) and strips the libraries in the APK.
+    ndkVersion = "29.0.14206865"
+
+    defaultConfig {
+        applicationId = "space.foid.chord"
+        // Open question in the spec. 26 is the proposal.
+        minSdk = 26
+        targetSdk = 36
+        versionCode = chordBuild
+        versionName = chordVersion
+        // The commit of the build, for the About page and bug reports.
+        buildConfigField("String", "COMMIT", "\"${gitShortSha.ifEmpty { "unknown" }}\"")
+        // The channel that the build came from: stable, beta, nightly or dev.
+        buildConfigField("String", "CHANNEL", "\"$chordChannel\"")
+        // The in-app updater. A store build (Play, F-Droid) turns it off: -Pchord.updater=false.
+        buildConfigField(
+            "boolean", "UPDATER",
+            (providers.gradleProperty("chord.updater").orNull?.toBooleanStrictOrNull() ?: true).toString(),
+        )
+    }
+
+    // One APK per ABI and a universal one. This replaces ndk.abiFilters, which conflicts with splits.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include(*rustAbis.toTypedArray())
+            isUniversalApk = true
+        }
+    }
+
+    signingConfigs {
+        if (canSignRelease) {
+            create("release") {
+                storeFile = File(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (canSignRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "WARNING: no release signing config. The release APKs are unsigned and cannot be installed. " +
+                        "Run dev/android-keystore.sh, or set the CHORD_KEYSTORE_FILE, CHORD_KEYSTORE_PASSWORD, " +
+                        "CHORD_KEY_ALIAS and CHORD_KEY_PASSWORD variables.",
+                )
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // Robolectric reads FileDescriptor internals. JDK 17+ hides them.
+                it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--add-opens=java.base/java.io=ALL-UNNAMED")
+                // One time zone and locale everywhere, so a screenshot with a time looks the same on CI.
+                it.systemProperty("user.timezone", "UTC")
+                it.systemProperty("user.language", "en")
+                it.systemProperty("user.country", "US")
+                it.maxHeapSize = "2g"
+            }
+        }
+    }
+}
+
+// -Pchord.prebuilt=<dir> skips cargo and takes <dir>/jniLibs and <dir>/uniffi from an
+// earlier build. Use it for UI work, so a worktree does not rebuild the core.
+// ./gradlew exportPrebuilt writes such a directory.
+val prebuilt: File? = (findProperty("chord.prebuilt") as String?)?.let(::File)
+
+androidComponents {
+    onVariants { variant ->
+        if (prebuilt != null) {
+            variant.sources.jniLibs?.addStaticSourceDirectory(prebuilt.resolve("jniLibs").path)
+            variant.sources.kotlin?.addStaticSourceDirectory(prebuilt.resolve("uniffi").path)
+        } else {
+            variant.sources.jniLibs?.addGeneratedSourceDirectory(cargoNdk, CargoNdkTask::outputDir)
+            variant.sources.kotlin?.addGeneratedSourceDirectory(uniffiBindgen, UniffiBindgenTask::outputDir)
+        }
+    }
+}
+
+tasks.register<Sync>("exportPrebuilt") {
+    description = "Copies the built core and bindings to -Pchord.exportTo (default: ../target/android-prebuilt)."
+    from(cargoNdk.flatMap { it.outputDir }) { into("jniLibs") }
+    from(uniffiBindgen.flatMap { it.outputDir }) { into("uniffi") }
+    into((findProperty("chord.exportTo") as String?) ?: repoRoot.resolve("target/android-prebuilt").path)
+}
+
+// The Kotlin part of rustls-platform-verifier must have the same version as the Rust crate
+// rustls-platform-verifier-android. Read it from Cargo.lock, so that the two never differ.
+val rustlsPlatformVerifierVersion: String =
+    repoRoot.resolve("Cargo.lock").readLines().let { lines ->
+        val name = lines.indexOfFirst { it.trim() == "name = \"rustls-platform-verifier-android\"" }
+        check(name >= 0) { "rustls-platform-verifier-android is not in Cargo.lock" }
+        lines.drop(name + 1).first { it.trimStart().startsWith("version = ") }
+            .substringAfter('"').substringBefore('"')
+    }
+
+configurations.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.rustls" && requested.name == "rustls-platform-verifier") {
+            useVersion(rustlsPlatformVerifierVersion)
+        }
+    }
+}
+
+dependencies {
+    // Certificate verification for HTTPS uploads on Android. See docs/android-tls.md.
+    implementation(libs.rustls.platform.verifier)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.lifecycle.process)
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.foundation)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.kotlinx.coroutines.android)
+    // Installs the baseline profiles that the libraries bring, for a faster start.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.androidx.exifinterface)
+    implementation(libs.androidsvg)
+    // The daily update check (space.foid.chord.update).
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation("${libs.jna.get()}@aar")
+    debugImplementation(libs.compose.ui.tooling)
+    debugImplementation(libs.compose.ui.test.manifest)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+}
+
+roborazzi {
+    outputDir.set(file("src/test/screenshots"))
+}

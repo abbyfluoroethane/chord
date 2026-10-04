@@ -80,3 +80,10 @@ panic = "unwind"
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# The Android build (chord-android/app/build.gradle.kts). It is release without strip:
+# uniffi-bindgen reads the UniFFI metadata from the symbols of the library. AGP strips the
+# copy that goes into the APK.
+[profile.android]
+inherits = "release"
+strip = false

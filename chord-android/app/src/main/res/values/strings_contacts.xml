@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="contacts_title">Contacts</string>
+    <string name="contacts_back">Back</string>
+    <string name="contacts_tab_online">Online</string>
+    <string name="contacts_tab_all">All</string>
+    <string name="contacts_tab_pending">Pending</string>
+    <string name="contacts_tab_blocked">Blocked</string>
+    <string name="contacts_tab_add">Add contact</string>
+    <string name="contacts_search">Search</string>
+    <string name="contacts_search_label">Search contacts</string>
+
+    <string name="contacts_group_online">Online — %d</string>
+    <string name="contacts_group_all">All contacts — %d</string>
+    <string name="contacts_group_pending">Pending — %d</string>
+    <string name="contacts_group_blocked">Blocked — %d</string>
+
+    <string name="contacts_empty_online">Nobody is online right now.</string>
+    <string name="contacts_empty_all">You have no contacts yet. Add one with their address.</string>
+    <string name="contacts_empty_pending">You have no requests.</string>
+    <string name="contacts_empty_blocked">You have not blocked anyone.</string>
+    <string name="contacts_empty_search">No one matches that search.</string>
+    <string name="contacts_loading">Loading</string>
+
+    <string name="contacts_line_incoming">Incoming request</string>
+    <string name="contacts_line_outgoing">Outgoing request</string>
+    <string name="contacts_line_blocked">Blocked</string>
+    <string name="contacts_listening">Listening to %s</string>
+
+    <string name="contacts_message">Message</string>
+    <string name="contacts_more">More</string>
+    <string name="contacts_accept">Accept</string>
+    <string name="contacts_accept_add_back">Accept and add back</string>
+    <string name="contacts_ignore">Ignore</string>
+    <string name="contacts_cancel_request">Cancel request</string>
+    <string name="contacts_unblock">Unblock</string>
+
+    <!-- The row menu -->
+    <string name="contacts_menu_rename">Rename contact</string>
+    <string name="contacts_menu_remove">Remove contact</string>
+    <string name="contacts_menu_block">Block</string>
+    <string name="contacts_menu_copy">Copy address</string>
+
+    <string name="contacts_rename_title">Rename contact</string>
+    <string name="contacts_rename_hint">Only you see this name. Leave it empty to use their own name.</string>
+    <string name="contacts_rename_label">Name</string>
+    <string name="contacts_rename_save">Save</string>
+    <string name="contacts_cancel">Cancel</string>
+
+    <string name="contacts_remove_title">Remove %s?</string>
+    <string name="contacts_remove_text">This person leaves your contacts. You will not see when they are online.</string>
+    <string name="contacts_remove_confirm">Remove contact</string>
+    <string name="contacts_block_title">Block %s?</string>
+    <string name="contacts_block_text">They cannot message you or see when you are online.</string>
+    <string name="contacts_block_confirm">Block</string>
+
+    <!-- Add contact -->
+    <string name="contacts_add_title">Add contact</string>
+    <string name="contacts_add_hint">Enter their address, like sam@chord.example.</string>
+    <string name="contacts_add_label">Address</string>
+    <string name="contacts_add_placeholder">name@chord.example</string>
+    <string name="contacts_add_send">Send request</string>
+    <string name="contacts_add_sent">Request sent to %s.</string>
+</resources>

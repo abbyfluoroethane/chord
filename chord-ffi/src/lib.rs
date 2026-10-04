@@ -9,6 +9,8 @@
 //! `cargo run -p chord-ffi --bin uniffi-bindgen -- generate --library
 //! target/debug/libchord_ffi.so --language kotlin --out-dir <dir>`
 
+#[cfg(target_os = "android")]
+mod android;
 mod calls;
 mod client;
 mod error;

@@ -15,6 +15,11 @@ pub fn item_id(rowid: i64) -> String {
 /// Two messages from the same sender within this time form one group.
 pub const GROUP_GAP_MS: i64 = 5 * 60 * 1000;
 
+/// The address without its resource.
+fn bare_address(jid: &str) -> &str {
+    jid.split_once('/').map_or(jid, |(bare, _)| bare)
+}
+
 /// One message, ready to show.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(
@@ -222,9 +227,17 @@ pub(crate) fn query(
             (Some(a), Some(b)) => a == b,
             _ => true,
         };
+        // In a room the resource is the nick, so the full address names the person. In a 1:1
+        // chat the resource names a device or a session, and it changes on each reconnect:
+        // compare the bare address.
         let same_sender_as_previous = same_occupant
             && items.last().is_some_and(|p| {
-                p.sender == row.sender && row.timestamp - p.timestamp < GROUP_GAP_MS
+                let same_person = if row.groupchat {
+                    p.sender == row.sender
+                } else {
+                    bare_address(&p.sender) == bare_address(&row.sender)
+                };
+                same_person && row.timestamp - p.timestamp < GROUP_GAP_MS
             });
         previous_occupant = row.occupant_id.clone();
         let reply_to = match &row.reply_to {
@@ -502,6 +515,45 @@ mod tests {
             Some("anon-hash")
         );
         assert_eq!(occupant_avatar_hash(&q, room, "nobody").unwrap(), None);
+    }
+
+    #[test]
+    fn a_new_resource_of_the_same_peer_stays_in_the_group() {
+        let store = Store::open_in_memory().unwrap();
+        let account = BareJid::new("alice@chord.localhost").unwrap();
+        let account_id = ensure_account(store.conn(), account.as_str()).unwrap();
+        let q = QueryCtx {
+            store: &store,
+            account_id,
+            account: &account,
+        };
+        let peer = "bob@chord.localhost";
+        // Each reconnect gives bob a new resource.
+        for (key, sender, at) in [
+            ("a", "bob@chord.localhost/phone-1", 1_000),
+            ("b", "bob@chord.localhost/phone-2", 2_000),
+            ("c", "carol@chord.localhost/x", 3_000),
+        ] {
+            insert_message(
+                store.conn(),
+                account_id,
+                &NewMessage {
+                    kind: MessageKind::Chat,
+                    key_kind: KeyKind::OriginId,
+                    key,
+                    direction: Direction::In,
+                    peer,
+                    sender,
+                    body: "hi",
+                    timestamp: Some(at),
+                    extras: MessageExtras::default(),
+                },
+            )
+            .unwrap();
+        }
+        let items = query(&q, peer, 50).unwrap();
+        let grouped: Vec<bool> = items.iter().map(|i| i.same_sender_as_previous).collect();
+        assert_eq!(grouped, [false, true, false]);
     }
 
     #[test]

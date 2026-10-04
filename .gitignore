@@ -8,3 +8,10 @@ chord-desktop/node_modules/
 chord-desktop/build/
 chord-desktop/.svelte-kit/
 chord-desktop/build-preview/
+chord-android/keystore.properties
+keystore.properties
+*.jks
+*.keystore
+
+# dev/releases.py
+__pycache__/

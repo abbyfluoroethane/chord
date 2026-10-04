@@ -1,0 +1,146 @@
+name: Nightly
+
+# Each night, builds main when it changed since the last nightly and CI passed on it. Publishes
+# to abbyfluoroethane/chord-nightly and to the nightly channel of the in-app updaters, and keeps
+# the last 14 nightlies of each app. See docs/updates.md.
+#
+# Android and Linux build every night. Windows and macOS build on Sundays, or when "Run workflow"
+# asks for them: their runners cost more while this repository is private.
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if main did not change or CI did not pass"
+        type: boolean
+        default: false
+      all_desktop:
+        description: "Build Windows and macOS too"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      android: ${{ steps.g.outputs.android }}
+      desktop: ${{ steps.g.outputs.desktop }}
+      android_version: ${{ steps.g.outputs.android_version }}
+      desktop_version: ${{ steps.g.outputs.desktop_version }}
+      platforms: ${{ steps.g.outputs.platforms }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: g
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+          ALL_DESKTOP: ${{ inputs.all_desktop }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD); short=$(git rev-parse --short HEAD)
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success" -q '.total_count')
+          echo "main is $short, CI passed: $passed"
+          # The commit of the last nightly, from the manifest. None yet: build.
+          last() { curl -fsS "https://raw.githubusercontent.com/abbyfluoroethane/$1/main/$2" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])' 2>/dev/null || true; }
+          want() { # want <last commit> <app dir>
+            if [[ "$FORCE" == true ]]; then echo true; return; fi
+            if [[ "$passed" == 0 ]]; then echo false; return; fi
+            [[ "$1" != "$short" ]] && echo true || echo false
+          }
+          echo "android=$(want "$(last chord-android channels/nightly.json)")" >> "$GITHUB_OUTPUT"
+          echo "desktop=$(want "$(last chord-desktop channels/nightly/linux-x86_64.json)")" >> "$GITHUB_OUTPUT"
+          echo "android_version=$(dev/releases.py nightly-version android)" >> "$GITHUB_OUTPUT"
+          echo "desktop_version=$(dev/releases.py nightly-version desktop)" >> "$GITHUB_OUTPUT"
+          if [[ "$ALL_DESKTOP" == true || "$(date -u +%u)" == 7 ]]; then
+            echo 'platforms=["ubuntu-22.04","windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'platforms=["ubuntu-22.04"]' >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+  android:
+    needs: gate
+    if: needs.gate.outputs.android == 'true'
+    uses: ./.github/workflows/build-android.yml
+    with:
+      version: ${{ needs.gate.outputs.android_version }}
+    secrets: inherit
+
+  desktop:
+    needs: gate
+    if: needs.gate.outputs.desktop == 'true'
+    uses: ./.github/workflows/build-desktop.yml
+    with:
+      version: ${{ needs.gate.outputs.desktop_version }}
+      platforms: ${{ needs.gate.outputs.platforms }}
+    secrets: inherit
+
+  publish:
+    needs: [gate, android, desktop]
+    # Publish what built, even if the other app failed.
+    if: always() && (needs.android.result == 'success' || needs.desktop.result == 'success')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.CHORD_RELEASES_TOKEN }}
+      REPO: abbyfluoroethane/chord-nightly
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Notes
+        run: |
+          [[ -n "$GH_TOKEN" ]] || { echo "::error::The CHORD_RELEASES_TOKEN secret is missing."; exit 1; }
+          {
+            echo "A nightly build of \`main\`. It can break."
+            echo
+            git log -10 --no-merges --format='- %s'
+            echo
+            echo "Built from commit \`$(git rev-parse --short HEAD)\` of the Chord source."
+          } > app-notes.md
+      - name: Android
+        if: needs.android.result == 'success'
+        env:
+          VERSION: ${{ needs.gate.outputs.android_version }}
+        run: |
+          set -euo pipefail
+          tag="android-v$VERSION+$(git rev-parse --short HEAD)"
+          encoded=$(printf '%s' "$tag" | sed 's/+/%2B/g')
+          dist=artifacts/android
+          (cd "$dist" && sha256sum -- *.apk > SHA256SUMS)
+          { cat app-notes.md; echo; echo '```'; cat "$dist/SHA256SUMS"; echo '```'; } > notes.md
+          gh release create "$tag" -R "$REPO" --title "Chord for Android $VERSION" --notes-file notes.md --prerelease "$dist"/*
+          dev/releases.py android-manifest "$VERSION" HEAD "https://github.com/$REPO/releases/tag/$encoded" \
+            "https://github.com/$REPO/releases/download/$encoded" app-notes.md "$dist" > android-manifest.json
+          dev/releases.py publish android nightly android-manifest.json
+          dev/releases.py prune "$REPO" android- 14
+      - name: Desktop
+        if: needs.desktop.result == 'success'
+        env:
+          VERSION: ${{ needs.gate.outputs.desktop_version }}
+        run: |
+          set -euo pipefail
+          tag="desktop-v$VERSION+$(git rev-parse --short HEAD)"
+          encoded=$(printf '%s' "$tag" | sed 's/+/%2B/g')
+          mkdir dist assets
+          cp artifacts/desktop-*/* dist/
+          find dist -type f ! -name 'updater-*.json' -exec cp {} assets/ \;
+          (cd assets && sha256sum -- * > SHA256SUMS)
+          { cat app-notes.md; echo; echo '```'; cat assets/SHA256SUMS; echo '```'; } > notes.md
+          gh release create "$tag" -R "$REPO" --title "Chord Desktop $VERSION" --notes-file notes.md --prerelease assets/*
+          dev/releases.py desktop-manifests "$VERSION" HEAD "https://github.com/$REPO/releases/tag/$encoded" \
+            "https://github.com/$REPO/releases/download/$encoded" app-notes.md dist manifests
+          dev/releases.py publish desktop nightly manifests
+          dev/releases.py prune "$REPO" desktop- 14
