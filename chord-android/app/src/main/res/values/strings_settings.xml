@@ -110,7 +110,6 @@
 
     <!-- About -->
     <string name="settings_about">About</string>
-    <string name="settings_version">Version %1$s</string>
     <string name="settings_website">Website and source code</string>
     <string name="settings_licenses">Open source licences</string>
 

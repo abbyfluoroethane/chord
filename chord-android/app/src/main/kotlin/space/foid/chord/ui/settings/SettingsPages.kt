@@ -482,22 +482,8 @@ internal fun AdvancedPage(connection: SettingsConnection, a: SettingsActions) {
 @Composable
 internal fun AboutPage(version: String, licenses: List<String>, licenseText: (String) -> String, a: SettingsActions) {
     val c = Chord.colors
-    Group {
-        Block {
-            Text("Chord", style = ChordType.title, color = c.ink)
-            Text(stringResource(R.string.settings_version, version), style = ChordType.bodySmall, color = c.inkMuted, modifier = Modifier.testTag("settings_version"))
-            Text(
-                stringResource(R.string.settings_website),
-                style = ChordType.body.copy(textDecoration = TextDecoration.Underline),
-                color = c.brandInk,
-                modifier = Modifier
-                    .heightIn(min = 40.dp)
-                    .clickable(role = Role.Button, onClick = a.onOpenWebsite)
-                    .padding(vertical = ChordSpace.s2)
-                    .testTag("settings_website"),
-            )
-        }
-    }
+    AboutHeader(version, space.foid.chord.BuildConfig.CHANNEL, a.onOpenWebsite)
+    UpdatesSection()
     Group(stringResource(R.string.settings_licenses)) {
         licenses.forEachIndexed { i, name ->
             if (i > 0) RowDivider()

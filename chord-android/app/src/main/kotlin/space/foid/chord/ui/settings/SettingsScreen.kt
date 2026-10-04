@@ -58,6 +58,7 @@ import space.foid.chord.R
 import space.foid.chord.secure.KeystoreCredentialStore
 import space.foid.chord.ui.theme.Chord
 import space.foid.chord.ui.theme.ChordSpace
+import space.foid.chord.update.OpenUpdatesRequest
 import space.foid.chord.viewmodel.ClientSettingsApi
 import space.foid.chord.viewmodel.SettingsState
 import space.foid.chord.viewmodel.SettingsViewModel
@@ -174,6 +175,14 @@ fun SettingsScreen(onBack: () -> Unit, onSignedOut: () -> Unit, modifier: Modifi
     }
 
     var page by rememberSaveable { mutableStateOf(SettingsPage.Home) }
+    // The update notification opens the About page.
+    val openUpdates by OpenUpdatesRequest.pending.collectAsState()
+    LaunchedEffect(openUpdates) {
+        if (openUpdates) {
+            page = SettingsPage.About
+            OpenUpdatesRequest.consume()
+        }
+    }
     val uriHandler = LocalUriHandler.current
     val licenses = remember { licenseNames(context) }
     SettingsContent(

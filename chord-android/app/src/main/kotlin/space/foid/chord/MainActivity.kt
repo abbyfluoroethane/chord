@@ -39,6 +39,7 @@ import space.foid.chord.ui.components.LocalShowPresence
 import space.foid.chord.ui.settings.PrefsSettingsStore
 import space.foid.chord.ui.join.XmppLinkInbox
 import space.foid.chord.ui.theme.ChordTheme
+import space.foid.chord.update.OpenUpdatesRequest
 
 /** The one activity. It restores the session behind the system splash, then shows the nav host. */
 class MainActivity : ComponentActivity() {
@@ -61,6 +62,7 @@ class MainActivity : ComponentActivity() {
         openPeer = peerOf(intent)
         // A link from outside the app. After a rotation the intent is the same one: skip it.
         if (savedInstanceState == null) xmppUriOf(intent)?.let(XmppLinkInbox::offer)
+        if (savedInstanceState == null && OpenUpdatesRequest.matches(intent)) OpenUpdatesRequest.offer()
 
         // The saved account opens offline (ChordApp.startup). The login runs in the background.
         val app = application as ChordApp
@@ -122,6 +124,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         peerOf(intent)?.let { openPeer = it }
         xmppUriOf(intent)?.let(XmppLinkInbox::offer)
+        if (OpenUpdatesRequest.matches(intent)) OpenUpdatesRequest.offer()
     }
 
     /** The `xmpp:` URI of a VIEW intent, or null. The main screen decides what it means. */

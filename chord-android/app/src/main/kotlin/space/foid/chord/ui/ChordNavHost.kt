@@ -29,6 +29,10 @@ import androidx.navigation.compose.rememberNavController
 import space.foid.chord.notify.rememberNotificationPermission
 import space.foid.chord.ui.screens.MainScreen
 import space.foid.chord.ui.screens.SignInScreen
+import space.foid.chord.update.OpenUpdatesRequest
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.navigation.compose.currentBackStackEntryAsState
 
 private const val SIGN_IN = "sign-in"
 private const val MAIN = "main"
@@ -70,6 +74,16 @@ fun ChordNavHost(startSignedIn: Boolean, openPeer: String?) {
             if (client == null && route != null && route != SIGN_IN && nav.currentBackStackEntry != null) {
                 nav.navigate(SIGN_IN) { popUpTo(0) { inclusive = true }; launchSingleTop = true }
             }
+        }
+    }
+    // The update notification: open the settings, which then show the About page.
+    val openUpdates by OpenUpdatesRequest.pending.collectAsState()
+    val entry by nav.currentBackStackEntryAsState()
+    LaunchedEffect(openUpdates, entry?.destination?.route) {
+        if (!openUpdates) return@LaunchedEffect
+        when (entry?.destination?.route) {
+            MAIN -> nav.navigate(SETTINGS) { launchSingleTop = true }
+            SIGN_IN -> OpenUpdatesRequest.consume()
         }
     }
     NavHost(
