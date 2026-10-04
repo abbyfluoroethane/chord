@@ -4,6 +4,7 @@
 //
 // Migration: the first start after the update copies the old localStorage value into the
 // file. The old key stays, and is read as a fallback for the fields the file lacks.
+import type { UpdateChannel } from '$lib/chord/types';
 import type { DisplayMode } from './types';
 import type { EmojiPackId } from './emojipackids';
 import { live } from './bridge';
@@ -104,6 +105,10 @@ class Prefs {
   signInShow = $state<SignInShow>('last');
   signInStatus = $state('');
 
+  // Updates. The store in updates.svelte.ts reads them.
+  updateChannel = $state<UpdateChannel | ''>('');
+  autoUpdate = $state(true);
+
   load() {
     let legacy: string | null = null;
     try {
@@ -177,7 +182,10 @@ class Prefs {
       autoAwayMinutes: this.autoAwayMinutes,
       // Account
       signInShow: this.signInShow,
-      signInStatus: this.signInStatus
+      signInStatus: this.signInStatus,
+      // Updates
+      updateChannel: this.updateChannel,
+      autoUpdate: this.autoUpdate
     };
   }
 

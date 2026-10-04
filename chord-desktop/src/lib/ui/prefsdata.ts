@@ -1,5 +1,6 @@
 // The shape of the user prefs, and how to read them from saved data. No state here, so the
 // rules are easy to test.
+import type { UpdateChannel } from '$lib/chord/types';
 import type { DisplayMode } from './types';
 import { EMOJI_PACK_IDS, type EmojiPackId } from './emojipackids';
 
@@ -60,6 +61,11 @@ export interface Saved {
   signInShow: SignInShow;
   /** The status text to set at sign-in. Empty keeps the one from the last session. */
   signInStatus: string;
+  // Updates
+  /** The update channel. Empty follows the channel of the installed build. */
+  updateChannel: UpdateChannel | '';
+  /** Check for updates at start and once a day. */
+  autoUpdate: boolean;
 }
 
 export type SignInShow = 'last' | 'chat' | 'away' | 'dnd';
@@ -195,6 +201,10 @@ export function parsePrefs(v: unknown): Partial<Saved> {
     (AUTO_AWAY_MINUTES as readonly number[]).includes(o.autoAwayMinutes)
   )
     out.autoAwayMinutes = o.autoAwayMinutes;
+  // Updates
+  if (o.updateChannel === 'stable' || o.updateChannel === 'beta' || o.updateChannel === 'nightly')
+    out.updateChannel = o.updateChannel;
+  if (typeof o.autoUpdate === 'boolean') out.autoUpdate = o.autoUpdate;
   return out;
 }
 

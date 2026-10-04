@@ -12,6 +12,7 @@
   import ContextMenuHost from './ContextMenuHost.svelte';
   import ForwardModal from './ForwardModal.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
+  import UpdateBanner from './UpdateBanner.svelte';
   import ContactsPage from './ContactsPage.svelte';
   import DmProfile from './DmProfile.svelte';
   import MemberList from './MemberList.svelte';
@@ -39,6 +40,7 @@
   import { pageTitle } from './unread';
   import { handleKey } from './keyactions';
   import { ui } from './ui.svelte';
+  import { updates } from './updates.svelte';
   import { xmppLinks } from './xmpplinks.svelte';
 
   useBehaviour();
@@ -48,6 +50,8 @@
     prefs.load();
     drafts.load();
     app.loadLocal();
+    // Check for updates now and each day, when the user allows it. After prefs.load.
+    const stopUpdates = updates.start();
     // Tell the server when nobody looks at the window (XEP-0352).
     if (live) {
       // Tell the contacts when nobody used Chord for a while (XEP-0319).
@@ -72,8 +76,10 @@
       return () => {
         stopState();
         idleWatch?.stop();
+        stopUpdates();
       };
     }
+    return stopUpdates;
   });
 
   let idleWatch: ReturnType<typeof watchIdle> | undefined;
@@ -132,6 +138,7 @@
 
 <div class="app">
   <ConnectionBanner />
+  <UpdateBanner />
   <div class="cols">
     <CircleRail />
     <ChannelSidebar />
