@@ -458,6 +458,8 @@ fun TimelineContent(
     error: String? = null,
     listState: LazyListState = rememberLazyListState(),
     onRowComposed: ((String) -> Unit)? = null,
+    /** Shows the "Jump to present" button when the list is scrolled up. Off for the showcase screenshots. */
+    jumpToPresent: Boolean = true,
 ) {
     val colors = Chord.colors
     Column(modifier.fillMaxSize().background(colors.surface100)) {
@@ -529,7 +531,7 @@ fun TimelineContent(
             }
 
             val away by remember(listState) { derivedStateOf { listState.firstVisibleItemIndex >= 2 } }
-            if (away) {
+            if (away && jumpToPresent) {
                 val scope = androidx.compose.runtime.rememberCoroutineScope()
                 JumpToPresent(
                     onClick = { scope.launch { listState.animateScrollToItem(0) } },

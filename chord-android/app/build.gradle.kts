@@ -245,6 +245,8 @@ android {
                 it.systemProperty("user.language", "en")
                 it.systemProperty("user.country", "US")
                 it.maxHeapSize = "2g"
+                // -Pchord.showcase=true turns on ShowcaseScreenshotTest (the website screenshots).
+                it.systemProperty("chord.showcase", providers.gradleProperty("chord.showcase").orElse("false").get())
             }
         }
     }

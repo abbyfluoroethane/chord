@@ -185,6 +185,8 @@ fun ChannelDrawerContent(
     onHomeLongPress: () -> Unit = {},
     onAddSpace: () -> Unit = {},
     onCreateChannel: (() -> Unit)? = null,
+    /** The channels to show as muted. The app does not pass it yet; the showcase screenshots do. */
+    mutedJids: Set<String> = emptySet(),
 ) {
     val c = Chord.colors
     val isHome = scope is ChannelScope.Home
@@ -302,6 +304,7 @@ fun ChannelDrawerContent(
                                     else rememberAvatarBitmap(bareJid(ch.jid), null, 36.dp),
                                 unread = ch.unread.toInt(),
                                 mentions = 0,
+                                muted = ch.jid in mutedJids,
                                 subtitle = if (isHome) groupSubtitle(ch) else null,
                                 modifier = Modifier.testTag("channel_item_${bareJid(ch.jid)}"),
                             )
