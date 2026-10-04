@@ -1,8 +1,9 @@
 name: Release
 
-# A tag desktop-v<version> builds the desktop app on Linux, Windows and macOS, publishes it to
-# the release repository abbyfluoroethane/chord-desktop, and updates the channel manifests for
-# the in-app updater. dev/release.sh makes the tag. Android releases are built and published by
+# A tag desktop-v<version> builds the desktop app for Windows and macOS and as a Flatpak for
+# Linux, publishes it to the release repository abbyfluoroethane/chord-desktop, and updates the
+# channel manifests for the in-app updater. The Flatpak also goes to the self-hosted Flatpak
+# repository on the stable or beta branch, until Chord is on Flathub. dev/release.sh makes the tag. Android releases are built and published by
 # dev/release.sh. See docs/releasing.md and docs/updates.md.
 #
 # "Run workflow" builds without a tag and without publishing, to check the build.
@@ -11,6 +12,7 @@ name: Release
 #   CHORD_RELEASES_TOKEN   A fine-grained token with "Contents: read and write" on the release
 #                    repositories only. GITHUB_TOKEN cannot write to another repository.
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   The updater key.
+#   CHORD_FLATPAK_GPG_KEY   Signs the Flatpak repository.
 #   CHORD_KLIPY_KEY  The GIF search key (docs/gifs.md). Without it, GIF search is off.
 
 on:
@@ -30,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      branch: ${{ steps.v.outputs.branch }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
       - id: v
@@ -46,6 +49,7 @@ jobs:
             echo "::error::$version is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N"; exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-beta.* ]]; then echo "branch=beta"; else echo "branch=stable"; fi >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
   build:
@@ -53,11 +57,21 @@ jobs:
     uses: ./.github/workflows/build-desktop.yml
     with:
       version: ${{ needs.version.outputs.version }}
-      platforms: '["ubuntu-22.04","windows-latest","macos-latest"]'
+      platforms: '["windows-latest","macos-latest"]'
+    secrets: inherit
+
+  # A "Run workflow" test build would publish the Flatpak, so only a tag builds it.
+  flatpak:
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    uses: ./.github/workflows/build-flatpak.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      branch: ${{ needs.version.outputs.branch }}
     secrets: inherit
 
   publish:
-    needs: [version, build]
+    needs: [version, build, flatpak]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -66,7 +80,6 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          pattern: desktop-*
           path: dist
           merge-multiple: true
       - name: Publish to abbyfluoroethane/chord-desktop
@@ -92,7 +105,7 @@ jobs:
           {
             cat app-notes.md
             echo
-            echo "Linux: .AppImage, .deb or .rpm. Windows: the -setup.exe. macOS (Apple silicon): the .dmg."
+            echo "Linux: the .flatpak (it updates itself), or see https://bigaouette.com/chord-nightly/flatpak/. Windows: the -setup.exe. macOS (Apple silicon): the .dmg."
             echo
             echo '```'
             cat assets/SHA256SUMS

@@ -96,6 +96,13 @@ modules:
       - cd chord-desktop && npx --offline tauri build --no-bundle
       - install -Dm755 target/release/chord-desktop /app/bin/chord-desktop
       - install -Dm644 packaging/flatpak/space.foid.chord.desktop /app/share/applications/space.foid.chord.desktop
+      # A nightly or beta shows its own version in the software centre: the top release entry
+      # takes CHORD_VERSION and the commit date. A Flathub release lists itself there already.
+      - |
+        if [ "$CHORD_VERSION" != 0.0.0+dev ] && [ -n "$CHORD_COMMIT_TIME" ]; then
+          sed -i "0,/<release version=\"[^\"]*\" date=\"[^\"]*\"/s//<release version=\"$CHORD_VERSION\" date=\"$(date -u -d "@$CHORD_COMMIT_TIME" +%F)\"/" \
+            packaging/flatpak/space.foid.chord.metainfo.xml
+        fi
       - install -Dm644 packaging/flatpak/space.foid.chord.metainfo.xml /app/share/metainfo/space.foid.chord.metainfo.xml
       - install -Dm644 chord-desktop/src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/space.foid.chord.png
       - install -Dm644 chord-desktop/src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/space.foid.chord.png
