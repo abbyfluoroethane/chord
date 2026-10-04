@@ -145,6 +145,19 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/ashpd/ashpd-0.13.13.crate",
+        "sha256": "fb8421aaa9644a5faf26735f258b669b15f063313ef8f8e2bdb28912a1a6f111",
+        "dest": "cargo/vendor/ashpd-0.13.13"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": \"fb8421aaa9644a5faf26735f258b669b15f063313ef8f8e2bdb28912a1a6f111\", \"files\": {}}",
+        "dest": "cargo/vendor/ashpd-0.13.13",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/askama/askama-0.16.1.crate",
         "sha256": "6024d73179f43f15ccd2b881bfea6fee7f3a46ec53f33b52210dea749ebebaa4",
         "dest": "cargo/vendor/askama-0.16.1"
