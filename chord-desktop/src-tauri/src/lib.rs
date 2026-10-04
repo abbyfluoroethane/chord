@@ -27,6 +27,7 @@ mod settings;
 mod state;
 mod theme_fetch;
 mod thumb;
+mod updates;
 
 /// The worker threads of the async runtime. The work is network and database waits, so a
 /// few threads are enough. Tokio starts one thread per core by default, and each thread
@@ -72,12 +73,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        // The endpoints come from the chosen channel at each check (src/updates.rs).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(navigation::plugin())
         .manage(state::AppState::default())
         .manage(files::Dropped::default())
         .manage(notify::NoticePrefs::default())
         .manage(certpin::CertPins::default())
         .manage(behaviour::Behaviour::default())
+        .manage(updates::Pending::default())
         .on_window_event(behaviour::on_window_event)
         // The path of a dropped file goes to Rust here, not through the page.
         .on_webview_event(|webview, event| {
@@ -230,6 +234,9 @@ pub fn run() {
             behaviour::set_autostart,
             behaviour::set_tray_unread,
             behaviour::system_idle_seconds,
+            updates::update_check,
+            updates::update_install,
+            updates::update_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

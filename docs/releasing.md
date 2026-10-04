@@ -74,8 +74,11 @@ them yourself.
 
 - The macOS build is not signed or notarized, and the Windows installer is not signed. Users
   see a warning when they open them.
-- The desktop app does not update itself yet. The Tauri updater can read the latest release
-  of chord-desktop when we add it.
+- The desktop app has its updater (`src-tauri/src/updates.rs`, see [updates.md](updates.md)),
+  but the release workflow does not write the channel manifests yet. `tauri build` now makes
+  the updater files, so it needs the `TAURI_SIGNING_PRIVATE_KEY` secret. Build with the plain
+  version (`0.3.0-beta.2`): the signature names that version, and the app compares it with
+  the manifest version without its `+b<build>`.
 - The Android APKs are signed with the test key. A phone can only update to an APK with the
   same key, so keep the key safe and back it up. Changing it later means that every user has to
   uninstall first.

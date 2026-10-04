@@ -75,6 +75,14 @@ describe('parsePrefs', () => {
     expect(parsePrefs({ autoAwayMinutes: 7 })).toEqual({});
     expect(parsePrefs({ autoAwayMinutes: '5' })).toEqual({});
   });
+  it('reads the update channel and the automatic check', () => {
+    expect(parsePrefs({ updateChannel: 'nightly', autoUpdate: false })).toEqual({
+      updateChannel: 'nightly',
+      autoUpdate: false
+    });
+    expect(parsePrefs({ updateChannel: 'dev', autoUpdate: 'no' })).toEqual({});
+    expect(parsePrefs({ updateChannel: '' })).toEqual({});
+  });
   it('takes no prefs from a non-object', () => {
     expect(parsePrefs(null)).toEqual({});
     expect(parsePrefs('x')).toEqual({});

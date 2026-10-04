@@ -6,3 +6,4 @@ export type * from './types';
 export * from './badge';
 export * from './notice';
 export * from './behaviour';
+export * from './updates';
