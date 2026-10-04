@@ -68,10 +68,18 @@ def books(d, S):
     for i, (c, h) in enumerate([((250, 250, 245), 120), ((253, 186, 116), 140), ((167, 243, 208), 110), ((191, 219, 254), 130)]):
         x = 62 + i * 34; d.rounded_rectangle((x, 196 - h, x + 26, 196), 4, fill=c + (255,))
     d.rectangle((50, 196, 206, 204), fill=(30, 30, 30, 200))
-icon('lantern-works', '#3b1d0a', '#b45309', lantern)
+def couch(d, S):
+    d.rounded_rectangle((44, 112, 212, 176), 22, fill=(250, 236, 255, 255)); d.rounded_rectangle((34, 132, 74, 196), 16, fill=(233, 213, 255, 255))
+    d.rounded_rectangle((182, 132, 222, 196), 16, fill=(233, 213, 255, 255)); d.rectangle((60, 196, 72, 212), fill=(30, 10, 40, 255)); d.rectangle((184, 196, 196, 212), fill=(30, 10, 40, 255))
+    d.line((128, 118, 128, 172), fill=(196, 160, 230, 255), width=6)
+def owl(d, S):
+    d.ellipse((150, 46, 214, 110), fill=(254, 240, 200, 255)); d.ellipse((168, 40, 228, 100), fill=(30, 27, 75, 255))
+    for (x, y) in [(60, 70), (96, 46), (120, 96), (70, 130), (40, 100)]: d.ellipse((x-5, y-5, x+5, y+5), fill=(254, 249, 195, 255))
+    d.rounded_rectangle((64, 150, 192, 214), 26, fill=(165, 180, 252, 255)); d.ellipse((92, 172, 112, 192), fill=(30, 27, 75, 255)); d.ellipse((144, 172, 164, 192), fill=(30, 27, 75, 255))
+icon('basement', '#581c87', '#1e1b4b', couch)
+icon('night-owls', '#1e1b4b', '#312e81', owl)
 icon('darkroom', '#7f1d1d', '#1f1f23', film)
 icon('crag', '#155e75', '#0f172a', crag)
-icon('slow-readers', '#365314', '#1a2e05', books)
 
 def scene(name, w, h, sky_a, sky_b, layers, sun=None, fog=None, seed=0):
     random.seed(seed); img = gradient(w, h, hexc(sky_a), hexc(sky_b), 90)
