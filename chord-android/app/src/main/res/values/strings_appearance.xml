@@ -33,10 +33,10 @@
     <string name="appearance_credit_noto">Google, Apache License 2.0</string>
     <string name="appearance_credit_fluent">Microsoft, MIT License</string>
     <string name="appearance_credit_system">The emoji font of this phone</string>
-    <string name="appearance_preview_name_1">Rin</string>
-    <string name="appearance_preview_name_2">Mika</string>
-    <string name="appearance_preview_text">Static fire moved to 14:00 tomorrow. Bring the checklist.</string>
-    <string name="appearance_preview_link">Notes are on chord.example/notes</string>
+    <string name="appearance_preview_name_1">Priya Raman</string>
+    <string name="appearance_preview_name_2">Kenji Ito</string>
+    <string name="appearance_preview_text">Build 0.14.2 is up on the playtest branch.</string>
+    <string name="appearance_preview_link">Notes are on lanternworks.example/notes</string>
 
     <string name="import_title">Import a theme</string>
     <string name="import_tab_link">From a link</string>

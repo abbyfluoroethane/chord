@@ -101,8 +101,12 @@ g.save('photos/lighthouse-fog.png')
 # Film photos: a ferry at golden hour, and a hillside town.
 scene('harbor-sunset', 800, 1000, '#f6c995', '#e0805a', [('#9b5d4a', 0.55, 0.01, 0.2), ('#2f5d73', 0.62, 0.006, 0.05), ('#244b5e', 0.78, 0.008, 0.03)], sun=(0.5, 0.42, 0.09, '#fff1cf'), seed=5).save('photos/harbor-sunset.png')
 scene('hills', 1200, 800, '#a7c7d9', '#f2ead8', [('#7d9a6b', 0.55, 0.06, 0.12), ('#55724a', 0.68, 0.05, 0.08), ('#3b5234', 0.82, 0.04, 0.05)], fog=(0.5, 90, '#f4f1ea'), seed=9).save('photos/hills.png')
-# The link preview image of the patch notes.
-banner = gradient(1200, 630, hexc('#3b1d0a'), hexc('#b45309'), 20); d = ImageDraw.Draw(banner, 'RGBA')
-d.rounded_rectangle((80, 230, 1120, 400), 24, fill=(20, 10, 4, 120)); d.text((120, 300), 'LANTERN WORKS  -  PATCH NOTES 0.14', fill=(255, 236, 200, 255))
+# The link preview image of the patch notes: the lantern mark, centred and without text,
+# because preview cards crop a square from the middle and print the title themselves.
+banner = gradient(1200, 630, hexc('#2a1406'), hexc('#c2620a'), 20); d = ImageDraw.Draw(banner, 'RGBA')
+blob(banner, 600, 315, 230, hexc('#f59e0b'), 90); d = ImageDraw.Draw(banner, 'RGBA')
+lx, ly = 600, 330  # centred: link preview cards crop a square from the middle
+d.rounded_rectangle((lx-70, ly-110, lx+70, ly+120), 40, fill=(255, 214, 140, 255)); d.rectangle((lx-84, ly-130, lx+84, ly-104), fill=(40, 24, 8, 255)); d.rectangle((lx-84, ly+114, lx+84, ly+140), fill=(40, 24, 8, 255))
+d.arc((lx-50, ly-200, lx+50, ly-100), 180, 360, fill=(40, 24, 8, 255), width=16); d.ellipse((lx-30, ly-40, lx+30, ly+50), fill=(255, 250, 230, 255))
 banner.save('photos/patch-notes.png')
 print('done')

@@ -442,7 +442,7 @@ internal fun CheckMark(color: Color, modifier: Modifier = Modifier) {
 private fun MessagePreview() {
     val c = Chord.colors
     Column(Modifier.fillMaxWidth().padding(ChordSpace.s3), verticalArrangement = Arrangement.spacedBy(ChordSpace.s2)) {
-        PreviewRow("R", c.accent, stringResource(R.string.appearance_preview_name_1)) {
+        PreviewRow("P", c.accent, stringResource(R.string.appearance_preview_name_1)) {
             Text(stringResource(R.string.appearance_preview_text), style = ChordType.body, color = c.ink)
             val link = stringResource(R.string.appearance_preview_link)
             val underline = space.foid.chord.ui.theme.LocalAppearance.current.underlineLinks
@@ -450,10 +450,10 @@ private fun MessagePreview() {
                 buildLinkText(link, c.accent, underline), style = ChordType.body, color = c.ink,
             )
         }
-        PreviewRow("M", c.online, stringResource(R.string.appearance_preview_name_2)) {
+        PreviewRow("K", c.online, stringResource(R.string.appearance_preview_name_2)) {
             val jumbo = space.foid.chord.ui.theme.LocalAppearance.current.jumboEmoji
             EmojiText(
-                AnnotatedString("🚀🎉"),
+                AnnotatedString("👍🎉"),
                 if (jumbo) ChordType.body.copy(fontSize = androidx.compose.ui.unit.TextUnit(40f, androidx.compose.ui.unit.TextUnitType.Sp), lineHeight = androidx.compose.ui.unit.TextUnit(48f, androidx.compose.ui.unit.TextUnitType.Sp)) else ChordType.body,
                 c.ink,
             )
@@ -462,8 +462,9 @@ private fun MessagePreview() {
 }
 
 private fun buildLinkText(text: String, color: Color, underline: Boolean): AnnotatedString {
-    val link = "chord.example/notes"
-    val i = text.indexOf(link)
+    // The link is the last word of the sample. A translation may move it, so find it by shape.
+    val i = text.lastIndexOf(' ') + 1
+    val link = text.substring(i)
     return androidx.compose.ui.text.buildAnnotatedString {
         append(text.substring(0, i))
         pushStyle(
