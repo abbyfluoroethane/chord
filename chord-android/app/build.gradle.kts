@@ -195,6 +195,10 @@ android {
             all {
                 // Robolectric reads FileDescriptor internals. JDK 17+ hides them.
                 it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED", "--add-opens=java.base/java.io=ALL-UNNAMED")
+                // One time zone and locale everywhere, so a screenshot with a time looks the same on CI.
+                it.systemProperty("user.timezone", "UTC")
+                it.systemProperty("user.language", "en")
+                it.systemProperty("user.country", "US")
                 it.maxHeapSize = "2g"
             }
         }
