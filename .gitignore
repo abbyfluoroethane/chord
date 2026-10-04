@@ -12,3 +12,6 @@ chord-android/keystore.properties
 keystore.properties
 *.jks
 *.keystore
+
+# dev/releases.py
+__pycache__/
