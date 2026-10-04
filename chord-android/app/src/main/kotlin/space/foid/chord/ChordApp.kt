@@ -19,6 +19,7 @@ import space.foid.chord.ui.avatar.AvatarRepository
 import space.foid.chord.ui.settings.PrefsSettingsStore
 import space.foid.chord.ui.settings.SettingsApplier
 import space.foid.chord.ui.sheets.EmojiCatalog
+import space.foid.chord.update.UpdateScheduler
 import java.io.File
 
 /** The application. It holds the one [ChordSession] of the process (manual DI, no Hilt). */
@@ -69,6 +70,8 @@ class ChordApp : Application() {
         ChordNotifications.createChannels(this)
         // The sign-in presence and the idle report of the settings.
         SettingsApplier(session, PrefsSettingsStore.get(this), appScope).attach()
+        // The daily update check. Off in a dev or store build.
+        UpdateScheduler.attach(this, PrefsSettingsStore.get(this), appScope)
         appScope.launch {
             // The reaction picker then opens at once. After the first frame, to leave the CPU to start-up.
             delay(EMOJI_DELAY_MS)

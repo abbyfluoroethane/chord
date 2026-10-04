@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import space.foid.chord.ui.emoji.EmojiPack
+import space.foid.chord.update.UpdateChannel
 import space.foid.chord.ui.theme.DEFAULT_DARK_THEME
 import space.foid.chord.ui.theme.DEFAULT_LIGHT_THEME
 import space.foid.chord.ui.theme.MotionMode
@@ -78,6 +79,10 @@ data class AppPrefs(
     val timeFormat: TimeFormat = TimeFormat.System,
     val underlineLinks: Boolean = true,
     val motion: MotionMode = MotionMode.System,
+    /** The update channel the user picked. null: the channel of the build (see update.effectiveChannel). */
+    val updateChannel: UpdateChannel? = null,
+    /** Check for updates once a day. */
+    val autoUpdateCheck: Boolean = true,
 )
 
 const val DEFAULT_FONT_SIZE = 15
@@ -164,6 +169,8 @@ class PrefsSettingsStore private constructor(private val sp: SharedPreferences) 
             .putString(TIME_FORMAT, prefs.timeFormat.name)
             .putBoolean(UNDERLINE_LINKS, prefs.underlineLinks)
             .putString(MOTION, prefs.motion.name)
+            .putString(UPDATE_CHANNEL, prefs.updateChannel?.id)
+            .putBoolean(AUTO_UPDATE_CHECK, prefs.autoUpdateCheck)
             .apply()
     }
 
@@ -188,6 +195,8 @@ class PrefsSettingsStore private constructor(private val sp: SharedPreferences) 
         private const val TIME_FORMAT = "time_format"
         private const val UNDERLINE_LINKS = "underline_links"
         private const val MOTION = "motion"
+        private const val UPDATE_CHANNEL = "update_channel"
+        private const val AUTO_UPDATE_CHECK = "auto_update_check"
 
         private fun read(sp: SharedPreferences): AppPrefs {
             val d = AppPrefs()
@@ -212,6 +221,8 @@ class PrefsSettingsStore private constructor(private val sp: SharedPreferences) 
                 timeFormat = TimeFormat.fromName(sp.getString(TIME_FORMAT, null)),
                 underlineLinks = sp.getBoolean(UNDERLINE_LINKS, d.underlineLinks),
                 motion = MotionMode.fromName(sp.getString(MOTION, null)),
+                updateChannel = UpdateChannel.fromId(sp.getString(UPDATE_CHANNEL, null)),
+                autoUpdateCheck = sp.getBoolean(AUTO_UPDATE_CHECK, d.autoUpdateCheck),
             ).sanitised()
         }
 

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Settings, About: the Updates section. -->
+    <string name="updates_title">Updates</string>
+    <string name="updates_version_line">Version %1$s · %2$s</string>
+    <string name="updates_build_stable">Stable</string>
+    <string name="updates_build_beta">Beta</string>
+    <string name="updates_build_nightly">Nightly</string>
+    <string name="updates_build_dev">Development build</string>
+
+    <string name="updates_channel">Channel</string>
+    <string name="updates_channel_stable">Stable</string>
+    <string name="updates_channel_beta">Beta</string>
+    <string name="updates_channel_nightly">Nightly</string>
+    <string name="updates_hint_stable">Releases only. The safe choice.</string>
+    <string name="updates_hint_beta">Test builds before a release, and the releases.</string>
+    <string name="updates_hint_nightly">A build of each day\'s work. It can break.</string>
+    <string name="updates_keep_build">You keep this build until %1$s has a newer one.</string>
+
+    <string name="updates_auto">Check automatically</string>
+    <string name="updates_auto_hint">Once a day. A notification tells you when an update is ready.</string>
+
+    <string name="updates_off_dev">This is a development build. It does not update itself.</string>
+    <string name="updates_off_store">This build does not update itself. The store you got it from updates it.</string>
+
+    <string name="updates_never_checked">Not checked yet</string>
+    <string name="updates_just_now">just now</string>
+    <string name="updates_last_checked">Last checked %1$s</string>
+    <string name="updates_checking">Checking for updates…</string>
+    <string name="updates_up_to_date">Chord is up to date.</string>
+    <string name="updates_no_build">This channel has no build yet.</string>
+    <string name="updates_available">Version %1$s is available</string>
+    <string name="updates_size">%1$s download</string>
+    <string name="updates_notes_show">What\'s new</string>
+    <string name="updates_notes_hide">Hide what\'s new</string>
+    <string name="updates_downloading">Downloading version %1$s…</string>
+    <string name="updates_progress">%1$s of %2$s</string>
+    <string name="updates_installing">Installing version %1$s…</string>
+    <string name="updates_install_confirm">Confirm the install in the system dialog.</string>
+    <string name="updates_check">Check for updates</string>
+    <string name="updates_install">Install</string>
+    <string name="updates_retry">Retry</string>
+    <string name="updates_permission">Allow Chord to install apps, then tap Install again.</string>
+
+    <string name="updates_failed_network">The update could not be downloaded. Check your connection.</string>
+    <string name="updates_failed_manifest">The update information is not valid.</string>
+    <string name="updates_failed_no_apk">There is no build for this phone.</string>
+    <string name="updates_failed_checksum">The download is damaged. Try again.</string>
+    <string name="updates_failed_install">The update did not install.</string>
+
+    <!-- The notification. -->
+    <string name="updates_channel_name">Updates</string>
+    <string name="updates_notification_title">Update available</string>
+    <string name="updates_notification_text">Chord %1$s is ready to install.</string>
+</resources>

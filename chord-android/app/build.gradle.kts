@@ -315,6 +315,8 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.androidx.exifinterface)
     implementation(libs.androidsvg)
+    // The daily update check (space.foid.chord.update).
+    implementation(libs.androidx.work.runtime.ktx)
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
