@@ -1,15 +1,16 @@
 name: Release
 
-# A tag desktop-v<version> builds the desktop app on Linux, Windows and macOS and publishes it to
-# the release repository abbyfluoroethane/chord-desktop. dev/release.sh makes the tag.
-# Android releases are built and published by dev/release.sh on a machine with the signing key.
-# See docs/releasing.md.
+# A tag desktop-v<version> builds the desktop app on Linux, Windows and macOS, publishes it to
+# the release repository abbyfluoroethane/chord-desktop, and updates the channel manifests for
+# the in-app updater. dev/release.sh makes the tag. Android releases are built and published by
+# dev/release.sh. See docs/releasing.md and docs/updates.md.
 #
 # "Run workflow" builds without a tag and without publishing, to check the build.
 #
 # Secrets:
 #   RELEASES_TOKEN   A fine-grained token with "Contents: read and write" on the release
 #                    repositories only. GITHUB_TOKEN cannot write to another repository.
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   The updater key.
 #   CHORD_KLIPY_KEY  The GIF search key (docs/gifs.md). Without it, GIF search is off.
 
 on:
@@ -24,16 +25,11 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      beta: ${{ steps.v.outputs.beta }}
-      commit: ${{ steps.v.outputs.commit }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
       - id: v
@@ -49,65 +45,16 @@ jobs:
           if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.([1-9][0-9]*))?$ ]]; then
             echo "::error::$version is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-beta.N"; exit 1
           fi
-          beta=false; [[ "$version" == *-beta.* ]] && beta=true
-          {
-            echo "version=$version"
-            echo "beta=$beta"
-            echo "commit=${GITHUB_SHA::7}"
-            echo "publish=$publish"
-          } >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # 22.04 keeps the AppImage and the .deb working on older distributions.
-          - os: ubuntu-22.04
-            bundles: deb,rpm,appimage
-          # The MSI installer does not take a version like 0.3.0-beta.1, so Windows gets NSIS.
-          - os: windows-latest
-            bundles: nsis
-          - os: macos-latest
-            bundles: dmg
-    runs-on: ${{ matrix.os }}
-    env:
-      CHORD_VERSION: ${{ needs.version.outputs.version }}
-      CHORD_KLIPY_KEY: ${{ secrets.CHORD_KLIPY_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install the Tauri system libraries
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: chord-desktop/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        working-directory: chord-desktop
-        shell: bash
-        run: |
-          npm ci
-          npx tauri build --bundles "${{ matrix.bundles }}" --config "{\"version\":\"$CHORD_VERSION\"}"
-      - name: Collect the bundles
-        shell: bash
-        run: |
-          mkdir dist
-          find target/release/bundle -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
-            -o -name '*-setup.exe' -o -name '*.dmg' \) -exec cp {} dist/ \;
-          ls -l dist
-          [[ -n "$(ls dist)" ]]
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chord-desktop-${{ matrix.os }}
-          path: dist/*
-          if-no-files-found: error
+    uses: ./.github/workflows/build-desktop.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      platforms: '["ubuntu-22.04","windows-latest","macos-latest"]'
+    secrets: inherit
 
   publish:
     needs: [version, build]
@@ -119,30 +66,39 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
+          pattern: desktop-*
           path: dist
           merge-multiple: true
       - name: Publish to abbyfluoroethane/chord-desktop
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
-          BETA: ${{ needs.version.outputs.beta }}
-          COMMIT: ${{ needs.version.outputs.commit }}
           TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           [[ -n "$GH_TOKEN" ]] || { echo "::error::The RELEASES_TOKEN secret is missing."; exit 1; }
-          cd dist
-          sha256sum -- * > SHA256SUMS
-          release_tag="v$VERSION"; flags=(--latest)
-          if [[ "$BETA" == true ]]; then release_tag="v$VERSION+$COMMIT"; flags=(--prerelease); fi
+          repo=abbyfluoroethane/chord-desktop
+          commit=$(git rev-parse --short HEAD)
+          channel=stable; release_tag="v$VERSION"; flags=(--latest)
+          if [[ "$VERSION" == *-beta.* ]]; then
+            channel=beta; release_tag="v$VERSION+$commit"; flags=(--prerelease)
+          fi
+          encoded=$(printf '%s' "$release_tag" | sed 's/+/%2B/g')
           # The notes are the message of the annotated tag that dev/release.sh made.
-          git -C .. for-each-ref --format='%(contents:body)' "refs/tags/$TAG" > ../notes.md
+          git for-each-ref --format='%(contents:body)' "refs/tags/$TAG" > app-notes.md
+          mkdir assets
+          find dist -type f ! -name 'updater-*.json' -exec cp {} assets/ \;
+          (cd assets && sha256sum -- * > SHA256SUMS)
           {
+            cat app-notes.md
             echo
-            echo "Linux: .AppImage, .deb or .rpm. Windows: the -setup.exe. macOS: the .dmg."
+            echo "Linux: .AppImage, .deb or .rpm. Windows: the -setup.exe. macOS (Apple silicon): the .dmg."
             echo
             echo '```'
-            cat SHA256SUMS
+            cat assets/SHA256SUMS
             echo '```'
-          } >> ../notes.md
-          gh release create "$release_tag" -R abbyfluoroethane/chord-desktop \
-            --title "Chord Desktop $VERSION" --notes-file ../notes.md "${flags[@]}" ./*
+          } > notes.md
+          gh release create "$release_tag" -R "$repo" --title "Chord Desktop $VERSION" --notes-file notes.md "${flags[@]}" assets/*
+          dev/releases.py desktop-manifests "$VERSION" HEAD "https://github.com/$repo/releases/tag/$encoded" \
+            "https://github.com/$repo/releases/download/$encoded" app-notes.md dist manifests
+          dev/releases.py publish desktop "$channel" manifests

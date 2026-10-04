@@ -1,0 +1,92 @@
+name: Build desktop
+
+# Builds the signed desktop bundles for a version. release.yml and nightly.yml call it.
+# Each platform leaves an artifact desktop-<os> with its bundles and updater-<target>-<arch>.json:
+# the name of the updater bundle and its signature (docs/updates.md).
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      platforms:
+        description: 'JSON list of runners, for example ["ubuntu-22.04","windows-latest","macos-latest"]'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.platforms) }}
+    runs-on: ${{ matrix.os }}
+    env:
+      CHORD_VERSION: ${{ inputs.version }}
+      CHORD_KLIPY_KEY: ${{ secrets.CHORD_KLIPY_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the Tauri system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: chord-desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        working-directory: chord-desktop
+        shell: bash
+        run: |
+          # Linux: AppImage (it updates itself), .deb and .rpm. Windows: NSIS, because the MSI
+          # installer does not take a version like 0.3.0-beta.1. macOS: the .app (the updater
+          # bundle) and the .dmg.
+          case "$RUNNER_OS" in
+            Linux) bundles=appimage,deb,rpm ;;
+            Windows) bundles=nsis ;;
+            macOS) bundles=app,dmg ;;
+          esac
+          npm ci
+          npx tauri build --bundles "$bundles" --config "{\"version\":\"$CHORD_VERSION\"}"
+      - name: Collect the bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist
+          b=target/release/bundle
+          case "$RUNNER_OS" in
+            Linux)
+              target=linux; arch=x86_64
+              cp "$b"/deb/*.deb "$b"/rpm/*.rpm dist/
+              updater=$(ls "$b"/appimage/*.AppImage) ;;
+            Windows)
+              target=windows; arch=x86_64
+              updater=$(ls "$b"/nsis/*-setup.exe) ;;
+            macOS)
+              target=darwin; arch=$( [[ "$(uname -m)" == arm64 ]] && echo aarch64 || echo x86_64 )
+              cp "$b"/dmg/*.dmg dist/
+              updater=$(ls "$b"/macos/*.app.tar.gz) ;;
+          esac
+          [[ -f "$updater.sig" ]] || { echo "::error::no signature for $updater"; exit 1; }
+          # The macOS updater bundle is Chord.app.tar.gz on every build: give it the version.
+          name=$(basename "$updater")
+          [[ "$RUNNER_OS" == macOS ]] && name="Chord_${CHORD_VERSION}_${arch}.app.tar.gz"
+          cp "$updater" "dist/$name"
+          python3 -c 'import json,sys; json.dump({"file": sys.argv[1], "signature": open(sys.argv[2]).read().strip()}, open(sys.argv[3], "w"))' \
+            "$name" "$updater.sig" "dist/updater-$target-$arch.json"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error

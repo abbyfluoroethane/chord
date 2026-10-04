@@ -87,6 +87,8 @@ else
   } > "$notes"
 fi
 printf '\nBuilt from commit `%s` of the Chord source.\n' "$commit" >> "$notes"
+# The apps show these notes. The release page also gets the checksums.
+app_notes=$(mktemp); cp "$notes" "$app_notes"
 
 if [[ $platform == desktop ]]; then
   echo "Tag $tag at $commit. The release workflow builds and publishes $repo $release_tag."
@@ -100,12 +102,17 @@ fi
 # Android: build here, then publish.
 dev/android-release.sh --version "$version" "${prebuilt[@]}"
 out=chord-android/app/build/outputs/apk/release
-dist=$(mktemp -d); trap 'rm -f "$notes"; rm -rf "$dist"' EXIT
+dist=$(mktemp -d); trap 'rm -f "$notes" "$app_notes"; rm -rf "$dist"' EXIT
 for abi in arm64-v8a x86_64 universal; do
   src="$out/app-$abi-release.apk"
   [[ -f $src ]] || { echo "FAIL: no $src" >&2; exit 1; }
   cp "$src" "$dist/chord-android-$version-$abi.apk"
 done
+# The manifest's build number must be the APK's versionCode, or a phone would update in a loop.
+aapt2=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)
+code=$("$aapt2" dump badging "$dist/chord-android-$version-universal.apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+want=$(dev/releases.py build-number "$version")
+[[ $code == "$want" ]] || { echo "FAIL: the APK's versionCode is $code, expected $want" >&2; exit 1; }
 (cd "$dist" && sha256sum ./*.apk | sed 's# \./# #' > SHA256SUMS)
 {
   echo
@@ -129,4 +136,13 @@ git push origin "refs/tags/$tag"
 flags=(--title "Chord for Android $version" --notes-file "$notes")
 if (( beta )); then flags+=(--prerelease); else flags+=(--latest); fi
 gh release create "$release_tag" -R "$repo" "${flags[@]}" "$dist"/*
-echo "Published: https://github.com/$repo/releases/tag/$(printf '%s' "$release_tag" | sed 's/+/%2B/g')"
+encoded_tag=$(printf '%s' "$release_tag" | sed 's/+/%2B/g')
+release_url="https://github.com/$repo/releases/tag/$encoded_tag"
+echo "Published: $release_url"
+
+# The update manifest, for the in-app updater (docs/updates.md).
+channel=stable; (( beta )) && channel=beta
+manifest="$dist/manifest.json"
+dev/releases.py android-manifest "$version" HEAD "$release_url" \
+  "https://github.com/$repo/releases/download/$encoded_tag" "$app_notes" "$dist" > "$manifest"
+dev/releases.py publish android "$channel" "$manifest"

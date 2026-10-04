@@ -8,6 +8,7 @@ repository has tags but no GitHub releases.
 | Android | `android-v<version>` | [abbyfluoroethane/chord-android](https://github.com/abbyfluoroethane/chord-android/releases) |
 | Desktop | `desktop-v<version>` | [abbyfluoroethane/chord-desktop](https://github.com/abbyfluoroethane/chord-desktop/releases) |
 | iOS | `ios-v<version>` | [abbyfluoroethane/chord-iOS](https://github.com/abbyfluoroethane/chord-iOS/releases) (no app yet) |
+| Nightlies of all apps | none | [abbyfluoroethane/chord-nightly](https://github.com/abbyfluoroethane/chord-nightly/releases) |
 
 One repository per app means that "latest release" of each repository is always that app. An
 Android fix never pushes the desktop build down the list.
@@ -31,16 +32,10 @@ was built from, for example `0.3.0-beta.2 (09c83fb)`.
 A build that is not a release takes the last tag of its app and adds `+dev`, for example
 `0.3.0-beta.2+dev`. Without a tag it is `0.0.0+dev`.
 
-### Android versionCode
+### Build number
 
-Android updates an app only to a higher versionCode, so the code comes from the version:
-
-```
-major * 100,000,000 + minor * 1,000,000 + patch * 1,000 + (N for beta N, 999 for a release)
-```
-
-`0.3.0-beta.2` is 3,000,002 and `0.3.0` is 3,000,999. The limits are major 20, minor 99,
-patch 999 and beta 998. `chord-android/app/build.gradle.kts` checks them.
+Each build has a build number from its commit time and its channel. On Android it is the
+versionCode. The apps compare build numbers to find updates. See [updates.md](updates.md).
 
 ## Make a release
 
@@ -62,20 +57,48 @@ them yourself.
   Windows (NSIS installer) and macOS (.dmg). "Run workflow" on that workflow builds a version
   without publishing it.
 
+## Nightlies
+
+`.github/workflows/nightly.yml` runs each night at 08:00 UTC. When `main` changed since the last
+nightly and CI passed on it, it builds Android and Linux, plus Windows and macOS on Sundays, and
+publishes them to chord-nightly as `android-v0.3.1-nightly.20261004+<commit>` and so on. The
+version is the next version after the app's last release tag. "Run workflow" can force a build
+and ask for all desktop platforms. The last 14 nightlies of each app are kept.
+
+## Update manifests
+
+Each publish also writes the channel manifests that the in-app updaters read
+(`dev/releases.py publish`, [updates.md](updates.md)). A release goes to the stable, beta and
+nightly channels, a beta to beta and nightly, a nightly to nightly, each only if it is newer than
+what the channel has.
+
 ## Setup
 
-- The release repositories hold a README and their releases. Nothing else.
-- `RELEASES_TOKEN`, a secret of this repository: a fine-grained personal access token with
-  access to the three release repositories only, and the permission "Contents: read and write".
-  The release workflow needs it to publish the desktop app.
-- `CHORD_KLIPY_KEY`, a secret of this repository, for GIF search in desktop builds.
+The release repositories hold a README, their releases and, for the apps, the channel
+manifests. Nothing else.
+
+Secrets of this repository:
+
+- `RELEASES_TOKEN`: a fine-grained personal access token with access to the four release
+  repositories only (chord-android, chord-desktop, chord-iOS, chord-nightly), and the permission
+  "Contents: read and write". The workflows need it to publish.
+- `ANDROID_KEYSTORE_BASE64`, `CHORD_KEYSTORE_PASSWORD`, `CHORD_KEY_ALIAS`, `CHORD_KEY_PASSWORD`:
+  the Android signing key, for nightlies. It is the same key as for releases, because a phone
+  only updates from an APK with the same key. The original is `~/.config/chord/android-release.jks`
+  on the release machine.
+- `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the desktop updater key.
+  The original is `~/.config/chord/tauri-updater.key` and `.password`; the public key is in
+  `tauri.conf.json`.
+- `CHORD_KLIPY_KEY`, for GIF search in desktop builds.
+
+Keep an offline backup of both keys. If the Android key is lost, every user has to uninstall
+to move to a new one. If the updater key is lost, installed desktop apps can never update again.
 
 ## Not done yet
 
 - The macOS build is not signed or notarized, and the Windows installer is not signed. Users
   see a warning when they open them.
-- The desktop app does not update itself yet. The Tauri updater can read the latest release
-  of chord-desktop when we add it.
+- The macOS build is for Apple silicon only.
 - The Android APKs are signed with the test key. A phone can only update to an APK with the
   same key, so keep the key safe and back it up. Changing it later means that every user has to
   uninstall first.
