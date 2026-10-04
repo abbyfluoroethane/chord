@@ -170,10 +170,11 @@ function findCloser(s: string, from: number, c: string, n: number): number {
   return -1;
 }
 
+// Reads the content in place: a slice and a /\s$/ test for each candidate made a message full of
+// unclosed markers slow.
 function closerOk(s: string, from: number, at: number, c: string, n: number): boolean {
-  const content = s.slice(from, at);
-  if (!content) return false;
-  if (n === 1 && (/^\s/.test(content) || /\s$/.test(content))) return false;
+  if (at <= from) return false;
+  if (n === 1 && (/\s/.test(s[from]) || /\s/.test(s[at - 1]))) return false;
   if (c === '_' && WORD.test(s[at + n] ?? '')) return false;
   return true;
 }

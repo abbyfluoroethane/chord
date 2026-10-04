@@ -481,10 +481,11 @@ private class Formatter(private val palette: FormatPalette, private val names: L
         return -1
     }
 
+    // Reads the content in place. A substring for each candidate made a message full of
+    // unclosed markers slow (seconds for 3,000 of them).
     private fun closerOk(s: String, from: Int, at: Int, c: Char, n: Int): Boolean {
-        val content = s.substring(from, at)
-        if (content.isEmpty()) return false
-        if (n == 1 && (content.first().isWhitespace() || content.last().isWhitespace())) return false
+        if (at <= from) return false
+        if (n == 1 && (s[from].isWhitespace() || s[at - 1].isWhitespace())) return false
         if (c == '_' && at + n < s.length && isWord(s[at + n])) return false
         return true
     }
