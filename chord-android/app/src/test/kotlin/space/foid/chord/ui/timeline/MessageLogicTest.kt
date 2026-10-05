@@ -79,6 +79,7 @@ class MessageLogicTest {
         id = "m:7", stanzaId = null, originId = null, sender = "alice@x.org", senderName = "Alice", avatar = "u",
         body = "hello", timestamp = at(14, 5), outgoing = true, sameSenderAsPrevious = true, edited = true,
         retracted = false, reactions = reactions, replyTo = replyTo, attachment = null, status = status,
+        encryption = uniffi.chord_ffi.Encryption.NONE,
     )
 
     @Test fun maps_plain_fields() {

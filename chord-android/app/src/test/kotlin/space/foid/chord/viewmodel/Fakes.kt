@@ -31,6 +31,7 @@ fun msg(id: String, body: String = "text $id") = TimelineItem(
     replyTo = null,
     attachment = null,
     status = DeliveryStatus.SENT,
+    encryption = uniffi.chord_ffi.Encryption.NONE,
 )
 
 fun chan(jid: String) = ChannelItem(

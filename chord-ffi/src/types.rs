@@ -6,6 +6,7 @@ use chord_core::actor as core_actor;
 use chord_core::features::avatars::Avatar as CoreAvatar;
 use chord_core::features::muc as core_muc;
 use chord_core::features::notify as core_notify;
+use chord_core::features::omemo as core_omemo;
 use chord_core::features::presence as core_presence;
 use chord_core::features::push::PushRegistration as CorePushRegistration;
 use chord_core::features::roster::{Contact as CoreContact, Subscription as CoreSubscription};
@@ -42,6 +43,98 @@ pub struct TimelineItem {
     pub reply_to: Option<ReplyPreview>,
     pub attachment: Option<String>,
     pub status: DeliveryStatus,
+    /// How the message was protected: show a lock or a warning.
+    pub encryption: Encryption,
+}
+
+/// The protection of a message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum Encryption {
+    /// Plain text.
+    None,
+    /// OMEMO 2. We decrypted it, or we sent it encrypted.
+    Omemo,
+    /// An OMEMO message that we could not decrypt. The body is a short notice.
+    Undecryptable,
+}
+
+impl From<core_views::Encryption> for Encryption {
+    fn from(e: core_views::Encryption) -> Self {
+        match e {
+            core_views::Encryption::None => Self::None,
+            core_views::Encryption::Omemo => Self::Omemo,
+            core_views::Encryption::Undecryptable => Self::Undecryptable,
+        }
+    }
+}
+
+/// How much we trust a key of an OMEMO device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum OmemoTrust {
+    /// The user has not decided. The device gets no message keys.
+    Undecided,
+    /// Trusted at once, because the user verified no key of this contact yet.
+    Blind,
+    /// The user compared the fingerprint.
+    Verified,
+    /// The user does not trust the key. The device gets no message keys.
+    Distrusted,
+}
+
+impl From<core_omemo::OmemoTrust> for OmemoTrust {
+    fn from(t: core_omemo::OmemoTrust) -> Self {
+        match t {
+            core_omemo::OmemoTrust::Undecided => Self::Undecided,
+            core_omemo::OmemoTrust::Blind => Self::Blind,
+            core_omemo::OmemoTrust::Verified => Self::Verified,
+            core_omemo::OmemoTrust::Distrusted => Self::Distrusted,
+        }
+    }
+}
+
+impl From<OmemoTrust> for core_omemo::OmemoTrust {
+    fn from(t: OmemoTrust) -> Self {
+        match t {
+            OmemoTrust::Undecided => Self::Undecided,
+            OmemoTrust::Blind => Self::Blind,
+            OmemoTrust::Verified => Self::Verified,
+            OmemoTrust::Distrusted => Self::Distrusted,
+        }
+    }
+}
+
+/// One OMEMO device of a contact or of our own account.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct OmemoDevice {
+    /// The bare JID of the account that owns the device.
+    pub jid: String,
+    pub device_id: u32,
+    /// 8 groups of 8 hex characters. `None` until we have seen the key.
+    pub fingerprint: Option<String>,
+    pub label: Option<String>,
+    /// `None` until we have seen the key.
+    pub trust: Option<OmemoTrust>,
+    /// False when the device is not in the last device list.
+    pub active: bool,
+    /// True when the device belongs to our own account.
+    pub own: bool,
+    /// True for the device that this client runs on.
+    pub this_device: bool,
+}
+
+impl From<core_omemo::OmemoDevice> for OmemoDevice {
+    fn from(d: core_omemo::OmemoDevice) -> Self {
+        Self {
+            jid: d.jid,
+            device_id: d.device_id,
+            fingerprint: d.fingerprint,
+            label: d.label,
+            trust: d.trust.map(Into::into),
+            active: d.active,
+            own: d.own,
+            this_device: d.this_device,
+        }
+    }
 }
 
 /// The reactions with one emoji.
@@ -147,6 +240,7 @@ impl From<core_views::TimelineItem> for TimelineItem {
             reply_to: i.reply_to.map(Into::into),
             attachment: i.attachment,
             status: i.status.into(),
+            encryption: i.encryption.into(),
         }
     }
 }
@@ -479,6 +573,28 @@ pub enum ClientEvent {
     Call {
         event: crate::calls::CallEvent,
     },
+    /// The OMEMO keys of this device were lost. Chord made a new device. Contacts see a
+    /// new device, and old messages stay unreadable.
+    OmemoKeysReset,
+    /// A device of `jid` has a key that needs a decision. It gets no message keys until
+    /// you call `set_omemo_trust`. `fingerprint` is the text to show.
+    OmemoTrustNeeded {
+        jid: String,
+        device_id: u32,
+        fingerprint: String,
+    },
+    /// The OMEMO devices or the trust of `jid` changed. Read the list again with
+    /// `omemo_devices`.
+    OmemoDevicesChanged {
+        jid: String,
+    },
+    /// An encrypted message could not go out. Chord did not send it as plain text. The row
+    /// of the message is marked as failed. `message_id` is empty if it has no id.
+    OmemoSendFailed {
+        peer: String,
+        message_id: String,
+        reason: String,
+    },
     /// An event that this binding version does not know.
     Unknown,
 }
@@ -753,6 +869,28 @@ impl From<core_actor::ClientEvent> for ClientEvent {
             },
             E::Call(event) => Self::Call {
                 event: event.into(),
+            },
+            E::OmemoKeysReset => Self::OmemoKeysReset,
+            E::OmemoTrustNeeded {
+                jid,
+                device_id,
+                fingerprint,
+            } => Self::OmemoTrustNeeded {
+                jid: jid.to_string(),
+                device_id,
+                fingerprint,
+            },
+            E::OmemoDevicesChanged(jid) => Self::OmemoDevicesChanged {
+                jid: jid.to_string(),
+            },
+            E::OmemoSendFailed {
+                peer,
+                message_id,
+                reason,
+            } => Self::OmemoSendFailed {
+                peer: peer.to_string(),
+                message_id,
+                reason,
             },
             // ClientEvent is non_exhaustive.
             _ => Self::Unknown,
@@ -1085,8 +1223,36 @@ mod tests {
         };
         let t: TimelineItem = core.into();
         assert_eq!(t.status, DeliveryStatus::Displayed);
+        assert_eq!(t.encryption, Encryption::None);
         assert_eq!(t.reactions[0].count, 2);
         assert_eq!(t.reply_to.unwrap().sender_name, "d");
+    }
+
+    #[test]
+    fn omemo_types_convert() {
+        let e: Encryption = core_views::Encryption::Undecryptable.into();
+        assert_eq!(e, Encryption::Undecryptable);
+        let d: OmemoDevice = core_omemo::OmemoDevice {
+            jid: "a@b".into(),
+            device_id: 5,
+            fingerprint: Some("ab".into()),
+            label: None,
+            trust: Some(core_omemo::OmemoTrust::Distrusted),
+            active: true,
+            own: false,
+            this_device: false,
+        }
+        .into();
+        assert_eq!(d.trust, Some(OmemoTrust::Distrusted));
+        let back: core_omemo::OmemoTrust = OmemoTrust::Verified.into();
+        assert_eq!(back, core_omemo::OmemoTrust::Verified);
+        let ev: ClientEvent = core_actor::ClientEvent::OmemoSendFailed {
+            peer: chord_core::jid::BareJid::new("a@b").unwrap(),
+            message_id: "m".into(),
+            reason: "r".into(),
+        }
+        .into();
+        assert!(matches!(ev, ClientEvent::OmemoSendFailed { reason, .. } if reason == "r"));
     }
 
     #[test]
