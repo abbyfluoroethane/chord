@@ -9,6 +9,7 @@ use chord_core::actor;
 use chord_core::actor::ClientEvent;
 use chord_core::features::muc::{RoomAffiliation, RoomCard, RoomRole, RoomSettings};
 use chord_core::features::notify::{NotificationLevel, NotificationSetting};
+use chord_core::features::omemo::{OmemoDevice, OmemoTrust};
 use chord_core::features::profile::{Device, Profile, ProfileEdit};
 use chord_core::features::push::PushRegistration;
 use chord_core::features::roster::Contact;
@@ -1178,6 +1179,65 @@ pub async fn notification_level(
 #[tauri::command]
 pub async fn push_registrations(state: State<'_, AppState>) -> Res<Vec<PushRegistration>> {
     Ok(state.handle()?.push_registrations().await?)
+}
+
+// ---------------------------------------------------------------- OMEMO
+
+/// True if OMEMO is on for the chat with `peer`.
+#[tauri::command]
+pub async fn omemo_enabled(state: State<'_, AppState>, peer: String) -> Res<bool> {
+    Ok(state.handle()?.omemo_enabled(bare(&peer)?).await?)
+}
+
+/// Turn OMEMO on or off for the chat with `peer`.
+#[tauri::command]
+pub async fn set_omemo_enabled(
+    state: State<'_, AppState>,
+    peer: String,
+    enabled: bool,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .set_omemo_enabled(bare(&peer)?, enabled)
+        .await?)
+}
+
+/// The OMEMO devices that we know for `jid`.
+#[tauri::command]
+pub async fn omemo_devices(state: State<'_, AppState>, jid: String) -> Res<Vec<OmemoDevice>> {
+    Ok(state.handle()?.omemo_devices(bare(&jid)?).await?)
+}
+
+/// The OMEMO devices of our own account.
+#[tauri::command]
+pub async fn own_omemo_devices(state: State<'_, AppState>) -> Res<Vec<OmemoDevice>> {
+    Ok(state.handle()?.own_omemo_devices().await?)
+}
+
+/// Fetch the device list and the bundles of `jid` from the server.
+#[tauri::command]
+pub async fn refresh_omemo_devices(state: State<'_, AppState>, jid: String) -> Res<()> {
+    Ok(state.handle()?.refresh_omemo_devices(bare(&jid)?).await?)
+}
+
+/// Set the trust in a key of `jid`. `fingerprint` is the text of `OmemoDevice::fingerprint`.
+#[tauri::command]
+pub async fn set_omemo_trust(
+    state: State<'_, AppState>,
+    jid: String,
+    fingerprint: String,
+    trust: OmemoTrust,
+) -> Res<()> {
+    Ok(state
+        .handle()?
+        .set_omemo_trust(bare(&jid)?, fingerprint, trust)
+        .await?)
+}
+
+/// Remove one of our other devices from our device list.
+#[tauri::command]
+pub async fn remove_own_omemo_device(state: State<'_, AppState>, device_id: u32) -> Res<()> {
+    Ok(state.handle()?.remove_own_omemo_device(device_id).await?)
 }
 
 #[cfg(test)]

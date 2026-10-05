@@ -3,6 +3,8 @@
   // typing line.
   import { untrack } from 'svelte';
   import Paperclip from 'lucide-svelte/icons/paperclip';
+  import Lock from 'lucide-svelte/icons/lock';
+  import LockOpen from 'lucide-svelte/icons/lock-open';
   import Smile from 'lucide-svelte/icons/smile';
   import X from 'lucide-svelte/icons/x';
   import type { Gif } from '$lib/chord';
@@ -24,6 +26,8 @@
   import { isSendKey } from './sendkey';
   import { tooltip } from './tooltip';
   import { isGroup } from './types';
+  import { canEncrypt, lockView, uploadState } from './omemodata';
+  import { omemo } from './omemo.svelte';
   import {
     loadShortcodes,
     replaceShortcodesOutsideCode,
@@ -125,6 +129,15 @@
   const styled = $derived(highlightDraft(value));
   let scrollTop = $state(0);
 
+  // The lock of a 1:1 chat. While it is on, no file goes out.
+  const lock = $derived(lockView(canEncrypt(app.channel), omemo.isOn(app.selectedJid)));
+  const upload = $derived(uploadState(lock.show && lock.on));
+
+  $effect(() => {
+    const jid = app.selectedJid;
+    if (jid && canEncrypt(app.channel)) untrack(() => void omemo.load(jid));
+  });
+
   // The files that wait in the tray for this chat.
   const trayItems = $derived(tray.items(app.selectedJid));
 
@@ -166,6 +179,10 @@
 
   /** Add files to the tray of this chat. A file that cannot join gives a message. */
   function addFiles(list: File[]) {
+    if (upload.disabled) {
+      ui.say(upload.hint, true);
+      return;
+    }
     for (const problem of tray.addFiles(app.selectedJid, list)) ui.say(problem, true);
     box?.focus();
   }
@@ -312,6 +329,10 @@
    * sends. The shortcut for the dialog calls this function.
    */
   export function openFileDialog() {
+    if (upload.disabled) {
+      ui.say(upload.hint, true);
+      return;
+    }
     files?.click();
   }
 
@@ -374,8 +395,10 @@
   >
     <button
       class="upload"
-      aria-label="Upload a file"
-      use:tooltip={{ text: 'Upload a file', side: 'top' }}
+      class:off={upload.disabled}
+      aria-label={upload.hint}
+      aria-disabled={upload.disabled}
+      use:tooltip={{ text: upload.hint, side: 'top' }}
       onclick={openFileDialog}
     >
       <Icon icon={Paperclip} size={20} />
@@ -418,6 +441,18 @@
     ></textarea>
     </div>
     <div class="tools">
+      {#if lock.show}
+        <button
+          class="tool"
+          class:on={lock.on}
+          aria-label={lock.label}
+          aria-pressed={lock.on}
+          use:tooltip={{ text: lock.label, side: 'top' }}
+          onclick={() => void omemo.setEnabled(app.selectedJid, !lock.on)}
+        >
+          <Icon icon={lock.on ? Lock : LockOpen} size={20} />
+        </button>
+      {/if}
       {#if prefs.gifPicker}
         <button
           class="tool"
@@ -608,6 +643,12 @@
   .upload:hover {
     color: var(--ink);
   }
+  .upload.off,
+  .upload.off:hover {
+    color: var(--ink-muted);
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   .editor {
     position: relative;
     flex: 1;
@@ -730,6 +771,9 @@
   .tool.on {
     background: var(--hover);
     color: var(--ink);
+  }
+  .tool.on :global(svg) {
+    color: var(--online);
   }
   /* The GIF mark: a small outlined label with the 1.5px line of the icons. */
   .gif-mark {

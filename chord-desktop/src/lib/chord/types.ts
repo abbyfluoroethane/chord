@@ -163,6 +163,30 @@ export interface TimelineItem {
   /** XEP-0446: what the sender said about the file. Every part can be missing. */
   attachmentInfo?: FileInfo | null;
   status: DeliveryStatus;
+  /** How the message was protected. Older cores send no field: read it as `none`. */
+  encryption?: Encryption;
+}
+
+/** The protection of a stored message. `undecryptable`: the body is a short notice from the core. */
+export type Encryption = 'none' | 'omemo' | 'undecryptable';
+
+/** How much we trust a key of an OMEMO device. */
+export type OmemoTrust = 'undecided' | 'blind' | 'verified' | 'distrusted';
+
+/** One OMEMO device of a contact or of our own account. */
+export interface OmemoDevice {
+  jid: string;
+  deviceId: number;
+  /** 8 groups of 8 hex characters. Null until we have seen the key. */
+  fingerprint: string | null;
+  label: string | null;
+  /** Null until we have seen the key. */
+  trust: OmemoTrust | null;
+  /** False when the device is not in the last device list. */
+  active: boolean;
+  own: boolean;
+  /** True for the device that this client runs on. */
+  thisDevice: boolean;
 }
 
 /** One stored message that matches a search. `id` is the timeline id. */
@@ -247,7 +271,15 @@ export type ClientEvent =
   | { type: 'typing'; data: { peer: string; typers: string[] } }
   /** The blocklist changed. Read it again with `blockedContacts`. */
   | { type: 'blockListChanged' }
-  | { type: 'contactChanged'; data: Jid };
+  | { type: 'contactChanged'; data: Jid }
+  /** The keys of this device were lost. The core made a new OMEMO device. */
+  | { type: 'omemoKeysReset' }
+  /** A device of `jid` has a key that needs a decision. It gets no message keys until then. */
+  | { type: 'omemoTrustNeeded'; data: { jid: Jid; deviceId: number; fingerprint: string } }
+  /** The devices or the trust of `jid` changed. Read `omemoDevices` again. */
+  | { type: 'omemoDevicesChanged'; data: Jid }
+  /** An encrypted message did not go out. The core did not send it as plain text. */
+  | { type: 'omemoSendFailed'; data: { peer: Jid; messageId: string; reason: string } };
 
 // ---------------------------------------------------------------- values
 

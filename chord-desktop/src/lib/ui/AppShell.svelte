@@ -13,6 +13,9 @@
   import ForwardModal from './ForwardModal.svelte';
   import ConnectionBanner from './ConnectionBanner.svelte';
   import UpdateBanner from './UpdateBanner.svelte';
+  import OmemoBanner from './OmemoBanner.svelte';
+  import OmemoDevicesModal from './OmemoDevicesModal.svelte';
+  import { omemo } from './omemo.svelte';
   import ContactsPage from './ContactsPage.svelte';
   import DmProfile from './DmProfile.svelte';
   import MemberList from './MemberList.svelte';
@@ -139,6 +142,7 @@
 <div class="app">
   <ConnectionBanner />
   <UpdateBanner />
+  <OmemoBanner />
   <div class="cols">
     <CircleRail />
     <ChannelSidebar />
@@ -178,6 +182,9 @@
 {/if}
 {#if ui.captchaAsk}
   <RoomCaptchaModal ask={ui.captchaAsk} onclose={() => (ui.captchaAsk = null)} />
+{/if}
+{#if omemo.devicesFor}
+  <OmemoDevicesModal jid={omemo.devicesFor} onclose={() => omemo.closeDevices()} />
 {/if}
 {#if ui.confirm}<ConfirmModal state={ui.confirm} onclose={() => (ui.confirm = null)} />{/if}
 {#if ui.circleDialog}

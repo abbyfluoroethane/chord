@@ -103,6 +103,8 @@ export interface TimelineItem {
   attachment: Attachment | null;
   status: MessageStatus;
   mention: boolean; // UI: the message mentions me
+  /** How the message was protected. Missing means plain text. */
+  encryption?: 'none' | 'omemo' | 'undecryptable';
 }
 
 export interface Me {
@@ -193,6 +195,7 @@ export type ContactsTab = 'online' | 'all' | 'pending' | 'blocked' | 'add';
 export type SettingsPage =
   | 'account'
   | 'privacy'
+  | 'encryption'
   | 'notifications'
   | 'behaviour'
   | 'appearance'

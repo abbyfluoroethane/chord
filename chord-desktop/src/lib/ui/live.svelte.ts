@@ -49,6 +49,8 @@ import {
 } from './adapt';
 import { app, HOME } from './app.svelte';
 import { contactsStore } from './contacts.svelte';
+import { omemo } from './omemo.svelte';
+import { UPLOAD_HINT } from './omemodata';
 import { rail, type RailEntry } from './rail.svelte';
 import { roomAlerts } from './roomalerts.svelte';
 import { session } from './session.svelte';
@@ -559,6 +561,12 @@ class LiveController {
         clearTimeout(this.contactsTimer);
         this.contactsTimer = setTimeout(() => void contactsStore.refresh(), 300);
         break;
+      case 'omemoKeysReset':
+      case 'omemoTrustNeeded':
+      case 'omemoDevicesChanged':
+      case 'omemoSendFailed':
+        omemo.onEvent(e);
+        break;
       case 'messageReceived':
         // The views already show it.
         break;
@@ -573,7 +581,8 @@ class LiveController {
         const action = dropAction(ev.payload.type, app.showContacts);
         app.dropping = action === 'show';
         if (action === 'upload' && ev.payload.type === 'drop') {
-          for (const p of ev.payload.paths) for (const m of tray.addPath(app.selectedJid, p)) ui.say(m, true);
+          if (omemo.isOn(app.selectedJid)) ui.say(UPLOAD_HINT, true);
+          else for (const p of ev.payload.paths) for (const m of tray.addPath(app.selectedJid, p)) ui.say(m, true);
         }
       });
       if (gen !== this.generation) un();
