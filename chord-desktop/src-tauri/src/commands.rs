@@ -1191,11 +1191,7 @@ pub async fn omemo_enabled(state: State<'_, AppState>, peer: String) -> Res<bool
 
 /// Turn OMEMO on or off for the chat with `peer`.
 #[tauri::command]
-pub async fn set_omemo_enabled(
-    state: State<'_, AppState>,
-    peer: String,
-    enabled: bool,
-) -> Res<()> {
+pub async fn set_omemo_enabled(state: State<'_, AppState>, peer: String, enabled: bool) -> Res<()> {
     Ok(state
         .handle()?
         .set_omemo_enabled(bare(&peer)?, enabled)

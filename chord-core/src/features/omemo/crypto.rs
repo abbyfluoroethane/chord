@@ -1,6 +1,6 @@
-//! The one place that calls `chord-omemo`. Chord writes no crypto of its own: every key,
-//! session, and payload operation goes through this file into libomemo-c and the payload
-//! code of `chord-omemo`. The rest of the feature only handles bytes and XML.
+//! The one place that calls `chord-omemo`. Every key, session, and payload operation goes
+//! through this file into `chord-omemo` (a fork of the vodozemac ratchet, changed for
+//! OMEMO 2). The rest of the feature only handles bytes and XML.
 //!
 //! The wasm build has no `chord-omemo`. It uses `crypto_off.rs`, which has the same names
 //! and says "not available".

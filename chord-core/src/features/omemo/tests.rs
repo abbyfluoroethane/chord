@@ -1,6 +1,6 @@
 //! Tests of the OMEMO feature. Two accounts in memory exchange stanzas through two
-//! harnesses. The crypto is the real one (libomemo-c), so a message that decrypts here would
-//! decrypt on the wire too.
+//! harnesses. The crypto is the real one (`chord-omemo`), so a message that decrypts here
+//! would decrypt on the wire too.
 
 use std::sync::Arc;
 
