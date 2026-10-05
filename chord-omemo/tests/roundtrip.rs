@@ -347,3 +347,50 @@ fn payload_round_trip_and_tamper() {
     assert_eq!(payload::decrypt(&bad_key, &ct).unwrap_err(), Error::BadMac);
     assert!(payload::decrypt(&material[..40], &ct).is_err());
 }
+
+#[test]
+fn heartbeat_is_due_from_counter_53_and_the_counter_is_read_from_the_message() {
+    use chord_omemo::HEARTBEAT_COUNTER;
+    assert_eq!(HEARTBEAT_COUNTER, 53);
+    let mut p = connect();
+    // `connect` sent message 0. Alice sends 59 more, and Bob never answers.
+    let mut ratchet = None;
+    let mut first_due = None;
+    for n in 1..60u32 {
+        let enc = encrypt_key(&p.alice, Some(&p.alice_session), None, &key_material()).unwrap();
+        p.alice_session = enc.session;
+        let dec = decrypt_key(&p.bob, Some(&p.bob_session), &enc.data, enc.kex).unwrap();
+        p.bob_session = dec.session;
+        assert_eq!(dec.counter, n);
+        // The sending chain does not change while Bob is silent.
+        assert_eq!(
+            *ratchet.get_or_insert(dec.ratchet_key.clone()),
+            dec.ratchet_key
+        );
+        assert_eq!(dec.heartbeat_due, n >= 53, "message {n}");
+        if dec.heartbeat_due && first_due.is_none() {
+            first_due = Some(n);
+        }
+    }
+    assert_eq!(first_due, Some(53));
+}
+
+#[test]
+fn a_reply_starts_a_new_chain_with_a_new_ratchet_key_and_counter() {
+    let mut p = connect();
+    let enc = encrypt_key(&p.alice, Some(&p.alice_session), None, &key_material()).unwrap();
+    p.alice_session = enc.session;
+    let first = decrypt_key(&p.bob, Some(&p.bob_session), &enc.data, enc.kex).unwrap();
+    p.bob_session = first.session;
+    // Bob answers, and Alice reads it. Alice's next message uses a new ratchet key.
+    let reply = encrypt_key(&p.bob, Some(&p.bob_session), None, &key_material()).unwrap();
+    p.bob_session = reply.session;
+    let got = decrypt_key(&p.alice, Some(&p.alice_session), &reply.data, reply.kex).unwrap();
+    assert_eq!(got.counter, 0);
+    assert!(!got.heartbeat_due);
+    p.alice_session = got.session;
+    let enc = encrypt_key(&p.alice, Some(&p.alice_session), None, &key_material()).unwrap();
+    let next = decrypt_key(&p.bob, Some(&p.bob_session), &enc.data, enc.kex).unwrap();
+    assert_eq!(next.counter, 0);
+    assert_ne!(next.ratchet_key, first.ratchet_key);
+}

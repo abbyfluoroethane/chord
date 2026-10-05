@@ -154,6 +154,9 @@ pub(crate) struct OpenedKey {
     pub used_prekey: Option<u32>,
     /// The `<ik>` of the sender device.
     pub remote_identity_key: Vec<u8>,
+    /// The ratchet key of the sender, when the message asks for a heartbeat (XEP-0384:
+    /// counter 53 or higher). `None` otherwise.
+    pub heartbeat_ratchet_key: Option<Vec<u8>>,
 }
 
 pub(crate) fn decrypt_key(
@@ -168,6 +171,7 @@ pub(crate) fn decrypt_key(
             session: d.session,
             used_prekey: d.used_prekey_id,
             remote_identity_key: d.remote_identity_key,
+            heartbeat_ratchet_key: d.heartbeat_due.then_some(d.ratchet_key),
         }),
         Err(chord_omemo::Error::Duplicate) => Err(OpenError::Duplicate),
         Err(e) => Err(OpenError::Other(e.to_string())),

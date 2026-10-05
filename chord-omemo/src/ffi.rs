@@ -387,6 +387,13 @@ unsafe extern "C" {
         registration_id: u32,
         global: *mut signal_context,
     ) -> c_int;
+    pub fn signal_message_get_counter(message: *const signal_message) -> u32;
+    pub fn signal_message_get_sender_ratchet_key(
+        message: *const signal_message,
+    ) -> *mut ec_public_key;
+    pub fn pre_key_signal_message_get_signal_message(
+        message: *const pre_key_signal_message,
+    ) -> *mut signal_message;
     pub fn pre_key_signal_message_get_pre_key_id(message: *const pre_key_signal_message) -> u32;
     pub fn pre_key_signal_message_get_identity_key(
         message: *const pre_key_signal_message,

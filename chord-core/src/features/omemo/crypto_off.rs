@@ -97,6 +97,7 @@ pub(crate) struct OpenedKey {
     pub session: Vec<u8>,
     pub used_prekey: Option<u32>,
     pub remote_identity_key: Vec<u8>,
+    pub heartbeat_ratchet_key: Option<Vec<u8>>,
 }
 
 pub(crate) fn decrypt_key(

@@ -1357,3 +1357,42 @@ fn a_chat_with_ourselves_does_not_double_the_keys() {
     assert_eq!(enc.keys.len(), 1);
     assert_eq!(enc.keys[0].keys.len(), 1);
 }
+
+#[test]
+fn a_heartbeat_goes_to_the_sender_device_once_at_counter_53() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    enable(&mut p.bob, ALICE);
+    // Alice sends 60 messages and never reads an answer from Bob, so the ratchet key of
+    // Alice stays the same.
+    let first = alice_sends(&mut p, "message 0");
+    let mut empty_after = Vec::new();
+    for n in 0..60 {
+        let m = if n == 0 {
+            first.clone()
+        } else {
+            send_chat(&mut p.alice, BOB, &format!("message {n}"));
+            sent_messages(&mut p.alice).pop().unwrap()
+        };
+        deliver(&mut p.bob, "alice@chord.localhost/phone", m);
+        let out = sent_messages(&mut p.bob);
+        for o in &out {
+            let enc = Encrypted::find(o).unwrap().unwrap();
+            assert!(enc.payload.is_none(), "an answer is an empty message");
+            assert_eq!(o.to.as_ref().unwrap().to_bare(), bare(ALICE));
+            assert_eq!(enc.keys.len(), 1);
+            assert_eq!(
+                enc.keys[0].keys.len(),
+                1,
+                "only the sender device gets a key"
+            );
+            assert_eq!(enc.keys[0].keys[0].rid, p.pa.device);
+        }
+        if !out.is_empty() {
+            empty_after.push((n, out.len()));
+        }
+    }
+    // The key exchange answer after message 0, and one heartbeat at message 53.
+    assert_eq!(empty_after, vec![(0, 1), (53, 1)]);
+    assert_eq!(rows(&p.bob, ALICE).len(), 60, "empty messages make no rows");
+}

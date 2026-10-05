@@ -284,6 +284,9 @@ pub(crate) struct State {
     ticks: u32,
     /// We made new keys at this connect, so the server has no bundle of ours.
     fresh: bool,
+    /// The last ratchet key of each remote device that got a heartbeat from us. One
+    /// heartbeat for each ratchet key.
+    heartbeats: HashMap<(BareJid, u32), Vec<u8>>,
 }
 
 impl State {
