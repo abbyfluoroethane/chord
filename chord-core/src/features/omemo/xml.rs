@@ -470,7 +470,7 @@ pub fn wrap(message: &mut Message, encrypted: &Encrypted) {
 
 // The XEP-0420 envelope.
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Envelope {
     /// The payload elements, for example `<body xmlns='jabber:client'/>`.
     pub content: Vec<Element>,
@@ -478,6 +478,21 @@ pub struct Envelope {
     pub time: Option<DateTime>,
     pub from: Option<Jid>,
     pub to: Option<Jid>,
+}
+
+impl std::fmt::Debug for Envelope {
+    // The content is the plaintext of a message, so Debug never shows it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Envelope")
+            .field(
+                "content",
+                &format_args!("<{} elements>", self.content.len()),
+            )
+            .field("time", &self.time)
+            .field("from", &self.from)
+            .field("to", &self.to)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Make random padding of 0 to `MAX_RPAD` characters from `rng_bytes`. The first byte sets

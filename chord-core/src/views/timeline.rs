@@ -81,6 +81,10 @@ pub enum Encryption {
     None,
     /// OMEMO 2. We decrypted it, or we sent it encrypted.
     Omemo,
+    /// OMEMO 2, but the sending device has no trust decision yet (`Undecided`). The text
+    /// is real, but the frontend should warn: the key is not checked.
+    #[cfg_attr(feature = "serde", serde(rename = "omemo-untrusted"))]
+    OmemoUntrusted,
     /// An OMEMO message that we could not decrypt. The body is a short notice, not the
     /// fallback text of the sender.
     Undecryptable,
@@ -311,6 +315,9 @@ pub(crate) fn query(
             encryption: match row.encryption.as_deref() {
                 None => Encryption::None,
                 Some(crate::features::omemo::store::ENCRYPTION_FAILED) => Encryption::Undecryptable,
+                Some(crate::features::omemo::store::ENCRYPTION_UNTRUSTED) => {
+                    Encryption::OmemoUntrusted
+                }
                 Some(_) => Encryption::Omemo,
             },
         });

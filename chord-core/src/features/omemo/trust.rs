@@ -55,6 +55,19 @@ pub(super) enum KeyChange {
     Replaced,
 }
 
+/// How the key `ik` compares with the one that we know for the device. It changes nothing.
+pub(super) fn peek_key(ctx: &Ctx<'_>, jid: &BareJid, device: u32, ik: &[u8]) -> KeyChange {
+    let known = store::list_devices(ctx.store, ctx.account_id, jid.as_str())
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|d| d.device_id == device))
+        .and_then(|d| d.identity_key);
+    match known.as_deref() {
+        None => KeyChange::New,
+        Some(old) if old == ik => KeyChange::Same,
+        Some(_) => KeyChange::Replaced,
+    }
+}
+
 /// We see the key of a device (from a bundle, or from a key exchange). Store it, decide the
 /// trust, and tell the frontends about a key that needs a decision. A changed key drops the
 /// old session of the device.
@@ -64,15 +77,7 @@ pub(super) fn learn_key(
     device: u32,
     ik: &[u8],
 ) -> (KeyChange, TrustLevel) {
-    let known = store::list_devices(ctx.store, ctx.account_id, jid.as_str())
-        .ok()
-        .and_then(|rows| rows.into_iter().find(|d| d.device_id == device))
-        .and_then(|d| d.identity_key);
-    let change = match known.as_deref() {
-        None => KeyChange::New,
-        Some(old) if old == ik => KeyChange::Same,
-        Some(_) => KeyChange::Replaced,
-    };
+    let change = peek_key(ctx, jid, device, ik);
     if change != KeyChange::Same {
         if let Err(e) = store::upsert_device(
             ctx.store,

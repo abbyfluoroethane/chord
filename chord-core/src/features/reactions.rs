@@ -197,12 +197,18 @@ fn react(ctx: &mut Ctx<'_>, item_id: &str, emojis: Vec<String>) -> Result<(), Cl
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
-    message_ext::send_to_peer(ctx, row.kind, &to, message)?;
-    save(ctx, row.rowid, &ctx.account.to_string(), &emojis).map_err(store_error)?;
-    if let Some(key) = message_ext::timeline_key(&row.peer) {
-        ctx.changed(key);
-    }
-    Ok(())
+    // The reactions change when the message goes out. A failed send leaves them as they are.
+    let (rowid, peer) = (row.rowid, row.peer.clone());
+    message_ext::send_change(ctx, &row, &to, message, move |ctx| {
+        let own = ctx.account.to_string();
+        if let Err(e) = save(ctx, rowid, &own, &emojis) {
+            ctx.store_error("save reactions", e);
+            return;
+        }
+        if let Some(key) = message_ext::timeline_key(&peer) {
+            ctx.changed(key);
+        }
+    })
 }
 
 fn toggle(ctx: &mut Ctx<'_>, item_id: &str, emoji: String) -> Result<(), ClientError> {
@@ -240,6 +246,9 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
             return true;
         }
     };
+    if message_ext::refuse_plain_change(&row, incoming) {
+        return true;
+    }
     let sender = match (incoming.direction, incoming.kind) {
         (Direction::Out, _) => ctx.account.to_string(),
         // XEP-0421: the occupant-id names the person through nick changes, so that a new
@@ -343,6 +352,7 @@ mod tests {
             peer,
             sender,
             timestamp: None,
+            encrypted: false,
         };
         h.with_ctx(|ctx| on_message(ctx, &inc))
     }

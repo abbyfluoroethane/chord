@@ -74,6 +74,14 @@ fn timeline_item_uses_camel_case_names() {
 }
 
 #[test]
+fn an_untrusted_omemo_message_has_its_own_name() {
+    let mut item = item();
+    item.encryption = Encryption::OmemoUntrusted;
+    let value = serde_json::to_value(item).unwrap();
+    assert_eq!(value["encryption"], json!("omemo-untrusted"));
+}
+
+#[test]
 fn list_diffs_are_tagged() {
     let insert = serde_json::to_value(ListDiff::Insert {
         index: 2,
@@ -193,6 +201,16 @@ fn omemo_events_and_values() {
     assert_eq!(
         serde_json::to_value(ClientEvent::OmemoDevicesChanged(jid.clone())).unwrap(),
         json!({"type": "omemoDevicesChanged", "data": "bob@example.org"})
+    );
+    assert_eq!(
+        serde_json::to_value(ClientEvent::OmemoDevicesSkipped {
+            peer: jid.clone(),
+            device_ids: vec![7, 9],
+        })
+        .unwrap(),
+        json!({"type": "omemoDevicesSkipped", "data": {
+            "peer": "bob@example.org", "deviceIds": [7, 9]
+        }})
     );
     assert_eq!(
         serde_json::to_value(ClientEvent::OmemoSendFailed {

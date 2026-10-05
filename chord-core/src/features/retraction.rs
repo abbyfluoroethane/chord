@@ -141,9 +141,11 @@ fn retract(ctx: &mut Ctx<'_>, item_id: &str) -> Result<(), ClientError> {
     message
         .payloads
         .push(Element::builder("store", NS_HINTS).build());
-    message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
-    apply(ctx, &row, None);
-    Ok(())
+    // The row changes when the message goes out. A failed send leaves it as it is.
+    let sent_row = row.clone();
+    message_ext::send_change(ctx, &row, &peer, message, move |ctx| {
+        apply(ctx, &sent_row, None)
+    })
 }
 
 /// The id that a retraction of a chat message names (XEP-0424, section 6): the origin-id
@@ -332,6 +334,9 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
             return true;
         }
     };
+    if message_ext::refuse_plain_change(&row, incoming) {
+        return true;
+    }
     if !same_sender(&row, incoming.sender) {
         log::debug!(
             "retraction from {} for another sender ignored",
@@ -375,6 +380,7 @@ mod tests {
             peer: BOB,
             sender,
             timestamp: None,
+            encrypted: false,
         };
         h.with_ctx(|ctx| on_message(ctx, &incoming))
     }
@@ -575,6 +581,7 @@ mod tests {
                 peer: &peer,
                 sender,
                 timestamp: None,
+                encrypted: false,
             };
             h.with_ctx(|ctx| on_message(ctx, &incoming))
         };
@@ -616,6 +623,7 @@ mod tests {
             peer: ROOM,
             sender,
             timestamp: Some(7),
+            encrypted: false,
         };
         h.with_ctx(|ctx| on_moderation(ctx, &incoming))
     }

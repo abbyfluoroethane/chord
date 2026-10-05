@@ -74,7 +74,7 @@ pub(crate) fn empty_material() -> Vec<u8> {
 pub(crate) struct SealedKey {
     pub data: Vec<u8>,
     pub kex: bool,
-    pub session: Vec<u8>,
+    pub session: Zeroizing<Vec<u8>>,
 }
 
 pub(crate) fn encrypt_key(
@@ -94,7 +94,7 @@ pub(crate) enum OpenError {
 
 pub(crate) struct OpenedKey {
     pub material: Zeroizing<Vec<u8>>,
-    pub session: Vec<u8>,
+    pub session: Zeroizing<Vec<u8>>,
     pub used_prekey: Option<u32>,
     pub remote_identity_key: Vec<u8>,
     pub heartbeat_ratchet_key: Option<Vec<u8>>,

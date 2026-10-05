@@ -435,6 +435,7 @@ mod tests {
             peer,
             sender,
             timestamp: None,
+            encrypted: false,
         };
         h.with_ctx(|ctx| after_store(ctx, &incoming, &stored, live));
         std::mem::take(&mut h.effects)

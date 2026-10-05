@@ -151,9 +151,11 @@ fn edit(ctx: &mut Ctx<'_>, item_id: &str, body: String) -> Result<(), ClientErro
     message
         .payloads
         .push(Element::from(Replace { id: Id(original) }));
-    message_ext::send_to_peer(ctx, row.kind, &peer, message)?;
-    apply(ctx, &row, &body, None);
-    Ok(())
+    // The row changes when the message goes out. A failed send leaves it as it is.
+    let sent_row = row.clone();
+    message_ext::send_change(ctx, &row, &peer, message, move |ctx| {
+        apply(ctx, &sent_row, &body, None)
+    })
 }
 
 /// True if `row` is the last of our own messages in its chat, room, or private chat, not
@@ -232,6 +234,9 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
             return false;
         }
     };
+    if message_ext::refuse_plain_change(&row, incoming) {
+        return true;
+    }
     if !same_sender(&row, incoming.sender) {
         log::debug!(
             "correction from {} for another sender ignored",
@@ -318,6 +323,7 @@ pub(crate) mod tests {
             peer: BOB,
             sender,
             timestamp: Some(5000),
+            encrypted: false,
         };
         h.with_ctx(|ctx| on_message(ctx, &incoming))
     }
@@ -376,6 +382,7 @@ pub(crate) mod tests {
             peer: BOB,
             sender: BOB,
             timestamp: None,
+            encrypted: false,
         };
         assert!(!h.with_ctx(|ctx| on_message(ctx, &incoming)));
         // One from the archive waits for its target (orphans.rs).
@@ -567,6 +574,7 @@ pub(crate) mod tests {
                 peer: &peer,
                 sender,
                 timestamp: Some(5000),
+                encrypted: false,
             };
             h.with_ctx(|ctx| on_message(ctx, &inc))
         };

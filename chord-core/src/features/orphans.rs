@@ -22,6 +22,11 @@ const MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 /// The most changes that one account keeps.
 const MAX_PENDING: i64 = 500;
 
+/// A private mark in a stored stanza: the change came in an OMEMO envelope. The table has
+/// no column for it. `stash` removes any such element from the stanza first, so a sender
+/// cannot set the mark.
+const NS_ENCRYPTED_MARK: &str = "urn:chord:internal:encrypted";
+
 /// What a waiting change does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Change {
@@ -42,11 +47,14 @@ impl Change {
 
 /// Keep a change for the message `target` of `incoming.peer`, which is not stored yet.
 pub(crate) fn stash(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>, target: &str, change: Change) {
+    let mut kept = incoming.message.clone();
+    kept.payloads.retain(|p| p.ns() != NS_ENCRYPTED_MARK);
+    if incoming.encrypted {
+        kept.payloads
+            .push(Element::builder("encrypted", NS_ENCRYPTED_MARK).build());
+    }
     let mut xml = Vec::new();
-    if Element::from(incoming.message.clone())
-        .write_to(&mut xml)
-        .is_err()
-    {
+    if Element::from(kept).write_to(&mut xml).is_err() {
         return;
     }
     let stanza = String::from_utf8_lossy(&xml).into_owned();
@@ -138,9 +146,11 @@ pub(crate) fn after_store(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>, stored: &S
         ) else {
             continue;
         };
-        let Ok(message) = Message::try_from(element) else {
+        let Ok(mut message) = Message::try_from(element) else {
             continue;
         };
+        let encrypted = message.payloads.iter().any(|p| p.ns() == NS_ENCRYPTED_MARK);
+        message.payloads.retain(|p| p.ns() != NS_ENCRYPTED_MARK);
         let replay = Incoming {
             message: &message,
             kind: msg_kind,
@@ -148,6 +158,7 @@ pub(crate) fn after_store(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>, stored: &S
             peer: incoming.peer,
             sender: &p.sender,
             timestamp: p.timestamp,
+            encrypted,
         };
         log::debug!(
             "applying a {} that waited for message {}",
@@ -214,6 +225,7 @@ mod tests {
             peer: BOB,
             sender: FROM,
             timestamp,
+            encrypted: false,
         };
         h.with_ctx(|ctx| super::super::message_ext::intercept(ctx, &incoming))
     }
@@ -243,6 +255,7 @@ mod tests {
             peer: BOB,
             sender: FROM,
             timestamp: None,
+            encrypted: false,
         };
         h.with_ctx(|ctx| after_store(ctx, &incoming, &stored));
         item
@@ -335,6 +348,7 @@ mod tests {
             peer: BOB,
             sender: "eve@chord.localhost/x",
             timestamp: Some(5),
+            encrypted: false,
         };
         h.with_ctx(|ctx| super::super::message_ext::intercept(ctx, &incoming));
         assert_eq!(count(&h), 1);
@@ -361,6 +375,7 @@ mod tests {
             peer: "bob@chord.localhost",
             sender: "bob@chord.localhost/x",
             timestamp: Some(1),
+            encrypted: false,
         };
         h.with_ctx(|ctx| stash(ctx, &incoming, "m1", Change::Edit));
         h.store
@@ -382,6 +397,7 @@ mod tests {
             peer: "bob@chord.localhost",
             sender: "bob@chord.localhost/x",
             timestamp: None,
+            encrypted: false,
         };
         for i in 0..MAX_PENDING + 5 {
             h.with_ctx(|ctx| stash(ctx, &incoming, &format!("m{i}"), Change::Reaction));

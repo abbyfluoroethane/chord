@@ -701,6 +701,7 @@ fn an_archive_copy_of_a_message_we_sent_here_only_changes_its_key() {
 fn a_restart_keeps_the_session() {
     let mut p = pair();
     enable(&mut p.alice, BOB);
+    enable(&mut p.bob, ALICE);
     let m = alice_sends(&mut p, "one");
     deliver(&mut p.bob, "alice@chord.localhost/phone", m);
     let acks = sent_messages(&mut p.bob);
@@ -1395,4 +1396,514 @@ fn a_heartbeat_goes_to_the_sender_device_once_at_counter_53() {
     // The key exchange answer after message 0, and one heartbeat at message 53.
     assert_eq!(empty_after, vec![(0, 1), (53, 1)]);
     assert_eq!(rows(&p.bob, ALICE).len(), 60, "empty messages make no rows");
+}
+
+// -----------------------------------------------------------------------------------------
+// The fixes of the security review.
+
+const MALLORY: &str = "mallory@chord.localhost";
+
+/// Alice sends `body` to Bob, and Bob reads it. Returns the id of the message.
+fn delivered(p: &mut Pair, body: &str) -> String {
+    let id = send_chat(&mut p.alice, BOB, body);
+    serve_bob(p);
+    let m = sent_messages(&mut p.alice).pop().unwrap();
+    deliver(&mut p.bob, "alice@chord.localhost/phone", m);
+    id
+}
+
+/// (edited_body, retracted, reaction count) of the only row of Bob.
+fn change_state(h: &Harness) -> (Option<String>, bool, i64) {
+    let conn = h.store.conn();
+    let (edited, retracted): (Option<String>, bool) = conn
+        .query_row(
+            "SELECT edited_body, retracted_at IS NOT NULL FROM messages",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let reactions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM reactions", [], |r| r.get(0))
+        .unwrap();
+    (edited, retracted, reactions)
+}
+
+fn plain_message(body: Option<&str>, payload: &str) -> Message {
+    let mut m = Message::chat(None);
+    if let Some(body) = body {
+        m = m.with_body("".into(), body.into());
+    }
+    m.payloads.push(payload.parse().unwrap());
+    m
+}
+
+#[test]
+fn a_plain_change_of_an_encrypted_message_is_dropped() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    enable(&mut p.bob, ALICE);
+    let id = delivered(&mut p, "the real text");
+    assert_eq!(change_state(&p.bob), (None, false, 0));
+    let from = "alice@chord.localhost/phone";
+    let forged = [
+        plain_message(
+            Some("forged text"),
+            &format!("<replace xmlns='urn:xmpp:message-correct:0' id='{id}'/>"),
+        ),
+        plain_message(
+            Some("fallback"),
+            &format!("<retract xmlns='urn:xmpp:message-retract:1' id='{id}'/>"),
+        ),
+        plain_message(
+            None,
+            &format!(
+                "<reactions xmlns='urn:xmpp:reactions:0' id='{id}'><reaction>x</reaction></reactions>"
+            ),
+        ),
+    ];
+    for m in forged {
+        deliver(&mut p.bob, from, m);
+    }
+    assert_eq!(
+        change_state(&p.bob),
+        (None, false, 0),
+        "the row did not change"
+    );
+    let b = rows(&p.bob, ALICE);
+    assert_eq!(b.len(), 1, "no row for a plain change");
+    assert_eq!(b[0].0, "the real text");
+    assert_eq!(b[0].1.as_deref(), Some("omemo:2"));
+}
+
+#[test]
+fn a_plain_message_with_a_body_gets_no_lock_when_omemo_is_on() {
+    let mut p = pair();
+    enable(&mut p.bob, ALICE);
+    let m = plain_message(
+        Some("plain words"),
+        "<active xmlns='http://jabber.org/protocol/chatstates'/>",
+    );
+    deliver(&mut p.bob, "alice@chord.localhost/phone", m);
+    let b = rows(&p.bob, ALICE);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].0, "plain words");
+    assert_eq!(b[0].1, None, "no lock on plain text");
+}
+
+#[test]
+fn an_encrypted_change_of_an_encrypted_message_still_works_after_a_stash() {
+    // A change that waits for its target keeps its mark: a stored encrypted change applies
+    // to an encrypted row, a plain one does not.
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    enable(&mut p.bob, ALICE);
+    let id = send_chat(&mut p.alice, BOB, "typpo");
+    serve_bob(&mut p);
+    let first = sent_messages(&mut p.alice).pop().unwrap();
+    // A correction from the archive (it has a time) runs ahead of its original.
+    use crate::features::corrections;
+    let (tx, mut rx) = oneshot::channel();
+    // Bob must have the original to be corrected: deliver it after the correction.
+    p.alice.with_ctx(|ctx| {
+        // The row of Alice is her last message, so the edit is allowed.
+        corrections::on_command(
+            ctx,
+            corrections::Command::Edit {
+                item_id: format!("origin-id:{id}"),
+                body: "typo".into(),
+                reply: tx,
+            },
+        )
+    });
+    assert!(rx.try_recv().unwrap().unwrap().is_ok());
+    let correction = sent_messages(&mut p.alice).pop().unwrap();
+    let mut late = correction.clone();
+    late.payloads.push(
+        "<delay xmlns='urn:xmpp:delay' stamp='2024-01-01T00:00:00Z'/>"
+            .parse()
+            .unwrap(),
+    );
+    deliver(&mut p.bob, "alice@chord.localhost/phone", late);
+    deliver(&mut p.bob, "alice@chord.localhost/phone", first);
+    let (edited, _, _) = change_state(&p.bob);
+    assert_eq!(edited.as_deref(), Some("typo"));
+}
+
+#[test]
+fn a_failed_encrypted_change_leaves_the_row_and_names_the_target() {
+    use crate::features::{corrections, retraction};
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    let id = send_chat(&mut p.alice, BOB, "a typpo");
+    serve_bob(&mut p);
+    sent_messages(&mut p.alice);
+    // Bob has no device now.
+    let gone = format!(
+        "<message xmlns='jabber:client' from='{BOB}'><event xmlns='http://jabber.org/protocol/pubsub#event'>\
+         <items node='{NODE_DEVICES}'><item id='current'>{}</item></items></event></message>",
+        to_xml(&list_of(&[]))
+    );
+    let message = Message::try_from(gone.parse::<Element>().unwrap()).unwrap();
+    p.alice
+        .with_ctx(|ctx| features::on_stanza(ctx, Stanza::Message(message)));
+    events(&mut p.alice);
+
+    let (tx, mut rx) = oneshot::channel();
+    p.alice.with_ctx(|ctx| {
+        corrections::on_command(
+            ctx,
+            corrections::Command::Edit {
+                item_id: format!("origin-id:{id}"),
+                body: "a typo".into(),
+                reply: tx,
+            },
+        )
+    });
+    let _ = rx.try_recv();
+    assert!(sent_messages(&mut p.alice).is_empty(), "nothing goes out");
+    let edited: Option<String> = p
+        .alice
+        .store
+        .conn()
+        .query_row("SELECT edited_body FROM messages", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(edited, None, "the row did not change");
+    let ev = events(&mut p.alice);
+    assert!(
+        ev.iter().any(|e| matches!(e,
+            ClientEvent::OmemoSendFailed { peer, message_id, .. }
+            if peer.as_str() == BOB && *message_id == id)),
+        "the failure names the target message: {ev:?}"
+    );
+    assert!(
+        !rows(&p.alice, BOB)[0].3,
+        "the target row is not marked as failed"
+    );
+
+    // The same for a retraction.
+    let (tx, mut rx) = oneshot::channel();
+    p.alice.with_ctx(|ctx| {
+        retraction::on_command(
+            ctx,
+            retraction::Command::Retract {
+                item_id: format!("origin-id:{id}"),
+                reply: tx,
+            },
+        )
+    });
+    let _ = rx.try_recv();
+    let retracted: bool = p
+        .alice
+        .store
+        .conn()
+        .query_row("SELECT retracted_at IS NOT NULL FROM messages", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(!retracted, "the row is not retracted");
+}
+
+#[test]
+fn a_store_error_on_the_switch_means_on() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    p.alice
+        .store
+        .conn()
+        .execute_batch("DROP TABLE omemo_conversations")
+        .unwrap();
+    assert!(p.alice.with_ctx(|ctx| super::is_on(ctx, &bare(BOB))));
+    send_chat(&mut p.alice, BOB, "must not leak");
+    // The message waits for the keys of Bob, and never goes out as plain text.
+    for m in sent_messages(&mut p.alice) {
+        assert!(!message_xml(&m).contains("must not leak"));
+    }
+}
+
+#[test]
+fn a_room_cannot_get_the_switch_and_a_room_send_fails_when_it_is_set() {
+    use crate::features::muc;
+    let mut p = pair();
+    let room = bare("dev@rooms.chord.localhost");
+    p.alice
+        .store
+        .conn()
+        .execute(
+            "INSERT INTO rooms (account_id, jid, nick) VALUES (?1, ?2, 'a')",
+            rusqlite::params![p.alice.account_id, room.as_str()],
+        )
+        .unwrap();
+    let (tx, mut rx) = oneshot::channel();
+    p.alice.with_ctx(|ctx| {
+        super::on_command(
+            ctx,
+            Command::SetEnabled {
+                peer: room.clone(),
+                enabled: true,
+                reply: tx,
+            },
+        )
+    });
+    assert!(rx.try_recv().unwrap().unwrap().is_err());
+    assert!(
+        !store::conversation_enabled(&p.alice.store, p.alice.account_id, room.as_str()).unwrap()
+    );
+    // The offline path refuses too.
+    let (tx, mut rx) = oneshot::channel();
+    super::offline(
+        &p.alice.store,
+        p.alice.account_id,
+        Command::SetEnabled {
+            peer: room.clone(),
+            enabled: true,
+            reply: tx,
+        },
+    );
+    assert!(rx.try_recv().unwrap().unwrap().is_err());
+    // If the switch is set anyway, a room send fails and sends nothing.
+    store::set_conversation_enabled(&p.alice.store, p.alice.account_id, room.as_str(), true)
+        .unwrap();
+    let result = p
+        .alice
+        .with_ctx(|ctx| muc::send(ctx, &room, "hello room".into()));
+    assert!(result.is_err());
+    assert!(sent_messages(&mut p.alice).is_empty());
+}
+
+#[test]
+fn a_change_of_an_encrypted_message_is_never_sent_in_plain_text() {
+    use crate::features::corrections;
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    let id = send_chat(&mut p.alice, BOB, "secret typpo");
+    serve_bob(&mut p);
+    sent_messages(&mut p.alice);
+    // The user turns OMEMO off. The row stays encrypted.
+    let (tx, mut rx) = oneshot::channel();
+    p.alice.with_ctx(|ctx| {
+        super::on_command(
+            ctx,
+            Command::SetEnabled {
+                peer: bare(BOB),
+                enabled: false,
+                reply: tx,
+            },
+        )
+    });
+    assert!(rx.try_recv().unwrap().unwrap().is_ok());
+    let (tx, mut rx) = oneshot::channel();
+    p.alice.with_ctx(|ctx| {
+        corrections::on_command(
+            ctx,
+            corrections::Command::Edit {
+                item_id: format!("origin-id:{id}"),
+                body: "secret typo".into(),
+                reply: tx,
+            },
+        )
+    });
+    assert!(
+        rx.try_recv().unwrap().unwrap().is_err(),
+        "the edit is refused"
+    );
+    assert!(sent_messages(&mut p.alice).is_empty(), "nothing goes out");
+}
+
+#[test]
+fn a_message_of_an_undecided_device_has_its_own_mark() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    enable(&mut p.bob, ALICE);
+    // Bob verified another key of Alice before, so a new key is undecided.
+    store::set_trust(
+        &p.bob.store,
+        p.bob.account_id,
+        ALICE,
+        b"another key of alice",
+        store::TrustLevel::Verified,
+    )
+    .unwrap();
+    delivered(&mut p, "who am i");
+    let b = rows(&p.bob, ALICE);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].0, "who am i");
+    assert_eq!(b[0].1.as_deref(), Some(store::ENCRYPTION_UNTRUSTED));
+}
+
+#[test]
+fn the_ids_inside_the_envelope_win_over_the_ones_outside() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    enable(&mut p.bob, ALICE);
+    let id1 = delivered(&mut p, "one");
+    // The second message: the server changes its origin-id to the one of the first, and adds
+    // a delay of 2001.
+    let id2 = send_chat(&mut p.alice, BOB, "two");
+    let mut m = sent_messages(&mut p.alice).pop().unwrap();
+    m.payloads.retain(|x| !x.is("origin-id", "urn:xmpp:sid:0"));
+    m.payloads.push(
+        format!("<origin-id xmlns='urn:xmpp:sid:0' id='{id1}'/>")
+            .parse()
+            .unwrap(),
+    );
+    m.payloads.push(
+        "<delay xmlns='urn:xmpp:delay' stamp='2001-01-01T00:00:00Z'/>"
+            .parse()
+            .unwrap(),
+    );
+    deliver(&mut p.bob, "alice@chord.localhost/phone", m);
+    let b = rows(&p.bob, ALICE);
+    assert_eq!(b.len(), 2, "the second message is not dropped: {b:?}");
+    let (origin, ts): (String, i64) = p
+        .bob
+        .store
+        .conn()
+        .query_row(
+            "SELECT origin_id, timestamp FROM messages WHERE body = 'two'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(origin, id2, "the origin-id of the envelope is stored");
+    assert!(
+        ts > 1_600_000_000_000,
+        "the time of the envelope wins over the delay: {ts}"
+    );
+}
+
+#[test]
+fn nothing_is_trusted_or_answered_when_the_envelope_does_not_fit_the_stanza() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    enable(&mut p.bob, MALLORY);
+    let m = alice_sends(&mut p, "not from mallory");
+    // The envelope says Alice. The stanza says Mallory.
+    deliver(&mut p.bob, "mallory@chord.localhost/x", m);
+    let devices = trust::devices(
+        &p.bob.store,
+        p.bob.account_id,
+        &p.bob.account,
+        &bare(MALLORY),
+    )
+    .unwrap();
+    assert!(devices.is_empty(), "no key is learned: {devices:?}");
+    assert!(sent_messages(&mut p.bob).is_empty(), "no answer");
+    let b = rows(&p.bob, MALLORY);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].1.as_deref(), Some("omemo:2:failed"));
+}
+
+#[test]
+fn a_stranger_gets_no_answer_and_a_contact_gets_one() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    let m = alice_sends(&mut p, "hello from nobody");
+    deliver(&mut p.bob, "alice@chord.localhost/phone", m);
+    assert!(
+        sent_messages(&mut p.bob).is_empty(),
+        "no answer to a stranger"
+    );
+
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    p.bob
+        .store
+        .conn()
+        .execute(
+            "INSERT INTO contacts (account_id, jid, subscription) VALUES (?1, ?2, 'both')",
+            rusqlite::params![p.bob.account_id, ALICE],
+        )
+        .unwrap();
+    let m = alice_sends(&mut p, "hello from a contact");
+    deliver(&mut p.bob, "alice@chord.localhost/phone", m);
+    let acks = sent_messages(&mut p.bob)
+        .into_iter()
+        .filter(|m| Encrypted::find(m).is_some_and(|e| e.is_ok_and(|e| e.payload.is_none())))
+        .count();
+    assert_eq!(acks, 1, "a contact gets the answer");
+}
+
+#[test]
+fn debug_output_shows_no_plaintext() {
+    let envelope = xml::Envelope {
+        content: vec![
+            "<body xmlns='jabber:client'>top secret words</body>"
+                .parse()
+                .unwrap(),
+        ],
+        rpad: "padding-text".into(),
+        time: None,
+        from: None,
+        to: None,
+    };
+    let text = format!("{envelope:?}");
+    assert!(
+        !text.contains("secret") && !text.contains("padding-text"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_device_without_a_bundle_is_reported_as_left_out() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    send_chat(&mut p.alice, BOB, "x");
+    let both = list_of(&[p.pb.device, 4242]);
+    answer_list(&mut p.alice, BOB, Some(&both));
+    answer_bundle(
+        &mut p.alice,
+        BOB,
+        p.pb.device,
+        p.pb.bundle.as_ref().unwrap(),
+    );
+    p.alice.respond(|x| is_bundle(x, BOB, 4242), not_found());
+    assert_eq!(
+        sent_messages(&mut p.alice).len(),
+        1,
+        "the message goes to the other device"
+    );
+    let ev = events(&mut p.alice);
+    assert!(
+        ev.iter().any(|e| matches!(e,
+            ClientEvent::OmemoDevicesSkipped { peer, device_ids }
+            if peer.as_str() == BOB && device_ids == &vec![4242])),
+        "{ev:?}"
+    );
+}
+
+#[test]
+fn a_cached_bundle_with_another_key_is_not_used() {
+    let mut p = pair();
+    enable(&mut p.alice, BOB);
+    // A refresh reads the bundle of Bob into the cache.
+    let (tx, _rx) = oneshot::channel();
+    p.alice.with_ctx(|ctx| {
+        super::on_command(
+            ctx,
+            Command::Refresh {
+                jid: bare(BOB),
+                reply: tx,
+            },
+        )
+    });
+    serve_bob(&mut p);
+    // Then the key of the device changes (a key exchange from the new key told us).
+    store::upsert_device(
+        &p.alice.store,
+        p.alice.account_id,
+        BOB,
+        p.pb.device,
+        Some(b"a new identity key of bob, 32 byte"),
+        None,
+    )
+    .unwrap();
+    send_chat(&mut p.alice, BOB, "stale?");
+    serve_bob(&mut p);
+    for m in sent_messages(&mut p.alice) {
+        assert!(
+            Encrypted::find(&m).is_none(),
+            "no message went out with the old bundle"
+        );
+    }
+    assert!(rows(&p.alice, BOB)[0].3, "the send failed");
 }

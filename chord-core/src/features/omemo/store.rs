@@ -24,6 +24,9 @@ use crate::store::Store;
 pub(crate) const ENCRYPTION_OMEMO: &str = "omemo:2";
 /// `messages.encryption` of an OMEMO message that we could not decrypt.
 pub(crate) const ENCRYPTION_FAILED: &str = "omemo:2:failed";
+/// `messages.encryption` of an OMEMO message that we read, from a device with no trust
+/// decision yet. The text is real, but the key is not checked.
+pub(crate) const ENCRYPTION_UNTRUSTED: &str = "omemo:2:untrusted";
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -797,6 +800,39 @@ pub(crate) fn conversation_enabled(store: &Store, account_id: i64, jid: &str) ->
         )
         .optional()?;
     Ok(on.unwrap_or(false))
+}
+
+/// True if `jid` is a room that the account knows (a bookmark or a join).
+pub(crate) fn is_room(store: &Store, account_id: i64, jid: &str) -> bool {
+    store
+        .conn()
+        .query_row(
+            "SELECT 1 FROM rooms WHERE account_id = ?1 AND jid = ?2",
+            params![account_id, jid],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+/// True if we may answer a device of `jid` with an empty message: it is our own account, a
+/// contact in the roster, or a peer that we have a chat with (a message, or a switch).
+pub(crate) fn is_known_peer(store: &Store, account_id: i64, own: &str, jid: &str) -> bool {
+    if jid == own {
+        return true;
+    }
+    store
+        .conn()
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM contacts WHERE account_id = ?1 AND jid = ?2)
+                 OR EXISTS (SELECT 1 FROM omemo_conversations WHERE account_id = ?1 AND jid = ?2)
+                 OR EXISTS (SELECT 1 FROM messages WHERE account_id = ?1 AND peer = ?2)",
+            params![account_id, jid],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
 }
 
 pub(crate) fn set_conversation_enabled(

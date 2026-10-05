@@ -185,6 +185,12 @@ pub enum ClientEvent {
         message_id: String,
         reason: String,
     },
+    /// An encrypted message went out, but not to some devices of `peer` (or of our own
+    /// account): they have no usable bundle. They cannot read it.
+    OmemoDevicesSkipped {
+        peer: BareJid,
+        device_ids: Vec<u32>,
+    },
 }
 
 /// An error from a `ClientHandle` call.
