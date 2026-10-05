@@ -12,6 +12,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 mod chain_key;
 mod double_ratchet;
@@ -24,82 +26,113 @@ use std::fmt::Debug;
 
 use aes::cipher::block_padding::Error as UnpadError;
 use arrayvec::ArrayVec;
-use chain_key::RemoteChainKey;
 use double_ratchet::DoubleRatchet;
 use hmac::digest::MacError;
 use ratchet::RemoteRatchetKey;
-use receiver_chain::ReceiverChain;
-use root_key::RemoteRootKey;
+use receiver_chain::{MAX_SESSION_MESSAGE_KEYS, ReceiverChain};
+use root_key::RootKey;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-#[cfg(feature = "low-level-api")]
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use super::{
-    SessionConfig,
-    session_config::Version,
-    session_keys::SessionKeys,
-    shared_secret::{RemoteShared3DHSecret, Shared3DHSecret},
+    messages::{Message, PreKeyMessage},
+    shared_secret::X3dhSecret,
 };
-#[cfg(feature = "low-level-api")]
-use crate::hazmat::olm::MessageKey;
-use crate::{
-    Curve25519PublicKey, PickleError,
-    olm::{
-        messages::{Message, OlmMessage, PreKeyMessage},
-        session::double_ratchet::RatchetCount,
-    },
-    utilities::{pickle, unpickle},
-};
+use crate::ratchet::{Curve25519PublicKey, types::Curve25519SecretKey};
 
 const MAX_RECEIVING_CHAINS: usize = 5;
 
-/// Error type for Olm-based decryption failures.
+/// The first byte of a pickled session. A new format gets a new number.
+const PICKLE_VERSION: u8 = 1;
+/// The biggest pickle that we read, in bytes.
+const MAX_PICKLE_LEN: usize = 4 * 1024 * 1024;
+
+/// Error type for decryption failures.
 #[derive(Error, Debug)]
 pub enum DecryptionError {
     /// The message authentication code of the message was invalid.
-    #[error("Failed decrypting Olm message, invalid MAC: {0}")]
+    #[error("Failed decrypting OMEMO message, invalid MAC: {0}")]
     InvalidMAC(#[from] MacError),
-    /// The length of the message authentication code of the message did not
-    /// match our expected length.
-    #[error("Failed decrypting Olm message, invalid MAC length: expected {0}, got {1}")]
-    InvalidMACLength(usize, usize),
     /// The ciphertext of the message isn't padded correctly.
-    #[error("Failed decrypting Olm message, invalid padding")]
+    #[error("Failed decrypting OMEMO message, invalid padding")]
     InvalidPadding(#[from] UnpadError),
     /// One or more keys lacked contributory behavior in the Diffie-Hellman
     /// operation, resulting in an insecure shared secret.
-    ///
-    /// For more details on contributory behavior please refer to the
-    /// [`x25519_dalek::SharedSecret::was_contributory()`] method.
     #[error(
         "One or more keys lacked contributory behavior in the Diffie-Hellman operation, \
          resulting in an insecure shared secret"
     )]
     NonContributoryKey,
     /// The session is missing the correct message key to decrypt the message,
-    /// either because it was already used up, or because the Session has been
-    /// ratcheted forwards and the message key has been discarded.
+    /// either because it was already used up (a replay), or because the Session has
+    /// been ratcheted forwards and the message key has been discarded.
     #[error("The message key with the given key can't be created, message index: {0}")]
     MissingMessageKey(u64),
     /// Too many messages have been skipped to attempt decrypting this message.
     #[error("The message gap was too big, got {0}, max allowed {1}")]
     TooBigMessageGap(u64, u64),
+    /// The random source failed.
+    #[error("The random source failed")]
+    Rng,
 }
 
-/// Error type for Olm-based encryption failures.
+/// Error type for encryption failures.
 #[derive(Error, Debug)]
 pub enum EncryptionError {
     /// One or more keys lacked contributory behavior in the Diffie-Hellman
     /// operation, resulting in an insecure shared secret.
-    ///
-    /// For more details on contributory behavior please refer to the
-    /// [`x25519_dalek::SharedSecret::was_contributory()`] method.
     #[error(
         "One or more keys lacked contributory behavior in the Diffie-Hellman operation, \
          resulting in an insecure shared secret"
     )]
     NonContributoryKey,
+    /// The random source failed.
+    #[error("The random source failed")]
+    Rng,
+    /// The counter of the chain does not fit in the uint32 of the message.
+    #[error("The sending chain is too long")]
+    ChainTooLong,
+}
+
+/// An error from a step of the ratchet.
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RatchetError {
+    /// One or more keys lacked contributory behavior in the Diffie-Hellman operation.
+    #[error("A key was not contributory")]
+    NonContributoryKey,
+    /// The random source failed.
+    #[error("The random source failed")]
+    Rng,
+}
+
+impl From<RatchetError> for DecryptionError {
+    fn from(e: RatchetError) -> Self {
+        match e {
+            RatchetError::NonContributoryKey => Self::NonContributoryKey,
+            RatchetError::Rng => Self::Rng,
+        }
+    }
+}
+
+impl From<RatchetError> for EncryptionError {
+    fn from(e: RatchetError) -> Self {
+        match e {
+            RatchetError::NonContributoryKey => Self::NonContributoryKey,
+            RatchetError::Rng => Self::Rng,
+        }
+    }
+}
+
+/// An error from the build or the load of a session.
+#[derive(Error, Debug)]
+pub enum SessionError {
+    /// A key lacked contributory behavior, or the random source failed.
+    #[error(transparent)]
+    Ratchet(#[from] RatchetError),
+    /// The stored session does not parse.
+    #[error("The stored session is not valid")]
+    BadPickle,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -109,7 +142,9 @@ struct ChainStore {
 
 impl ChainStore {
     fn new() -> Self {
-        Self { inner: ArrayVec::new() }
+        Self {
+            inner: ArrayVec::new(),
+        }
     }
 
     fn push(&mut self, ratchet: ReceiverChain) {
@@ -124,18 +159,33 @@ impl ChainStore {
         self.inner.is_empty()
     }
 
-    #[cfg(test)]
-    pub(crate) const fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    #[cfg(feature = "libolm-compat")]
-    pub(crate) fn get(&self, index: usize) -> Option<&ReceiverChain> {
-        self.inner.get(index)
-    }
-
     fn find_ratchet(&mut self, ratchet_key: &RemoteRatchetKey) -> Option<&mut ReceiverChain> {
         self.inner.iter_mut().find(|r| r.belongs_to(ratchet_key))
+    }
+
+    /// The number of skipped message keys in all chains.
+    fn skipped_key_count(&self) -> usize {
+        self.inner
+            .iter()
+            .map(ReceiverChain::skipped_key_count)
+            .sum()
+    }
+
+    /// Keep at most `limit` skipped message keys. The oldest key goes first: the chains
+    /// are in the order of their creation, and each chain keeps its keys in order.
+    /// Source: XEP-0384 0.9, section 4.3 ("deletion policy for skipped message keys").
+    fn enforce_key_limit(&mut self, limit: usize) {
+        let mut count = self.skipped_key_count();
+        while count > limit {
+            if !self
+                .inner
+                .iter_mut()
+                .any(ReceiverChain::drop_oldest_skipped_key)
+            {
+                break;
+            }
+            count -= 1;
+        }
     }
 }
 
@@ -145,863 +195,566 @@ impl Default for ChainStore {
     }
 }
 
-/// An Olm session represents one end of an encrypted communication channel
-/// between two participants.
+/// The data of the key exchange that Alice sends until Bob answers (XEP-0384 0.9,
+/// section 4.2 and section 6, "Business Rules").
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub(crate) struct KeyExchangeInfo {
+    pub(crate) pre_key_id: u32,
+    pub(crate) signed_pre_key_id: u32,
+    /// The Ed25519 identity key of Alice.
+    pub(crate) identity_key: [u8; 32],
+    /// The ephemeral key `ek` of Alice.
+    pub(crate) base_key: Curve25519PublicKey,
+}
+
+/// The result of `Session::encrypt`.
+pub(crate) struct Encrypted {
+    /// An `OMEMOKeyExchange` when `kex` is true, else an `OMEMOAuthenticatedMessage`.
+    pub(crate) data: Vec<u8>,
+    pub(crate) kex: bool,
+}
+
+/// One end of an encrypted communication channel with one device: X3DH and the Double
+/// Ratchet.
 ///
-/// A session enables enables the session owner to encrypt messages intended
-/// for, and decrypt messages sent by, the other participant of the channel.
-///
-/// Olm sessions have two important properties:
-///
-/// 1. They are based on a double ratchet algorithm which continuously
-///    introduces new entropy into the channel as messages are sent and
-///    received. This imbues the channel with *self-healing* properties,
-///    allowing it to recover from a momentary loss of confidentiality in the
-///    event of a key compromise.
-/// 2. They are *asynchronous*, allowing the participant to start sending
-///    messages to the other side even if the other participant is not online at
-///    the moment.
-///
-/// An Olm [`Session`] is acquired from an [`Account`], by calling either
-///
-/// - [`Account::create_outbound_session`], if you are the first participant to
-///   send a message in this channel, or
-/// - [`Account::create_inbound_session`], if the other participant initiated
-///   the channel by sending you a message.
-///
-/// [`Account`]: crate::olm::Account
-/// [`Account::create_outbound_session`]: crate::olm::Account::create_outbound_session
-/// [`Account::create_inbound_session`]: crate::olm::Account::create_inbound_session
-pub struct Session {
-    session_keys: SessionKeys,
+/// A session is made with [`Session::new_active`] (we start) or [`Session::new_passive`]
+/// (we answer a key exchange).
+#[derive(Serialize, Deserialize, Clone)]
+pub(crate) struct Session {
+    /// `AD = Encode(IK_A) || Encode(IK_B)`: the Ed25519 identity keys of Alice, who
+    /// started the key exchange, and of Bob. Both sides use the same bytes for all messages.
+    /// Source: XEP-0384 0.9, section 4.2 ("associated data").
+    associated_data: Vec<u8>,
+    remote_identity_key: [u8; 32],
     sending_ratchet: DoubleRatchet,
     receiving_chains: ChainStore,
-    config: SessionConfig,
+    /// Set on Alice's side until she decrypts a message of Bob. Every message goes out
+    /// as a key exchange while it is set.
+    key_exchange: Option<KeyExchangeInfo>,
+    /// Set on Bob's side: the key exchange that made this session. A repeat of it (Alice
+    /// sends it until she hears from Bob) is a normal message here, and no new session.
+    built_from: Option<KeyExchangeInfo>,
 }
 
 impl Debug for Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { session_keys: _, sending_ratchet, receiving_chains, config } = self;
+        let Self {
+            associated_data: _,
+            remote_identity_key: _,
+            sending_ratchet,
+            receiving_chains,
+            key_exchange,
+            built_from,
+        } = self;
 
         f.debug_struct("Session")
-            .field("session_id", &self.session_id())
             .field("sending_ratchet", &sending_ratchet)
             .field("receiving_chains", &receiving_chains.inner)
-            .field("config", config)
+            .field("key_exchange_pending", &key_exchange.is_some())
+            .field("passive", &built_from.is_some())
             .finish_non_exhaustive()
     }
 }
 
-/// hazmat: a snapshot of the secret key material backing an active Olm sender
-/// chain.
-///
-/// This is the companion type to [`Session::from_root_key_material`] and is
-/// returned by [`Session::active_sending_state`]. It exists so that a
-/// [`Session`] bootstrapped from a non-Olm handshake can be compared for
-/// equivalence against an `Account`-derived [`Session`] — i.e. to assert that
-/// both sides agree on the root key, chain key and ratchet key once the
-/// handshake completes.
-///
-/// As with [`Session::from_root_key_material`], the only thing replaced here is
-/// the Olm 3DH handshake that normally seeds the root key; the Double Ratchet
-/// itself is untouched. See that constructor for the full rationale and an
-/// example.
-///
-/// The three 32-byte secrets are heap-allocated (boxed) and zeroized on drop,
-/// so moving the value around does not leave copies of the key material behind
-/// on the stack.
-#[cfg(feature = "low-level-api")]
-pub struct ActiveSendingState {
-    /// Current root key `R_i` of the active sender chain.
-    pub root_key: Box<[u8; 32]>,
-    /// Current chain key `C_{i,j}` of the active sender chain.
-    pub chain_key: Box<[u8; 32]>,
-    /// Index `j` within the current chain.
-    pub chain_index: u64,
-    /// Secret part of our local ratchet key `T_i`.
-    pub ratchet_key: Box<[u8; 32]>,
-}
-
-#[cfg(feature = "low-level-api")]
-impl Drop for ActiveSendingState {
-    fn drop(&mut self) {
-        self.root_key.zeroize();
-        self.chain_key.zeroize();
-        self.ratchet_key.zeroize();
-    }
-}
-
-#[cfg(feature = "low-level-api")]
-impl Session {
-    /// hazmat: build a [`Session`] directly from raw active-sender key material
-    /// derived outside of Olm.
-    ///
-    /// The supplied `root_key`, `chain_key` and `ratchet_key_secret` become the
-    /// active sending chain's keys *verbatim* — no key derivation, KDF or AEAD
-    /// step is performed here. The supplied [`SessionKeys`] is used solely to
-    /// compute the session ID and to populate the pre-key message envelope; its
-    /// contents are never used as key material.
-    ///
-    /// # When to use this
-    ///
-    /// This is for downstream protocols that run their own authenticated key
-    /// exchange and want to layer vodozemac's audited Double Ratchet on top,
-    /// rather than vendoring a separate ratchet implementation. Typical cases
-    /// are Noise handshakes (for example a Noise `KK` exchange carried over a
-    /// transport such as Tor v3 onion services) or alternative / post-quantum
-    /// KEMs.
-    ///
-    /// This constructor *replaces only the Olm 3DH handshake*: the bytes you
-    /// pass in stand in for the secret that 3DH would normally produce. From
-    /// that point on the Double Ratchet works exactly as it does in a regular
-    /// Olm session — the symmetric-key ratchet advances per message and the DH
-    /// ratchet advances on each received reply.
-    ///
-    /// Both peers must independently derive identical `root_key`, `chain_key`
-    /// and `ratchet_key_secret` material and agree on which side owns the
-    /// initial sending chain; the other side decrypts the first message and the
-    /// DH ratchet converges from there.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use vodozemac::{
-    ///     Curve25519PublicKey,
-    ///     olm::{Session, SessionConfig, SessionKeys},
-    /// };
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Secret material produced by your own (non-Olm) handshake. These bytes
-    /// // become the active sender chain's keys verbatim.
-    /// let root_key = [0u8; 32];
-    /// let chain_key = [0u8; 32];
-    /// let ratchet_key_secret = [0u8; 32];
-    ///
-    /// // `SessionKeys` only feeds the session ID and the pre-key message
-    /// // envelope; its contents are not used as key material.
-    /// let session_keys = SessionKeys {
-    ///     identity_key: Curve25519PublicKey::from_bytes([1u8; 32]),
-    ///     base_key: Curve25519PublicKey::from_bytes([2u8; 32]),
-    ///     one_time_key: Curve25519PublicKey::from_bytes([3u8; 32]),
-    /// };
-    ///
-    /// let mut session = Session::from_root_key_material(
-    ///     SessionConfig::version_1(),
-    ///     session_keys,
-    ///     root_key,
-    ///     chain_key,
-    ///     ratchet_key_secret,
-    /// );
-    ///
-    /// // `session` is now a ready-to-use Olm sender.
-    /// let message = session.encrypt("Hello from a non-Olm handshake")?;
-    /// # let _ = message;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn from_root_key_material(
-        config: SessionConfig,
-        session_keys: SessionKeys,
-        root_key: [u8; 32],
-        chain_key: [u8; 32],
-        ratchet_key_secret: [u8; 32],
-    ) -> Self {
-        let sending_ratchet = DoubleRatchet::active_from_root_key_material(
-            root_key::RootKey::new(Box::new(root_key)),
-            chain_key::ChainKey::new(Box::new(chain_key)),
-            ratchet::RatchetKey::from(crate::Curve25519SecretKey::from_slice(&ratchet_key_secret)),
-        );
-        Self { session_keys, sending_ratchet, receiving_chains: ChainStore::new(), config }
-    }
-
-    /// hazmat: read out the active sender chain's raw key material for
-    /// equivalence testing. Returns `None` if there is no active sender chain.
-    pub fn active_sending_state(&self) -> Option<ActiveSendingState> {
-        self.sending_ratchet.active_sending_state()
-    }
+fn associated_data(initiator: &[u8; 32], responder: &[u8; 32]) -> Vec<u8> {
+    let mut ad = Vec::with_capacity(64);
+    ad.extend_from_slice(initiator);
+    ad.extend_from_slice(responder);
+    ad
 }
 
 impl Session {
-    pub(super) fn new(
-        config: SessionConfig,
-        shared_secret: Shared3DHSecret,
-        session_keys: SessionKeys,
-    ) -> Self {
-        let local_ratchet = DoubleRatchet::active(shared_secret);
-
-        Self {
-            session_keys,
-            sending_ratchet: local_ratchet,
-            receiving_chains: Default::default(),
-            config,
-        }
-    }
-
-    pub(super) fn new_remote(
-        config: SessionConfig,
-        shared_secret: RemoteShared3DHSecret,
-        remote_ratchet_key: Curve25519PublicKey,
-        session_keys: SessionKeys,
-    ) -> Self {
-        let (root_key, remote_chain_key) = shared_secret.expand();
-
-        let remote_ratchet_key = RemoteRatchetKey::from(remote_ratchet_key);
-        let root_key = RemoteRootKey::new(root_key);
-        let remote_chain_key = RemoteChainKey::new(remote_chain_key);
-
-        let local_ratchet = DoubleRatchet::inactive_from_prekey_data(root_key, remote_ratchet_key);
-        let remote_ratchet =
-            ReceiverChain::new(remote_ratchet_key, remote_chain_key, RatchetCount::new());
-
-        let mut ratchet_store = ChainStore::new();
-        ratchet_store.push(remote_ratchet);
-
-        Self {
-            session_keys,
-            sending_ratchet: local_ratchet,
-            receiving_chains: ratchet_store,
-            config,
-        }
-    }
-
-    /// Returns the globally unique session ID, in base64-encoded form.
+    /// Start a session (the side of Alice).
     ///
-    /// This is a shorthand helper of the [`SessionKeys::session_id()`] method.
-    pub fn session_id(&self) -> String {
-        self.session_keys.session_id()
+    /// The keys of Bob come from his bundle. The caller checked the signature of the signed
+    /// prekey. `own_identity_key` is our identity key in Curve25519 form.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_active(
+        own_identity_key: &Curve25519SecretKey,
+        own_identity_public_ed: [u8; 32],
+        remote_identity_key_ed: [u8; 32],
+        remote_identity_key: &Curve25519PublicKey,
+        signed_pre_key: Curve25519PublicKey,
+        signed_pre_key_id: u32,
+        one_time_key: Curve25519PublicKey,
+        one_time_key_id: u32,
+    ) -> Result<Self, SessionError> {
+        let ephemeral_key = Curve25519SecretKey::new().map_err(|_| RatchetError::Rng)?;
+        let secret = X3dhSecret::active(
+            own_identity_key,
+            &ephemeral_key,
+            remote_identity_key,
+            &signed_pre_key,
+            &one_time_key,
+        )
+        .ok_or(RatchetError::NonContributoryKey)?;
+
+        let sending_ratchet =
+            DoubleRatchet::active(secret.into_key(), RemoteRatchetKey::from(signed_pre_key))?;
+
+        Ok(Self {
+            associated_data: associated_data(&own_identity_public_ed, &remote_identity_key_ed),
+            remote_identity_key: remote_identity_key_ed,
+            sending_ratchet,
+            receiving_chains: ChainStore::new(),
+            key_exchange: Some(KeyExchangeInfo {
+                pre_key_id: one_time_key_id,
+                signed_pre_key_id,
+                identity_key: own_identity_public_ed,
+                base_key: Curve25519PublicKey::from(&ephemeral_key),
+            }),
+            built_from: None,
+        })
+    }
+
+    /// Answer a key exchange (the side of Bob).
+    ///
+    /// This builds the session and its first receiver chain. The caller decrypts the first
+    /// message with [`Session::decrypt`]. `remote_identity_key` is the Curve25519 form of
+    /// the identity key in the key exchange.
+    pub(crate) fn new_passive(
+        own_identity_key: &Curve25519SecretKey,
+        own_identity_public_ed: [u8; 32],
+        signed_pre_key: &Curve25519SecretKey,
+        one_time_key: &Curve25519SecretKey,
+        remote_identity_key: &Curve25519PublicKey,
+        key_exchange: &PreKeyMessage,
+    ) -> Result<Self, SessionError> {
+        let secret = X3dhSecret::passive(
+            own_identity_key,
+            signed_pre_key,
+            one_time_key,
+            remote_identity_key,
+            &key_exchange.base_key,
+        )
+        .ok_or(RatchetError::NonContributoryKey)?;
+
+        // The ratchet key of Alice is in her first message. Bob starts with the signed prekey
+        // as his own ratchet key, and runs one root KDF step with it (XEP-0384 0.9, section
+        // 4.3, "ratchet initialization"; python-doubleratchet `DiffieHellmanRatchet.create`).
+        let remote_ratchet_key = RemoteRatchetKey::from(key_exchange.message.ratchet_key);
+        let (root_key, remote_chain_key) = RootKey::new(secret.into_key()).advance(
+            &ratchet::RatchetKey::from(signed_pre_key.clone()),
+            &remote_ratchet_key,
+        )?;
+
+        // Bob makes his sending chain at once, with a new ratchet key (see `DoubleRatchet`).
+        let sending_ratchet = DoubleRatchet::from_remote_root_key(root_key, remote_ratchet_key, 0)?;
+        let receiver_chain = ReceiverChain::new(remote_ratchet_key, remote_chain_key);
+
+        let mut receiving_chains = ChainStore::new();
+        receiving_chains.push(receiver_chain);
+
+        Ok(Self {
+            associated_data: associated_data(&key_exchange.identity_key, &own_identity_public_ed),
+            remote_identity_key: key_exchange.identity_key,
+            sending_ratchet,
+            receiving_chains,
+            key_exchange: None,
+            built_from: Some(KeyExchangeInfo {
+                pre_key_id: key_exchange.pre_key_id,
+                signed_pre_key_id: key_exchange.signed_pre_key_id,
+                identity_key: key_exchange.identity_key,
+                base_key: key_exchange.base_key,
+            }),
+        })
+    }
+
+    /// The Ed25519 identity key of the other device.
+    pub(crate) const fn remote_identity_key(&self) -> [u8; 32] {
+        self.remote_identity_key
+    }
+
+    /// True if this session was built from the key exchange `key_exchange`. Alice sends the
+    /// same key exchange until she hears from Bob. Python-twomemo checks the same four
+    /// values (`KeyExchangeImpl.builds_same_session`).
+    pub(crate) fn built_from(&self, key_exchange: &PreKeyMessage) -> bool {
+        self.built_from.as_ref().is_some_and(|b| {
+            b.pre_key_id == key_exchange.pre_key_id
+                && b.signed_pre_key_id == key_exchange.signed_pre_key_id
+                && b.identity_key == key_exchange.identity_key
+                && b.base_key == key_exchange.base_key
+        })
     }
 
     /// Have we ever received and decrypted a message from the other side?
     ///
-    /// Used to decide if outgoing messages should be sent as normal or pre-key
-    /// messages.
-    pub const fn has_received_message(&self) -> bool {
+    /// Used to decide if outgoing messages should be sent as normal or key exchange messages.
+    pub(crate) const fn has_received_message(&self) -> bool {
         !self.receiving_chains.is_empty()
     }
 
-    /// Encrypt the `plaintext` and construct an [`OlmMessage`].
-    ///
-    /// The message will either be a pre-key message or a normal message,
-    /// depending on whether the session is fully established. A [`Session`] is
-    /// fully established once you receive (and decrypt) at least one
-    /// message from the other side.
-    pub fn encrypt(&mut self, plaintext: impl AsRef<[u8]>) -> Result<OlmMessage, EncryptionError> {
-        let message = match self.config.version {
-            Version::V1 => self.sending_ratchet.encrypt_truncated_mac(plaintext.as_ref()),
-            #[cfg(feature = "experimental-session-config")]
-            Version::V2 => self.sending_ratchet.encrypt(plaintext.as_ref()),
-        }?;
+    /// Encrypt the `plaintext`. The result is a key exchange message until the other side
+    /// answered, else a normal message.
+    pub(crate) fn encrypt(&mut self, plaintext: &[u8]) -> Result<Encrypted, EncryptionError> {
+        let message = self
+            .sending_ratchet
+            .encrypt(plaintext, &self.associated_data)?;
 
-        if self.has_received_message() {
-            Ok(OlmMessage::Normal(message))
-        } else {
-            let message = PreKeyMessage::new(self.session_keys, message);
-
-            Ok(OlmMessage::PreKey(message))
+        match (&self.key_exchange, self.has_received_message()) {
+            (Some(info), false) => {
+                let key_exchange = PreKeyMessage {
+                    pre_key_id: info.pre_key_id,
+                    signed_pre_key_id: info.signed_pre_key_id,
+                    identity_key: info.identity_key,
+                    base_key: info.base_key,
+                    message,
+                };
+                Ok(Encrypted {
+                    data: key_exchange.to_bytes(),
+                    kex: true,
+                })
+            }
+            _ => Ok(Encrypted {
+                data: message.to_bytes(),
+                kex: false,
+            }),
         }
     }
 
-    /// Get the keys associated with this session.
-    pub const fn session_keys(&self) -> SessionKeys {
-        self.session_keys
-    }
-
-    /// Get the [`SessionConfig`] that this [`Session`] is configured to use.
-    pub const fn session_config(&self) -> SessionConfig {
-        self.config
-    }
-
-    /// Get the [`MessageKey`] to encrypt the next message.
-    ///
-    /// **Note**: Each key obtained in this way should be used to encrypt
-    /// a message and the message must then be sent to the recipient.
-    ///
-    /// Failing to do so will increase the number of out-of-order messages on
-    /// the recipient side. Given that a `Session` can only support a limited
-    /// number of out-of-order messages, this will eventually lead to
-    /// undecryptable messages.
-    #[cfg(feature = "low-level-api")]
-    pub fn next_message_key(&mut self) -> Option<MessageKey> {
-        self.sending_ratchet.next_message_key()
-    }
-
-    /// Try to decrypt an Olm message, which will either return the plaintext or
-    /// result in a [`DecryptionError`].
-    pub fn decrypt(&mut self, message: &OlmMessage) -> Result<Vec<u8>, DecryptionError> {
-        let decrypted = match message {
-            OlmMessage::Normal(m) => self.decrypt_decoded(m)?,
-            OlmMessage::PreKey(m) => self.decrypt_decoded(&m.message)?,
-        };
-
-        Ok(decrypted)
-    }
-
-    pub(super) fn decrypt_decoded(
-        &mut self,
-        message: &Message,
-    ) -> Result<Vec<u8>, DecryptionError> {
+    /// Try to decrypt a message. A failure changes nothing in the session.
+    pub(crate) fn decrypt(&mut self, message: &Message) -> Result<Vec<u8>, DecryptionError> {
         let ratchet_key = RemoteRatchetKey::from(message.ratchet_key);
 
-        if let Some(ratchet) = self.receiving_chains.find_ratchet(&ratchet_key) {
-            ratchet.decrypt(message, &self.config)
+        let plaintext = if let Some(ratchet) = self.receiving_chains.find_ratchet(&ratchet_key) {
+            ratchet.decrypt(message, &self.associated_data)?
         } else {
             let (sending_ratchet, mut remote_ratchet) =
-                self.sending_ratchet
-                    .advance(ratchet_key)
-                    .ok_or(DecryptionError::NonContributoryKey)?;
+                self.sending_ratchet.advance(ratchet_key)?;
 
-            let plaintext = remote_ratchet.decrypt(message, &self.config)?;
+            let plaintext = remote_ratchet.decrypt(message, &self.associated_data)?;
 
             self.sending_ratchet = sending_ratchet;
             self.receiving_chains.push(remote_ratchet);
 
-            Ok(plaintext)
+            plaintext
+        };
+
+        // The message is good: Bob answered, and Alice stops the key exchange.
+        self.key_exchange = None;
+        self.receiving_chains
+            .enforce_key_limit(MAX_SESSION_MESSAGE_KEYS);
+
+        Ok(plaintext)
+    }
+
+    /// The session as bytes: a version byte, then JSON. The bytes hold secret keys.
+    pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+        let mut out = Zeroizing::new(vec![PICKLE_VERSION]);
+        // The types of the session serialize with no error.
+        #[allow(clippy::expect_used)]
+        serde_json::to_writer(&mut *out, self).expect("A session should serialize");
+        out
+    }
+
+    /// Read a session from the bytes of [`Session::to_bytes`].
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, SessionError> {
+        let Some((version, json)) = bytes.split_first() else {
+            return Err(SessionError::BadPickle);
+        };
+        if *version != PICKLE_VERSION || bytes.len() > MAX_PICKLE_LEN {
+            return Err(SessionError::BadPickle);
         }
-    }
-
-    /// Convert the session into a struct which implements [`serde::Serialize`]
-    /// and [`serde::Deserialize`].
-    pub fn pickle(&self) -> SessionPickle {
-        SessionPickle {
-            session_keys: self.session_keys,
-            sending_ratchet: self.sending_ratchet.clone(),
-            receiving_chains: self.receiving_chains.clone(),
-            config: self.config,
+        let mut session: Session =
+            serde_json::from_slice(json).map_err(|_| SessionError::BadPickle)?;
+        if session.associated_data.len() != 64 {
+            return Err(SessionError::BadPickle);
         }
-    }
-
-    /// Restore a [`Session`] from a previously saved [`SessionPickle`].
-    pub fn from_pickle(pickle: SessionPickle) -> Self {
-        pickle.into()
-    }
-
-    /// Create a [`Session`] object by unpickling a session pickle in libolm
-    /// legacy pickle format.
-    ///
-    /// Such pickles are encrypted and need to first be decrypted using
-    /// `pickle_key`.
-    #[cfg(feature = "libolm-compat")]
-    pub fn from_libolm_pickle(
-        pickle: &str,
-        pickle_key: &[u8],
-    ) -> Result<Self, crate::LibolmPickleError> {
-        use crate::{olm::session::libolm_compat::Pickle, utilities::unpickle_libolm};
-
-        const PICKLE_VERSION: u32 = 1;
-        unpickle_libolm::<Pickle, _>(pickle, pickle_key, PICKLE_VERSION)
+        for chain in &mut session.receiving_chains.inner {
+            chain.trim();
+        }
+        session
+            .receiving_chains
+            .enforce_key_limit(MAX_SESSION_MESSAGE_KEYS);
+        Ok(session)
     }
 }
 
-#[cfg(feature = "libolm-compat")]
-mod libolm_compat {
-    use matrix_pickle::Decode;
-    use zeroize::{Zeroize, ZeroizeOnDrop};
+#[cfg(test)]
+pub(super) mod testing {
+    use super::*;
+    use crate::ratchet::olm::messages::PreKeyMessage;
 
-    use super::{
-        ChainStore, Session,
-        chain_key::{ChainKey, RemoteChainKey},
-        double_ratchet::{DoubleRatchet, RatchetCount},
-        message_key::RemoteMessageKey,
-        ratchet::{Ratchet, RatchetKey, RemoteRatchetKey},
-        receiver_chain::ReceiverChain,
-        root_key::{RemoteRootKey, RootKey},
-    };
-    use crate::{
-        Curve25519PublicKey,
-        olm::{SessionConfig, SessionKeys},
-        types::Curve25519SecretKey,
-    };
+    impl Session {
+        pub(super) fn sending_ratchet_key(&self) -> Curve25519PublicKey {
+            *self.sending_ratchet.ratchet_key().as_ref()
+        }
 
-    #[derive(Decode, Zeroize, ZeroizeOnDrop)]
-    struct SenderChain {
-        public_ratchet_key: [u8; 32],
-        #[secret]
-        secret_ratchet_key: Box<[u8; 32]>,
-        chain_key: Box<[u8; 32]>,
-        chain_key_index: u32,
-    }
-
-    #[derive(Decode, Zeroize, ZeroizeOnDrop)]
-    struct ReceivingChain {
-        public_ratchet_key: [u8; 32],
-        #[secret]
-        chain_key: Box<[u8; 32]>,
-        chain_key_index: u32,
-    }
-
-    impl From<&ReceivingChain> for ReceiverChain {
-        fn from(chain: &ReceivingChain) -> Self {
-            let ratchet_key = RemoteRatchetKey::from(chain.public_ratchet_key);
-            let chain_key = RemoteChainKey::from_bytes_and_index(
-                chain.chain_key.clone(),
-                chain.chain_key_index,
-            );
-
-            ReceiverChain::new(ratchet_key, chain_key, RatchetCount::unknown())
+        pub(super) fn advance_with(&self, key: RemoteRatchetKey) -> Result<(), RatchetError> {
+            self.sending_ratchet.advance(key).map(|_| ())
         }
     }
 
-    #[derive(Decode, Zeroize, ZeroizeOnDrop)]
-    struct MessageKey {
-        ratchet_key: [u8; 32],
-        #[secret]
-        message_key: Box<[u8; 32]>,
-        index: u32,
+    /// Two sessions that did the first exchange: Alice sent a key exchange, Bob decrypted it.
+    pub(in crate::ratchet) fn pair() -> (Session, Session) {
+        let (alice_ik, bob_ik, bob_spk, bob_opk) = (
+            Curve25519SecretKey::new().unwrap(),
+            Curve25519SecretKey::new().unwrap(),
+            Curve25519SecretKey::new().unwrap(),
+            Curve25519SecretKey::new().unwrap(),
+        );
+        let (alice_ed, bob_ed) = ([1u8; 32], [2u8; 32]);
+        let mut alice = Session::new_active(
+            &alice_ik,
+            alice_ed,
+            bob_ed,
+            &Curve25519PublicKey::from(&bob_ik),
+            Curve25519PublicKey::from(&bob_spk),
+            1,
+            Curve25519PublicKey::from(&bob_opk),
+            7,
+        )
+        .unwrap();
+
+        let first = alice.encrypt(b"hello").unwrap();
+        assert!(first.kex);
+        let kex = PreKeyMessage::from_bytes(&first.data).unwrap();
+        let mut bob = Session::new_passive(
+            &bob_ik,
+            bob_ed,
+            &bob_spk,
+            &bob_opk,
+            &Curve25519PublicKey::from(&alice_ik),
+            &kex,
+        )
+        .unwrap();
+        assert_eq!(bob.decrypt(&kex.message).unwrap(), b"hello");
+        (alice, bob)
     }
 
-    impl From<&MessageKey> for RemoteMessageKey {
-        fn from(key: &MessageKey) -> Self {
-            RemoteMessageKey { key: key.message_key.clone(), index: key.index.into() }
-        }
-    }
-
-    #[derive(Decode)]
-    pub(super) struct Pickle {
-        #[allow(dead_code)]
-        version: u32,
-        #[allow(dead_code)]
-        received_message: bool,
-        session_keys: SessionKeys,
-        #[secret]
-        root_key: Box<[u8; 32]>,
-        sender_chains: Vec<SenderChain>,
-        receiver_chains: Vec<ReceivingChain>,
-        message_keys: Vec<MessageKey>,
-    }
-
-    impl Drop for Pickle {
-        fn drop(&mut self) {
-            self.root_key.zeroize();
-            self.sender_chains.zeroize();
-            self.receiver_chains.zeroize();
-            self.message_keys.zeroize();
-        }
-    }
-
-    impl TryFrom<Pickle> for Session {
-        type Error = crate::LibolmPickleError;
-
-        fn try_from(pickle: Pickle) -> Result<Self, Self::Error> {
-            let mut receiving_chains = ChainStore::new();
-
-            for chain in &pickle.receiver_chains {
-                receiving_chains.push(chain.into())
-            }
-
-            for key in &pickle.message_keys {
-                let ratchet_key =
-                    RemoteRatchetKey::from(Curve25519PublicKey::from(key.ratchet_key));
-
-                if let Some(receiving_chain) = receiving_chains.find_ratchet(&ratchet_key) {
-                    receiving_chain.insert_message_key(key.into())
-                }
-            }
-
-            if let Some(chain) = pickle.sender_chains.first() {
-                // XXX: Passing in secret array as value.
-                let ratchet_key = RatchetKey::from(Curve25519SecretKey::from_slice(
-                    chain.secret_ratchet_key.as_ref(),
-                ));
-                let chain_key =
-                    ChainKey::from_bytes_and_index(chain.chain_key.clone(), chain.chain_key_index);
-
-                let root_key = RootKey::new(pickle.root_key.clone());
-
-                let ratchet = Ratchet::new_with_ratchet_key(root_key, ratchet_key);
-                let sending_ratchet = DoubleRatchet::from_ratchet_and_chain_key(ratchet, chain_key);
-
-                Ok(Self {
-                    session_keys: pickle.session_keys,
-                    sending_ratchet,
-                    receiving_chains,
-                    config: SessionConfig::version_1(),
-                })
-            } else if let Some(chain) = receiving_chains.get(0) {
-                let sending_ratchet = DoubleRatchet::inactive_from_libolm_pickle(
-                    RemoteRootKey::new(pickle.root_key.clone()),
-                    chain.ratchet_key(),
-                );
-
-                Ok(Self {
-                    session_keys: pickle.session_keys,
-                    sending_ratchet,
-                    receiving_chains,
-                    config: SessionConfig::version_1(),
-                })
-            } else {
-                Err(crate::LibolmPickleError::InvalidSession)
-            }
-        }
-    }
-}
-
-/// A format suitable for serialization which implements [`serde::Serialize`]
-/// and [`serde::Deserialize`]. Obtainable by calling [`Session::pickle`].
-#[derive(Deserialize, Serialize)]
-pub struct SessionPickle {
-    session_keys: SessionKeys,
-    sending_ratchet: DoubleRatchet,
-    receiving_chains: ChainStore,
-    #[serde(default = "default_config")]
-    config: SessionConfig,
-}
-
-const fn default_config() -> SessionConfig {
-    SessionConfig::version_1()
-}
-
-impl SessionPickle {
-    /// Serialize and encrypt the pickle using the given key.
-    ///
-    /// This is the inverse of [`SessionPickle::from_encrypted`].
-    pub fn encrypt(self, pickle_key: &[u8; 32]) -> String {
-        pickle(&self, pickle_key)
-    }
-
-    /// Obtain a pickle from a ciphertext by decrypting and deserializing using
-    /// the given key.
-    ///
-    /// This is the inverse of [`SessionPickle::encrypt`].
-    pub fn from_encrypted(ciphertext: &str, pickle_key: &[u8; 32]) -> Result<Self, PickleError> {
-        unpickle(ciphertext, pickle_key)
-    }
-}
-
-impl From<SessionPickle> for Session {
-    fn from(pickle: SessionPickle) -> Self {
-        Self {
-            session_keys: pickle.session_keys,
-            sending_ratchet: pickle.sending_ratchet,
-            receiving_chains: pickle.receiving_chains,
-            config: pickle.config,
+    /// Wrap the bytes of an encrypt call into a `Message`.
+    pub(in crate::ratchet) fn message(session: &mut Session, text: &[u8]) -> Message {
+        let out = session.encrypt(text).unwrap();
+        if out.kex {
+            PreKeyMessage::from_bytes(&out.data).unwrap().message
+        } else {
+            Message::from_bytes(&out.data).unwrap()
         }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use anyhow::{Result, bail};
-    use assert_matches2::assert_matches;
-    use olm_rs::{
-        account::OlmAccount,
-        session::{OlmMessage, OlmSession},
+    use super::{
+        testing::{message, pair},
+        *,
     };
 
-    use super::{DecryptionError, Session};
-    use crate::{
-        Curve25519PublicKey,
-        olm::{
-            Account, SessionConfig, SessionPickle, messages,
-            session::receiver_chain::{MAX_MESSAGE_GAP, MAX_MESSAGE_KEYS},
-        },
-    };
-
-    const PICKLE_KEY: [u8; 32] = [0u8; 32];
-
-    /// Create a pair of accounts, one using vodozemac and one libolm.
-    ///
-    /// Then, create a pair of sessions between the two.
-    pub(crate) fn session_and_libolm_pair() -> Result<(Account, OlmAccount, Session, OlmSession)> {
-        let alice = Account::new();
-        let bob = OlmAccount::new();
-        bob.generate_one_time_keys(1);
-
-        let one_time_key = bob
-            .parsed_one_time_keys()
-            .curve25519()
-            .values()
-            .next()
-            .cloned()
-            .expect("Couldn't find a one-time key");
-
-        let identity_keys = bob.parsed_identity_keys();
-        let curve25519_key = Curve25519PublicKey::from_base64(identity_keys.curve25519())?;
-        let one_time_key = Curve25519PublicKey::from_base64(&one_time_key)?;
-        let mut alice_session = alice
-            .create_outbound_session(SessionConfig::version_1(), curve25519_key, one_time_key)
-            .unwrap();
-
-        let message = "It's a secret to everybody";
-
-        let olm_message = alice_session.encrypt(message).unwrap();
-        bob.mark_keys_as_published();
-
-        if let OlmMessage::PreKey(m) = olm_message.into() {
-            let session =
-                bob.create_inbound_session_from(&alice.curve25519_key().to_base64(), m)?;
-
-            Ok((alice, bob, alice_session, session))
-        } else {
-            bail!("Invalid message type");
+    impl Session {
+        fn skipped(&self) -> usize {
+            self.receiving_chains.skipped_key_count()
         }
     }
 
     #[test]
-    fn session_config() {
-        let (_, _, alice_session, _) = session_and_libolm_pair().unwrap();
-        assert_eq!(alice_session.session_config(), SessionConfig::version_1());
-    }
-
-    #[test]
-    fn has_received_message() {
-        let (_, _, mut alice_session, bob_session) = session_and_libolm_pair().unwrap();
-        assert!(!alice_session.has_received_message());
-        assert!(!bob_session.has_received_message());
-        let message = bob_session.encrypt("Message").into();
-        assert_eq!(
-            "Message".as_bytes(),
-            alice_session.decrypt(&message).expect("Should be able to decrypt message")
-        );
-        assert!(alice_session.has_received_message());
-        assert!(!bob_session.has_received_message());
-    }
-
-    #[test]
-    fn out_of_order_decryption() {
-        let (_, _, mut alice_session, bob_session) = session_and_libolm_pair().unwrap();
-
-        let message_1 = bob_session.encrypt("Message 1").into();
-        let message_2 = bob_session.encrypt("Message 2").into();
-        let message_3 = bob_session.encrypt("Message 3").into();
-
-        assert_eq!(
-            "Message 3".as_bytes(),
-            alice_session.decrypt(&message_3).expect("Should be able to decrypt message 3")
-        );
-        assert_eq!(
-            "Message 2".as_bytes(),
-            alice_session.decrypt(&message_2).expect("Should be able to decrypt message 2")
-        );
-        assert_eq!(
-            "Message 1".as_bytes(),
-            alice_session.decrypt(&message_1).expect("Should be able to decrypt message 1")
-        );
-    }
-
-    #[test]
-    fn more_out_of_order_decryption() {
-        let (_, _, mut alice_session, bob_session) = session_and_libolm_pair().unwrap();
-
-        let message_1 = bob_session.encrypt("Message 1").into();
-        let message_2 = bob_session.encrypt("Message 2").into();
-        let message_3 = bob_session.encrypt("Message 3").into();
-
-        assert_eq!(
-            "Message 1".as_bytes(),
-            alice_session.decrypt(&message_1).expect("Should be able to decrypt message 1")
-        );
-
-        assert_eq!(alice_session.receiving_chains.len(), 1);
-
-        let message_4 = alice_session.encrypt("Message 4").unwrap().into();
-        assert_eq!(
-            "Message 4",
-            bob_session.decrypt(message_4).expect("Should be able to decrypt message 4")
-        );
-
-        let message_5 = bob_session.encrypt("Message 5").into();
-        assert_eq!(
-            "Message 5".as_bytes(),
-            alice_session.decrypt(&message_5).expect("Should be able to decrypt message 5")
-        );
-        assert_eq!(
-            "Message 3".as_bytes(),
-            alice_session.decrypt(&message_3).expect("Should be able to decrypt message 3")
-        );
-        assert_eq!(
-            "Message 2".as_bytes(),
-            alice_session.decrypt(&message_2).expect("Should be able to decrypt message 2")
-        );
-
-        assert_eq!(alice_session.receiving_chains.len(), 2);
-    }
-
-    #[test]
-    fn max_keys_out_of_order_decryption() {
-        let (_, _, mut alice_session, bob_session) = session_and_libolm_pair().unwrap();
-
-        let mut messages: Vec<messages::OlmMessage> = Vec::new();
-        for i in 0..(MAX_MESSAGE_KEYS + 2) {
-            messages.push(bob_session.encrypt(format!("Message {i}").as_str()).into());
-        }
-
-        // Decrypt last message
-        assert_eq!(
-            format!("Message {}", MAX_MESSAGE_KEYS + 1).as_bytes(),
-            alice_session
-                .decrypt(&messages[MAX_MESSAGE_KEYS + 1])
-                .expect("Should be able to decrypt last message")
-        );
-
-        // Cannot decrypt first message because it is more than MAX_MESSAGE_KEYS
-        // ago
-        assert_matches!(
-            alice_session.decrypt(&messages[0]),
-            Err(DecryptionError::MissingMessageKey(_))
-        );
-
-        // Can decrypt all other messages
-        for (i, message) in messages.iter().enumerate().skip(1).take(MAX_MESSAGE_KEYS) {
-            assert_eq!(
-                format!("Message {i}").as_bytes(),
-                alice_session
-                    .decrypt(message)
-                    .expect("Should be able to decrypt remaining messages")
-            );
-        }
-    }
-
-    #[test]
-    fn max_gap_out_of_order_decryption() {
-        let (_, _, mut alice_session, bob_session) = session_and_libolm_pair().unwrap();
-
-        for i in 0..(MAX_MESSAGE_GAP + 1) {
-            bob_session.encrypt(format!("Message {i}").as_str());
-        }
-
-        let message = bob_session.encrypt("Message").into();
-        assert_matches!(
-            alice_session.decrypt(&message),
-            Err(DecryptionError::TooBigMessageGap(_, _))
-        );
-    }
-
-    #[test]
-    fn pickle_default_config() {
-        let json = r#"
-            {
-                "receiving_chains": {
-                    "inner": []
-                },
-                "sending_ratchet": {
-                    "active_ratchet": {
-                        "ratchet_key": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                        "root_key": [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-                    },
-                    "parent_ratchet_key": null,
-                    "ratchet_count": {
-                        "Known": 1
-                    },
-                    "symmetric_key_ratchet": {
-                        "index": 1,
-                        "key": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
-                    },
-                    "type": "active"
-                },
-                "session_keys": {
-                    "base_key": [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
-                    "identity_key": [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
-                    "one_time_key": [6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6]
-                }
+    fn a_conversation_with_turns() {
+        let (mut alice, mut bob) = pair();
+        for round in 0..5 {
+            let m = message(&mut bob, format!("b{round}").as_bytes());
+            assert_eq!(alice.decrypt(&m).unwrap(), format!("b{round}").as_bytes());
+            for k in 0..3 {
+                let m = message(&mut alice, format!("a{round}{k}").as_bytes());
+                assert_eq!(bob.decrypt(&m).unwrap(), format!("a{round}{k}").as_bytes());
             }
-        "#;
-        let pickle: SessionPickle =
-            serde_json::from_str(json).expect("Should be able to deserialize JSON");
-        assert_eq!(pickle.config, SessionConfig::version_1());
-    }
-
-    #[test]
-    #[cfg(feature = "libolm-compat")]
-    fn libolm_unpickling() {
-        let (_, _, mut session, olm) = session_and_libolm_pair().unwrap();
-
-        let plaintext = "It's a secret to everybody";
-        let old_message = session.encrypt(plaintext).unwrap();
-
-        for _ in 0..9 {
-            session.encrypt("Hello").unwrap();
         }
-
-        let message = session.encrypt("Hello").unwrap();
-        olm.decrypt(message.into()).expect("Should be able to decrypt message");
-
-        let key = b"DEFAULT_PICKLE_KEY";
-        let pickle = olm.pickle(olm_rs::PicklingMode::Encrypted { key: key.to_vec() });
-
-        let mut unpickled =
-            Session::from_libolm_pickle(&pickle, key).expect("Should be able to unpickle session");
-
-        assert_eq!(olm.session_id(), unpickled.session_id());
-
-        assert_eq!(
-            unpickled
-                .decrypt(&old_message)
-                .expect("Should be able to decrypt old message with unpickled session"),
-            plaintext.as_bytes()
-        );
-
-        let message = unpickled.encrypt(plaintext).unwrap();
-
-        assert_eq!(
-            session.decrypt(&message).expect("Should be able to decrypt re-encrypted message"),
-            plaintext.as_bytes()
-        );
     }
 
     #[test]
-    fn session_pickling_roundtrip_is_identity() {
-        let (_, _, session, _) = session_and_libolm_pair().unwrap();
-
-        let pickle = session.pickle().encrypt(&PICKLE_KEY);
-
-        let decrypted_pickle = SessionPickle::from_encrypted(&pickle, &PICKLE_KEY)
-            .expect("Should be able to decrypt encrypted pickle");
-        let unpickled_group_session = Session::from_pickle(decrypted_pickle);
-        let repickle = unpickled_group_session.pickle();
-
-        assert_eq!(session.session_id(), unpickled_group_session.session_id());
-
-        let decrypted_pickle = SessionPickle::from_encrypted(&pickle, &PICKLE_KEY)
-            .expect("Should be able to decrypt encrypted pickle");
-        let pickle = serde_json::to_value(decrypted_pickle).unwrap();
-        let repickle = serde_json::to_value(repickle).unwrap();
-
-        assert_eq!(pickle, repickle);
+    fn key_exchange_goes_on_until_the_answer() {
+        let (mut alice, mut bob) = pair();
+        assert!(alice.encrypt(b"x").unwrap().kex);
+        assert!(alice.encrypt(b"x").unwrap().kex);
+        let m = message(&mut bob, b"answer");
+        alice.decrypt(&m).unwrap();
+        assert!(!alice.encrypt(b"x").unwrap().kex);
+        // Bob never sends a key exchange.
+        assert!(!bob.encrypt(b"y").unwrap().kex);
     }
 
     #[test]
-    #[cfg(feature = "low-level-api")]
-    fn next_message_key_returns_a_key() {
-        let plaintext = "It's a secret to everybody";
-        let (_, _, mut session, _) = session_and_libolm_pair().unwrap();
-
-        let message_key =
-            session.next_message_key().expect("We should be able to get a message key");
-
-        let message = message_key.encrypt_truncated_mac(plaintext.as_bytes());
-        assert_ne!(message.ciphertext, plaintext.as_bytes());
+    fn out_of_order_messages() {
+        let (mut alice, mut bob) = pair();
+        let m: Vec<_> = (0..6).map(|i| message(&mut alice, &[i])).collect();
+        for i in [3usize, 1, 5, 0, 2, 4] {
+            assert_eq!(bob.decrypt(&m[i]).unwrap(), vec![i as u8]);
+        }
+        assert_eq!(bob.skipped(), 0);
     }
 
     #[test]
-    #[cfg(feature = "low-level-api")]
-    fn from_root_key_material_exposes_active_sending_state() {
-        use crate::{Curve25519SecretKey, olm::SessionKeys};
+    fn out_of_order_across_a_turn() {
+        let (mut alice, mut bob) = pair();
+        let first: Vec<_> = (0..3).map(|i| message(&mut alice, &[i])).collect();
+        // Bob gets only the last message, then answers, then Alice sends in a new chain.
+        bob.decrypt(&first[2]).unwrap();
+        let answer = message(&mut bob, b"answer");
+        alice.decrypt(&answer).unwrap();
+        let next = message(&mut alice, b"next");
+        assert_eq!(bob.decrypt(&next).unwrap(), b"next");
+        // The late messages of the old chain still decrypt.
+        assert_eq!(bob.decrypt(&first[0]).unwrap(), vec![0]);
+        assert_eq!(bob.decrypt(&first[1]).unwrap(), vec![1]);
+    }
 
-        let session_keys = SessionKeys {
-            identity_key: Curve25519PublicKey::from_bytes([0xAA; 32]),
-            base_key: Curve25519PublicKey::from_bytes([0xBB; 32]),
-            one_time_key: Curve25519PublicKey::from_bytes([0xCC; 32]),
-        };
+    #[test]
+    fn a_replay_is_refused() {
+        let (mut alice, mut bob) = pair();
+        let m = message(&mut alice, b"once");
+        bob.decrypt(&m).unwrap();
+        assert!(matches!(
+            bob.decrypt(&m),
+            Err(DecryptionError::MissingMessageKey(_))
+        ));
+        // Also after a gap.
+        let late = message(&mut alice, b"late");
+        let later = message(&mut alice, b"later");
+        bob.decrypt(&later).unwrap();
+        bob.decrypt(&late).unwrap();
+        assert!(matches!(
+            bob.decrypt(&late),
+            Err(DecryptionError::MissingMessageKey(_))
+        ));
+    }
 
-        let root_key = [0x11u8; 32];
-        let chain_key = [0x22u8; 32];
-        let ratchet_key_secret = [0x33u8; 32];
+    #[test]
+    fn the_gap_limit() {
+        let (mut alice, mut bob) = pair();
+        let mut last = message(&mut alice, b"x");
+        // Skip exactly MAX_MESSAGE_GAP keys: ok.
+        for _ in 0..receiver_chain::MAX_MESSAGE_GAP {
+            last = message(&mut alice, b"x");
+        }
+        assert_eq!(bob.decrypt(&last).unwrap(), b"x");
+        assert_eq!(bob.skipped(), receiver_chain::MAX_MESSAGE_GAP as usize);
 
-        let session = Session::from_root_key_material(
-            SessionConfig::version_1(),
-            session_keys,
-            root_key,
-            chain_key,
-            ratchet_key_secret,
-        );
+        // One more than the limit is refused, and the session stays as it was.
+        let (mut alice, mut bob) = pair();
+        let mut last = message(&mut alice, b"x");
+        for _ in 0..=receiver_chain::MAX_MESSAGE_GAP {
+            last = message(&mut alice, b"x");
+        }
+        assert!(matches!(
+            bob.decrypt(&last),
+            Err(DecryptionError::TooBigMessageGap(g, _)) if g == receiver_chain::MAX_MESSAGE_GAP + 1
+        ));
+        assert_eq!(bob.skipped(), 0);
+        let before = bob.to_bytes();
+        let _ = bob.decrypt(&last);
+        assert_eq!(*before, *bob.to_bytes());
+    }
 
-        let state = session
-            .active_sending_state()
-            .expect("a freshly constructed Session must have an active sending chain");
+    #[test]
+    fn the_session_keeps_at_most_the_limit_and_drops_the_oldest() {
+        let (mut alice, mut bob) = pair();
+        // Skip 900 keys, then 900 more in the next message: 1800 would be stored.
+        let mut msgs = Vec::new();
+        for _ in 0..901 {
+            msgs.push(message(&mut alice, b"x"));
+        }
+        bob.decrypt(msgs.last().unwrap()).unwrap();
+        assert_eq!(bob.skipped(), 900);
+        // A turn: Bob answers, Alice starts a new chain, 900 more are skipped there.
+        let answer = message(&mut bob, b"a");
+        alice.decrypt(&answer).unwrap();
+        let mut more = Vec::new();
+        for _ in 0..901 {
+            more.push(message(&mut alice, b"y"));
+        }
+        bob.decrypt(more.last().unwrap()).unwrap();
+        assert_eq!(bob.skipped(), MAX_SESSION_MESSAGE_KEYS);
+        // The oldest keys are gone: message 0 and 1 of the first chain (index 0 was the
+        // message that made the session). The newest chain keeps all of its 900.
+        assert!(matches!(
+            bob.decrypt(&msgs[1]),
+            Err(DecryptionError::MissingMessageKey(_))
+        ));
+        assert_eq!(bob.decrypt(&more[0]).unwrap(), b"y");
+    }
 
-        assert_eq!(*state.root_key, root_key);
-        assert_eq!(*state.chain_key, chain_key);
-        assert_eq!(state.chain_index, 0);
-        let expected_ratchet_key = *Curve25519SecretKey::from_slice(&ratchet_key_secret).to_bytes();
-        assert_eq!(*state.ratchet_key, expected_ratchet_key);
+    #[test]
+    fn a_failed_decrypt_changes_nothing() {
+        let (mut alice, mut bob) = pair();
+        let good = message(&mut alice, b"good");
+        let before = bob.to_bytes();
+
+        let mut bad = good.clone();
+        bad.ciphertext[0] ^= 1;
+        assert!(bob.decrypt(&bad).is_err());
+        assert_eq!(*before, *bob.to_bytes());
+
+        let mut bad = good.clone();
+        bad.mac[0] ^= 1;
+        assert!(bob.decrypt(&bad).is_err());
+        assert_eq!(*before, *bob.to_bytes());
+
+        // A message with a new ratchet key and a bad MAC changes nothing either.
+        let answer = message(&mut bob, b"a");
+        alice.decrypt(&answer).unwrap();
+        let mut next = message(&mut alice, b"n");
+        let before = bob.to_bytes();
+        next.mac[3] ^= 1;
+        assert!(bob.decrypt(&next).is_err());
+        assert_eq!(*before, *bob.to_bytes());
+
+        assert_eq!(bob.decrypt(&good).unwrap(), b"good");
+    }
+
+    #[test]
+    fn a_wrong_header_fails_the_mac() {
+        let (mut alice, mut bob) = pair();
+        let m = message(&mut alice, b"hello");
+        // n, pn and the ratchet key are under the MAC.
+        for tamper in [
+            (|m: &mut Message| m.message_bytes[1] ^= 1) as fn(&mut Message),
+            |m| m.message_bytes[3] ^= 1,
+            |m| m.message_bytes[6] ^= 1,
+        ] {
+            let mut t = m.clone();
+            tamper(&mut t);
+            // Parse again as a receiver would.
+            let wire = {
+                let mut mac_copy = t.clone();
+                mac_copy.mac = m.mac;
+                mac_copy.to_bytes()
+            };
+            if let Ok(parsed) = Message::from_bytes(&wire) {
+                assert!(bob.decrypt(&parsed).is_err());
+            }
+        }
+        assert_eq!(bob.decrypt(&m).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn the_pickle_round_trips() {
+        let (mut alice, mut bob) = pair();
+        let m = message(&mut alice, b"one");
+        let m2 = message(&mut alice, b"two");
+        bob.decrypt(&m2).unwrap();
+
+        let mut bob2 = Session::from_bytes(&bob.to_bytes()).unwrap();
+        assert_eq!(*bob.to_bytes(), *bob2.to_bytes());
+        assert_eq!(bob2.decrypt(&m).unwrap(), b"one");
+        // Alice too, with a pending key exchange.
+        let mut alice2 = Session::from_bytes(&alice.to_bytes()).unwrap();
+        assert!(alice2.encrypt(b"x").unwrap().kex);
+    }
+
+    #[test]
+    fn a_bad_pickle_is_refused() {
+        let (alice, _) = pair();
+        let bytes = alice.to_bytes();
+        assert!(Session::from_bytes(&[]).is_err());
+        assert!(Session::from_bytes(&[2]).is_err());
+        assert!(Session::from_bytes(&bytes[..bytes.len() - 3]).is_err());
+        let mut wrong_version = bytes.to_vec();
+        wrong_version[0] = 9;
+        assert!(Session::from_bytes(&wrong_version).is_err());
+    }
+
+    #[test]
+    fn debug_shows_no_secret() {
+        let (alice, _) = pair();
+        let text = format!("{alice:?}");
+        assert!(!text.contains("key: ["), "{text}");
     }
 }

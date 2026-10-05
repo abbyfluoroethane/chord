@@ -11,216 +11,177 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use std::fmt::Debug;
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 use prost::Message as ProstMessage;
-use serde::{Deserialize, Serialize};
 
-use super::Message;
-use crate::{
-    Curve25519PublicKey, DecodeError,
-    olm::SessionKeys,
-    utilities::{base64_decode, base64_encode, encode_protobuf_message},
+use super::{
+    DecodeError,
+    message::{
+        MAX_AUTHENTICATED_MESSAGE_LEN, Message, ProtoAuthenticatedMessage, parse_public_key,
+    },
 };
+use crate::ratchet::Curve25519PublicKey;
 
-/// An encrypted Olm pre-key message.
-///
-/// Contains metadata that is required to establish a [`Session`] and a normal
-/// Olm [`Message`].
-///
-/// [`Session`]: crate::olm::Session
+/// The longest `OMEMOKeyExchange` that we parse, in bytes.
+const MAX_KEY_EXCHANGE_LEN: usize = MAX_AUTHENTICATED_MESSAGE_LEN + 256;
+
+/// The protobuf message `OMEMOKeyExchange`: `pk_id` uint32 = 1, `spk_id` uint32 = 2,
+/// `ik` bytes = 3, `ek` bytes = 4, `message` OMEMOAuthenticatedMessage = 5.
+/// Source: XEP-0384 0.9, section 12 (Protobuf Schema), and the descriptor of
+/// python-twomemo. All fields are optional here, and `PreKeyMessage::from_bytes`
+/// checks that they are there.
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ProtoKeyExchange {
+    #[prost(uint32, optional, tag = "1")]
+    pk_id: Option<u32>,
+    #[prost(uint32, optional, tag = "2")]
+    spk_id: Option<u32>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    ik: Option<Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "4")]
+    ek: Option<Vec<u8>>,
+    #[prost(message, optional, tag = "5")]
+    message: Option<ProtoAuthenticatedMessage>,
+}
+
+/// An `OMEMOKeyExchange`: the data that Bob needs to build the session (the ids of
+/// the prekey and of the signed prekey, the identity key and the ephemeral key of Alice),
+/// and the first message.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreKeyMessage {
-    pub(crate) session_keys: SessionKeys,
+pub(crate) struct PreKeyMessage {
+    /// The id of the one-time prekey of Bob that Alice used.
+    pub(crate) pre_key_id: u32,
+    /// The id of the signed prekey of Bob that Alice used.
+    pub(crate) signed_pre_key_id: u32,
+    /// The Ed25519 identity key of Alice, as on the wire.
+    pub(crate) identity_key: [u8; 32],
+    /// The ephemeral key (`ek`) of Alice. A Curve25519 key.
+    pub(crate) base_key: Curve25519PublicKey,
+    /// The first message of Alice.
     pub(crate) message: Message,
 }
 
 impl PreKeyMessage {
-    const VERSION: u8 = 3;
-
-    /// The single-use key that was uploaded to a public key directory by the
-    /// receiver of the message. Should be used to establish a [`Session`].
-    ///
-    /// [`Session`]: crate::olm::Session
-    pub const fn one_time_key(&self) -> Curve25519PublicKey {
-        self.session_keys.one_time_key
+    /// Encode the key exchange as an `OMEMOKeyExchange`.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        ProtoKeyExchange {
+            pk_id: Some(self.pre_key_id),
+            spk_id: Some(self.signed_pre_key_id),
+            ik: Some(self.identity_key.to_vec()),
+            ek: Some(self.base_key.to_bytes().to_vec()),
+            message: Some(ProtoAuthenticatedMessage {
+                mac: Some(self.message.mac.to_vec()),
+                message: Some(self.message.message_bytes.clone()),
+            }),
+        }
+        .encode_to_vec()
     }
 
-    /// The base key, a single use key that was created just in time by the
-    /// sender of the message. Should be used to establish a [`Session`].
-    ///
-    /// [`Session`]: crate::olm::Session
-    pub const fn base_key(&self) -> Curve25519PublicKey {
-        self.session_keys.base_key
-    }
+    /// Try to decode the given byte slice as an `OMEMOKeyExchange`.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() > MAX_KEY_EXCHANGE_LEN {
+            return Err(DecodeError::TooLong);
+        }
+        let proto = ProtoKeyExchange::decode(bytes)?;
 
-    /// The long term identity key of the sender of the message. Should be used
-    /// to establish a [`Session`]
-    ///
-    /// [`Session`]: crate::olm::Session
-    pub const fn identity_key(&self) -> Curve25519PublicKey {
-        self.session_keys.identity_key
-    }
+        let pre_key_id = proto.pk_id.ok_or(DecodeError::MissingField("pk_id"))?;
+        let signed_pre_key_id = proto.spk_id.ok_or(DecodeError::MissingField("spk_id"))?;
+        let identity_key: [u8; 32] = proto
+            .ik
+            .ok_or(DecodeError::MissingField("ik"))?
+            .try_into()
+            .map_err(|_| DecodeError::BadLength("ik"))?;
+        let ek = proto.ek.ok_or(DecodeError::MissingField("ek"))?;
+        let base_key = parse_public_key(&ek, "ek")?;
+        let message =
+            Message::from_proto(proto.message.ok_or(DecodeError::MissingField("message"))?)?;
 
-    /// The collection of all keys required for establishing an Olm [`Session`]
-    /// from this pre-key message.
-    ///
-    /// Other methods on this struct (like [`PreKeyMessage::identity_key()`])
-    /// can be used to retrieve individual keys from this collection.
-    ///
-    /// [`Session`]: crate::olm::Session
-    pub const fn session_keys(&self) -> SessionKeys {
-        self.session_keys
-    }
-
-    /// Returns the globally unique session ID, in base64-encoded form.
-    ///
-    /// This is a shorthand helper of the [`SessionKeys::session_id()`] method.
-    pub fn session_id(&self) -> String {
-        self.session_keys.session_id()
-    }
-
-    /// The actual message that contains the ciphertext.
-    pub const fn message(&self) -> &Message {
-        &self.message
-    }
-
-    /// Try to decode the given byte slice as a Olm [`Message`].
-    ///
-    /// The expected format of the byte array is described in the
-    /// [`PreKeyMessage::to_bytes()`] method.
-    pub fn from_bytes(message: &[u8]) -> Result<Self, DecodeError> {
-        Self::try_from(message)
-    }
-
-    /// Encode the `PreKeyMessage` as an array of bytes.
-    ///
-    /// Olm `PreKeyMessage`s consist of a one-byte version, followed by a
-    /// variable length payload.
-    ///
-    /// ```text
-    /// +--------------+------------------------------------+
-    /// | Version Byte | Payload Bytes                      |
-    /// +--------------+------------------------------------+
-    /// ```
-    ///
-    /// The payload uses a format based on the Protocol Buffers encoding. It
-    /// consists of the following key-value pairs:
-    ///
-    ///   **Name**  |**Tag**|**Type**|              **Meaning**
-    /// :----------:|:-----:|:------:|:----------------------------------------:
-    /// One-Time-Key| 0x0A  | String |The public part of Bob's single-use key
-    ///   Base-Key  | 0x12  | String |The public part of Alice's single-use key
-    /// Identity-Key| 0x1A  | String |The public part of Alice's identity key
-    ///   Message   | 0x22  | String |An embedded Olm message
-    ///
-    /// The last key/value pair in a [`PreKeyMessage`] is a normal Olm
-    /// [`Message`].
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let message = ProtoBufPreKeyMessage {
-            one_time_key: self.session_keys.one_time_key.as_bytes().to_vec(),
-            base_key: self.session_keys.base_key.as_bytes().to_vec(),
-            identity_key: self.session_keys.identity_key.as_bytes().to_vec(),
-            message: self.message.to_bytes(),
-        };
-
-        encode_protobuf_message(message, Self::VERSION)
-    }
-
-    /// Try to decode the given string as a Olm [`PreKeyMessage`].
-    ///
-    /// The string needs to be a base64 encoded byte array that follows the
-    /// format described in the [`PreKeyMessage::to_bytes()`] method.
-    pub fn from_base64(message: &str) -> Result<Self, DecodeError> {
-        Self::try_from(message)
-    }
-
-    /// Encode the [`PreKeyMessage`] as a string.
-    ///
-    /// This method first calls [`PreKeyMessage::to_bytes()`] and then encodes
-    /// the resulting byte array as a string using base64 encoding.
-    pub fn to_base64(&self) -> String {
-        base64_encode(self.to_bytes())
-    }
-
-    /// Create a new pre-key message from the session keys and standard message.
-    #[cfg(feature = "low-level-api")]
-    pub const fn wrap(session_keys: SessionKeys, message: Message) -> Self {
-        PreKeyMessage::new(session_keys, message)
-    }
-
-    pub(crate) const fn new(session_keys: SessionKeys, message: Message) -> Self {
-        Self { session_keys, message }
+        Ok(Self {
+            pre_key_id,
+            signed_pre_key_id,
+            identity_key,
+            base_key,
+            message,
+        })
     }
 }
 
-impl Serialize for PreKeyMessage {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let message = self.to_base64();
-        serializer.serialize_str(&message)
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ratchet::cipher::MAC_LEN;
 
-impl<'de> Deserialize<'de> for PreKeyMessage {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let ciphertext = String::deserialize(d)?;
-        PreKeyMessage::from_base64(&ciphertext).map_err(serde::de::Error::custom)
-    }
-}
-
-impl TryFrom<&str> for PreKeyMessage {
-    type Error = DecodeError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let decoded = base64_decode(value)?;
-
-        Self::try_from(decoded)
-    }
-}
-
-impl TryFrom<Vec<u8>> for PreKeyMessage {
-    type Error = DecodeError;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_slice())
-    }
-}
-
-impl TryFrom<&[u8]> for PreKeyMessage {
-    type Error = DecodeError;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let version = *value.first().ok_or(DecodeError::MissingVersion)?;
-
-        if version != Self::VERSION {
-            Err(DecodeError::InvalidVersion(Self::VERSION, version))
-        } else {
-            let decoded = ProtoBufPreKeyMessage::decode(&value[1..value.len()])?;
-            let one_time_key = Curve25519PublicKey::from_slice(&decoded.one_time_key)?;
-            let base_key = Curve25519PublicKey::from_slice(&decoded.base_key)?;
-            let identity_key = Curve25519PublicKey::from_slice(&decoded.identity_key)?;
-
-            let message = decoded.message.try_into()?;
-
-            let session_keys = SessionKeys { one_time_key, identity_key, base_key };
-
-            Ok(Self { session_keys, message })
+    fn sample() -> PreKeyMessage {
+        let mut message = Message::new(
+            Curve25519PublicKey::from_bytes([3u8; 32]),
+            0,
+            0,
+            vec![4u8; 64],
+        );
+        message.set_mac([5u8; MAC_LEN]);
+        PreKeyMessage {
+            pre_key_id: 12,
+            signed_pre_key_id: 1,
+            identity_key: [1u8; 32],
+            base_key: Curve25519PublicKey::from_bytes([2u8; 32]),
+            message,
         }
     }
-}
 
-#[derive(Clone, ProstMessage)]
-struct ProtoBufPreKeyMessage {
-    #[prost(bytes, tag = "1")]
-    one_time_key: Vec<u8>,
-    #[prost(bytes, tag = "2")]
-    base_key: Vec<u8>,
-    #[prost(bytes, tag = "3")]
-    identity_key: Vec<u8>,
-    #[prost(bytes, tag = "4")]
-    message: Vec<u8>,
+    #[test]
+    fn round_trip() {
+        let m = sample();
+        let again = PreKeyMessage::from_bytes(&m.to_bytes()).unwrap();
+        assert_eq!(m, again);
+        assert_eq!(again.to_bytes(), m.to_bytes());
+    }
+
+    #[test]
+    fn field_numbers_are_those_of_the_xep() {
+        let bytes = sample().to_bytes();
+        // pk_id = 1, spk_id = 2 (varints), ik = 3, ek = 4, message = 5.
+        assert_eq!(&bytes[..4], &[0x08, 12, 0x10, 1]);
+        assert_eq!(bytes[4], 0x1a);
+        assert_eq!(bytes[4 + 2 + 32], 0x22);
+        assert_eq!(bytes[4 + 2 + 32 + 2 + 32], 0x2a);
+    }
+
+    #[test]
+    fn missing_and_bad_fields_are_refused() {
+        let ok = ProtoKeyExchange::decode(sample().to_bytes().as_slice()).unwrap();
+        for (name, mutate) in [
+            (
+                "pk_id",
+                (|p: &mut ProtoKeyExchange| p.pk_id = None) as fn(&mut ProtoKeyExchange),
+            ),
+            ("spk_id", |p| p.spk_id = None),
+            ("ik", |p| p.ik = None),
+            ("ek", |p| p.ek = None),
+            ("message", |p| p.message = None),
+        ] {
+            let mut p = ok.clone();
+            mutate(&mut p);
+            assert!(
+                matches!(
+                    PreKeyMessage::from_bytes(&p.encode_to_vec()),
+                    Err(DecodeError::MissingField(n)) if n == name
+                ),
+                "{name}"
+            );
+        }
+        let mut p = ok.clone();
+        p.ik = Some(vec![0; 31]);
+        assert!(matches!(
+            PreKeyMessage::from_bytes(&p.encode_to_vec()),
+            Err(DecodeError::BadLength("ik"))
+        ));
+        let mut p = ok;
+        p.ek = Some(vec![0; 33]);
+        assert!(matches!(
+            PreKeyMessage::from_bytes(&p.encode_to_vec()),
+            Err(DecodeError::BadLength("ek"))
+        ));
+    }
 }

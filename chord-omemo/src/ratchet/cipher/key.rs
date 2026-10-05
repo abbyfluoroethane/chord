@@ -12,6 +12,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 #[allow(deprecated)]
 use aes::{
@@ -34,28 +36,19 @@ type HmacSha256Key = [u8; 32];
 pub(crate) struct ExpandedKeys(Box<[u8; 80]>);
 
 impl ExpandedKeys {
-    const OLM_HKDF_INFO: &'static [u8] = b"OLM_KEYS";
-    const MEGOLM_HKDF_INFO: &'static [u8] = b"MEGOLM_KEYS";
+    /// The HKDF info of the message key expansion.
+    /// Source: python-twomemo, `AEADImpl._get_info`; XEP-0384 0.9, section 4.3 (ENCRYPT).
+    const OMEMO_HKDF_INFO: &'static [u8] = b"OMEMO Message Key Material";
 
     fn new(message_key: &[u8; 32]) -> Self {
-        Self::new_helper(message_key, Self::OLM_HKDF_INFO)
-    }
-
-    fn new_megolm(message_key: &[u8; 128]) -> Self {
-        Self::new_helper(message_key, Self::MEGOLM_HKDF_INFO)
-    }
-
-    fn new_pickle(pickle_key: &[u8]) -> Self {
-        Self::new_helper(pickle_key, b"Pickle")
-    }
-
-    pub(crate) fn new_helper(message_key: &[u8], info: &[u8]) -> Self {
         let mut expanded_keys = [0u8; 80];
 
-        let hkdf: Hkdf<Sha256> = Hkdf::new(Some(&[0]), message_key);
+        // The salt is 32 zero bytes, the size of the SHA-256 output.
+        // Source: python-twomemo, `AEADImpl.__derive`; XEP-0384 0.9, section 4.3 (ENCRYPT).
+        let hkdf: Hkdf<Sha256> = Hkdf::new(Some(&[0u8; 32]), message_key);
 
         #[allow(clippy::expect_used)]
-        hkdf.expand(info, &mut expanded_keys)
+        hkdf.expand(Self::OMEMO_HKDF_INFO, &mut expanded_keys)
             .expect("HKDF should be able to expand a 32 byte key into 80 bytes");
 
         Self(Box::new(expanded_keys))
@@ -76,28 +69,22 @@ impl CipherKeys {
         Self::from_expanded_keys(expanded_keys)
     }
 
-    pub(crate) fn new_megolm(message_key: &[u8; 128]) -> Self {
-        let expanded_keys = ExpandedKeys::new_megolm(message_key);
-
-        Self::from_expanded_keys(expanded_keys)
-    }
-
-    pub(crate) fn new_pickle(pickle_key: &[u8]) -> Self {
-        let expanded_keys = ExpandedKeys::new_pickle(pickle_key);
-
-        Self::from_expanded_keys(expanded_keys)
-    }
-
     pub(crate) fn from_expanded_keys(expanded_keys: ExpandedKeys) -> Self {
         let mut aes_key = Box::new([0u8; 32]);
         let mut mac_key = Box::new([0u8; 32]);
         let mut aes_iv = Box::new([0u8; 16]);
 
+        // Split of the 80 bytes: 32 bytes encryption key, 32 bytes authentication key,
+        // 16 bytes IV. Source: python-twomemo, `AEADImpl.__derive`.
         aes_key.copy_from_slice(&expanded_keys.0[0..32]);
         mac_key.copy_from_slice(&expanded_keys.0[32..64]);
         aes_iv.copy_from_slice(&expanded_keys.0[64..80]);
 
-        Self { aes_key, aes_iv, mac_key }
+        Self {
+            aes_key,
+            aes_iv,
+            mac_key,
+        }
     }
 
     pub(crate) fn aes_key(&self) -> &Aes256Key {

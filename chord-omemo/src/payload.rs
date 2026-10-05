@@ -1,7 +1,7 @@
 //! The encryption of the `<payload>` element (XEP-0384, sections 4.4 and 4.5).
 //!
-//! NOT COVERED BY LIBOMEMO-C: this is a composition of RustCrypto calls, not covered by
-//! libomemo-c. libomemo-c only does the Double Ratchet part. For the payload the XEP says:
+//! This is a composition of RustCrypto calls. The Double Ratchet (see `session`) only
+//! carries the key material. For the payload the XEP says:
 //!
 //! 1. Make 32 random bytes, the `key`.
 //! 2. HKDF-SHA-256 with `key` as input, 32 zero bytes as salt, and the info string
@@ -11,9 +11,8 @@
 //! 5. HMAC-SHA-256 over the ciphertext with the authentication key. Keep the first 16 bytes.
 //! 6. `key || mac` (48 bytes) goes through the Double Ratchet, once for each device.
 //!
-//! QXmpp does these steps with the QCA library (`QXmppOmemoManager_p.cpp`, constants in
-//! `QXmppOmemoManager_p.h`). Dino has no OMEMO 2 code yet. Each step below is one call
-//! into the `hkdf`, `cbc`, `hmac` crates. There is no own cipher logic.
+//! Each step below is one call into the `hkdf`, `cbc`, `hmac` crates. There is no own cipher
+//! logic. python-twomemo does the same steps (`Twomemo.encrypt_plaintext`).
 
 use aes::Aes256;
 use cbc::cipher::block_padding::Pkcs7;

@@ -11,262 +11,125 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 use std::fmt::{Debug, Formatter};
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "low-level-api")]
-use super::ratchet::RatchetKey;
 use super::{
+    EncryptionError, RatchetError,
     chain_key::ChainKey,
     message_key::MessageKey,
     ratchet::{Ratchet, RatchetPublicKey, RemoteRatchetKey},
     receiver_chain::ReceiverChain,
-    root_key::{RemoteRootKey, RootKey},
+    root_key::RemoteRootKey,
 };
-use crate::olm::{EncryptionError, messages::Message, shared_secret::Shared3DHSecret};
+use crate::ratchet::olm::messages::Message;
 
 /// The sender side of a double-ratchet implementation.
 ///
-/// While we are encrypting messages, we are in the "active" state. Here we need
-/// to keep track of the latest chain key `C`<sub>`i`,`j`</sub> (so that we can
-/// advance to the next one), and also the current root key `R`<sub>`i`</sub>
-/// and our most recent ratchet key `T`<sub>`i`</sub> (so that we can calculate
-/// the *next* root key).
+/// We always have a sending chain. We keep track of the latest chain key
+/// `C`<sub>`i`,`j`</sub> (so that we can advance to the next one), and also the current
+/// root key `R`<sub>`i`</sub> and our most recent ratchet key `T`<sub>`i`</sub> (so that we
+/// can calculate the *next* root key).
 ///
-/// Once we receive a message, we transition to the "inactive" state. Since we
-/// don't handle decryption here (that's done in [`ReceiverChain`]), we don't
-/// need to keep track of the sender's chain key. All we need is enough state so
-/// that we can calculate the next root key once we start encrypting again:
-/// specifically, the public part of the other side's ratchet key
-/// `T`<sub>`i`</sub> which was sent to us in the message, and the remote root
-/// key `R`<sub>`i`</sub>.
+/// When a message with a new ratchet key of the other side arrives, we make a new
+/// sending chain at once, with a new ratchet key of ours: that is the "DH ratchet step" of
+/// the Double Ratchet spec (section 3.5). vodozemac makes the sending chain only when
+/// the next message goes out. That is a problem for OMEMO: a stored session that has
+/// not seen our reply would not know the ratchet key that the other device uses for its next
+/// chain. python-doubleratchet makes the chain at once (`DiffieHellmanRatchet.next_decryption_key`),
+/// and so do Signal and libomemo-c.
+///
+/// We don't handle decryption here (that's done in [`ReceiverChain`]).
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(transparent)]
 pub(super) struct DoubleRatchet {
-    inner: DoubleRatchetState,
+    inner: ActiveDoubleRatchet,
 }
 
 impl DoubleRatchet {
-    pub(super) fn next_message_key(&mut self) -> Option<MessageKey> {
-        match &mut self.inner {
-            DoubleRatchetState::Inactive(ratchet) => {
-                let mut ratchet = ratchet.activate()?;
-
-                let message_key = ratchet.next_message_key();
-                self.inner = DoubleRatchetState::Active(ratchet);
-
-                Some(message_key)
-            }
-            DoubleRatchetState::Active(ratchet) => Some(ratchet.next_message_key()),
-        }
+    pub(super) fn next_message_key(&mut self) -> MessageKey {
+        self.inner.next_message_key()
     }
 
-    #[cfg(feature = "experimental-session-config")]
-    pub(super) fn encrypt(&mut self, plaintext: &[u8]) -> Result<Message, EncryptionError> {
-        Ok(self.next_message_key().ok_or(EncryptionError::NonContributoryKey)?.encrypt(plaintext))
-    }
-
-    pub(super) fn encrypt_truncated_mac(
+    pub(super) fn encrypt(
         &mut self,
         plaintext: &[u8],
+        associated_data: &[u8],
     ) -> Result<Message, EncryptionError> {
-        Ok(self
-            .next_message_key()
-            .ok_or(EncryptionError::NonContributoryKey)?
-            .encrypt_truncated_mac(plaintext))
+        self.next_message_key().encrypt(plaintext, associated_data)
     }
 
-    /// Create a new `DoubleRatchet` instance, based on a newly-calculated
-    /// shared secret.
-    pub(super) fn active(shared_secret: Shared3DHSecret) -> Self {
-        let (root_key, chain_key) = shared_secret.expand();
+    /// The public ratchet key of our sending chain.
+    #[cfg(test)]
+    pub(super) fn ratchet_key(&self) -> RatchetPublicKey {
+        self.inner.ratchet_key()
+    }
 
-        let root_key = RootKey::new(root_key);
-        let chain_key = ChainKey::new(chain_key);
+    /// Create a new `DoubleRatchet` instance for Alice, the side that starts the session.
+    ///
+    /// `root_key` is the shared secret SK of X3DH. `remote_ratchet_key` is the signed
+    /// prekey of Bob. The Double Ratchet spec (section 3.3, "Initialization") says that
+    /// Alice makes a new ratchet key pair and runs one root KDF step with it and the
+    /// key of Bob: `RK, CKs = KDF_RK(SK, DH(DHs, DHr))`. XEP-0384 0.9, section 4.3
+    /// ("ratchet initialization") says the same; python-doubleratchet does it in
+    /// `DiffieHellmanRatchet.create` and `encrypt_initial_message`.
+    pub(super) fn active(
+        root_key: Box<[u8; 32]>,
+        remote_ratchet_key: RemoteRatchetKey,
+    ) -> Result<Self, RatchetError> {
+        Self::from_remote_root_key(RemoteRootKey::new(root_key), remote_ratchet_key, 0)
+    }
+
+    /// Make a new sending chain from a root key of the other side and its ratchet key.
+    /// `previous_chain_length` is the length of the sending chain that it replaces.
+    pub(super) fn from_remote_root_key(
+        root_key: RemoteRootKey,
+        remote_ratchet_key: RemoteRatchetKey,
+        previous_chain_length: u64,
+    ) -> Result<Self, RatchetError> {
+        let (root_key, chain_key, ratchet_key) = root_key.advance(&remote_ratchet_key)?;
 
         let ratchet = ActiveDoubleRatchet {
-            parent_ratchet_key: None, // First chain in a session lacks parent ratchet key
-            ratchet_count: RatchetCount::new(),
-            active_ratchet: Ratchet::new(root_key),
+            parent_ratchet_key: Some(remote_ratchet_key),
+            previous_chain_length,
+            active_ratchet: Ratchet::new_with_ratchet_key(root_key, ratchet_key),
             symmetric_key_ratchet: chain_key,
         };
 
-        Self { inner: ratchet.into() }
+        Ok(Self { inner: ratchet })
     }
 
-    #[cfg(feature = "libolm-compat")]
-    pub(super) fn from_ratchet_and_chain_key(ratchet: Ratchet, chain_key: ChainKey) -> Self {
-        Self {
-            inner: ActiveDoubleRatchet {
-                parent_ratchet_key: None, // libolm pickle did not record parent ratchet key
-                ratchet_count: RatchetCount::unknown(), // nor the ratchet count
-                active_ratchet: ratchet,
-                symmetric_key_ratchet: chain_key,
-            }
-            .into(),
-        }
-    }
-
-    pub(super) fn inactive_from_prekey_data(
-        root_key: RemoteRootKey,
-        ratchet_key: RemoteRatchetKey,
-    ) -> Self {
-        let ratchet_count = RatchetCount::new();
-        let ratchet = InactiveDoubleRatchet { root_key, ratchet_key, ratchet_count };
-
-        Self { inner: ratchet.into() }
-    }
-
-    #[cfg(feature = "libolm-compat")]
-    pub(super) fn inactive_from_libolm_pickle(
-        root_key: RemoteRootKey,
-        ratchet_key: RemoteRatchetKey,
-    ) -> Self {
-        let ratchet_count = RatchetCount::unknown();
-        let ratchet = InactiveDoubleRatchet { root_key, ratchet_key, ratchet_count };
-
-        Self { inner: ratchet.into() }
-    }
-
-    /// hazmat: build an active sender-side `DoubleRatchet` directly from raw
-    /// key material, bypassing the Olm 3DH handshake. Used by downstream
-    /// protocols that derive their own root key (e.g., Noise variants).
-    /// No new derivation — supplied values become the chain's keys verbatim.
-    #[cfg(feature = "low-level-api")]
-    pub(super) fn active_from_root_key_material(
-        root_key: RootKey,
-        chain_key: ChainKey,
-        ratchet_key: RatchetKey,
-    ) -> Self {
-        Self {
-            inner: ActiveDoubleRatchet {
-                parent_ratchet_key: None,
-                ratchet_count: RatchetCount::new(),
-                active_ratchet: Ratchet::new_with_ratchet_key(root_key, ratchet_key),
-                symmetric_key_ratchet: chain_key,
-            }
-            .into(),
-        }
-    }
-
-    /// hazmat: snapshot the active sender chain's raw bytes for equivalence
-    /// testing against an `Account`-derived session. Returns `None` if the
-    /// ratchet is inactive (no current sender chain).
-    #[cfg(feature = "low-level-api")]
-    pub(super) fn active_sending_state(&self) -> Option<super::ActiveSendingState> {
-        let DoubleRatchetState::Active(a) = &self.inner else { return None };
-        Some(super::ActiveSendingState {
-            root_key: a.active_ratchet.root_key.key.clone(),
-            chain_key: a.symmetric_key_ratchet.key.clone(),
-            chain_index: a.symmetric_key_ratchet.index,
-            ratchet_key: a.active_ratchet.ratchet_key.0.to_bytes(),
-        })
-    }
-
+    /// A message with the new ratchet key `ratchet_key` of the other side arrived. Returns
+    /// the ratchet with a new sending chain, and the receiver chain for the new key.
+    /// `self` does not change.
     pub(super) fn advance(
-        &mut self,
+        &self,
         ratchet_key: RemoteRatchetKey,
-    ) -> Option<(DoubleRatchet, ReceiverChain)> {
-        let (ratchet, receiver_chain) = match &self.inner {
-            DoubleRatchetState::Active(r) => r.advance(ratchet_key)?,
-            DoubleRatchetState::Inactive(r) => {
-                let ratchet = r.activate()?;
-                // Advancing an inactive ratchet shouldn't be possible since the
-                // other side did not yet receive our new ratchet key.
-                //
-                // This will likely end up in a decryption error but for
-                // consistency sake and avoiding the leakage of our internal
-                // state it's better to error out there.
-                let ret = ratchet.advance(ratchet_key)?;
+    ) -> Result<(DoubleRatchet, ReceiverChain), RatchetError> {
+        let (remote_root_key, remote_chain) = self.inner.active_ratchet.advance(ratchet_key)?;
 
-                self.inner = ratchet.into();
+        let receiver_chain = ReceiverChain::new(ratchet_key, remote_chain);
+        let sending = Self::from_remote_root_key(
+            remote_root_key,
+            ratchet_key,
+            self.inner.symmetric_key_ratchet.index(),
+        )?;
 
-                ret
-            }
-        };
-
-        Some((Self { inner: DoubleRatchetState::Inactive(ratchet) }, receiver_chain))
+        Ok((sending, receiver_chain))
     }
 }
 
 impl Debug for DoubleRatchet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut dbg = f.debug_tuple("DoubleRatchet");
-        match &self.inner {
-            DoubleRatchetState::Inactive(r) => dbg.field(r),
-            DoubleRatchetState::Active(r) => dbg.field(r),
-        };
-        dbg.finish()
+        f.debug_tuple("DoubleRatchet").field(&self.inner).finish()
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "snake_case")]
-#[serde(tag = "type")]
-enum DoubleRatchetState {
-    Inactive(InactiveDoubleRatchet),
-    Active(ActiveDoubleRatchet),
-}
-
-impl From<InactiveDoubleRatchet> for DoubleRatchetState {
-    fn from(r: InactiveDoubleRatchet) -> Self {
-        Self::Inactive(r)
-    }
-}
-
-impl From<ActiveDoubleRatchet> for DoubleRatchetState {
-    fn from(r: ActiveDoubleRatchet) -> Self {
-        Self::Active(r)
-    }
-}
-
-/// State of the sender-side ratchet when we have received a new chain from the
-/// other side, and have not yet created a new chain of our own.
-///
-/// See [`DoubleRatchet`] for more explanation.
-#[derive(Serialize, Deserialize, Clone)]
-struct InactiveDoubleRatchet {
-    root_key: RemoteRootKey,
-    ratchet_key: RemoteRatchetKey,
-
-    /// The number of times the ratchet has been advanced.
-    ///
-    /// If `root_key` contains root key `R`<sub>`i`</sub>, this is `i`.
-    ///
-    /// This is not required to implement the algorithm: it is maintained solely
-    /// for diagnostic output.
-    #[serde(default = "RatchetCount::unknown")]
-    ratchet_count: RatchetCount,
-}
-
-impl InactiveDoubleRatchet {
-    fn activate(&self) -> Option<ActiveDoubleRatchet> {
-        let (root_key, chain_key, ratchet_key) = self.root_key.advance(&self.ratchet_key)?;
-        let active_ratchet = Ratchet::new_with_ratchet_key(root_key, ratchet_key);
-
-        Some(ActiveDoubleRatchet {
-            parent_ratchet_key: Some(self.ratchet_key),
-            ratchet_count: self.ratchet_count.advance(),
-            active_ratchet,
-            symmetric_key_ratchet: chain_key,
-        })
-    }
-}
-
-impl Debug for InactiveDoubleRatchet {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InactiveDoubleRatchet")
-            .field("ratchet_count", &self.ratchet_count)
-            .field("ratchet_key", &self.ratchet_key)
-            .finish_non_exhaustive()
-    }
-}
-
-/// State of the sender-side ratchet while we are in "encryption" mode: we are
-/// encrypting our own messages and have not yet received any messages which
-/// were created since we started this chain.
+/// State of the sender-side ratchet: we are encrypting our own messages.
 ///
 /// See [`DoubleRatchet`] for more explanation.
 #[derive(Serialize, Deserialize, Clone)]
@@ -275,52 +138,26 @@ struct ActiveDoubleRatchet {
     /// the root key in `active_ratchet` and the chain key in
     /// `symmetric_key_ratchet`.
     ///
-    /// If `active_ratchet` contains root key `R`<sub>`i`</sub> and our own
-    /// ratchet key `T`<sub>`i`</sub>, this is `T`<sub>`i-1`</sub>.
-    ///
-    /// `None` means "unknown", either because this session has been restored
-    /// from a pickle which did not record the parent session key, or because
-    /// this is the first chain in the session.
-    ///
     /// This is not required to implement the algorithm: it is maintained solely
     /// for diagnostic output.
-    #[serde(default)]
     parent_ratchet_key: Option<RemoteRatchetKey>,
 
-    /// The number of times the ratchet has been advanced.
-    ///
-    /// If `active_ratchet` contains root key `R`<sub>`i`</sub>, this is `i`.
-    #[serde(default = "RatchetCount::unknown")]
-    ratchet_count: RatchetCount,
+    /// The length of the sending chain before this one, `PN` of the Double Ratchet spec.
+    /// Every message of this chain sends it in its `pn` field.
+    previous_chain_length: u64,
 
     active_ratchet: Ratchet,
     symmetric_key_ratchet: ChainKey,
 }
 
 impl ActiveDoubleRatchet {
-    fn advance(
-        &self,
-        ratchet_key: RemoteRatchetKey,
-    ) -> Option<(InactiveDoubleRatchet, ReceiverChain)> {
-        let (root_key, remote_chain) = self.active_ratchet.advance(ratchet_key)?;
-
-        let new_ratchet_count = self.ratchet_count.advance();
-        let ratchet = InactiveDoubleRatchet {
-            root_key,
-            ratchet_key,
-            ratchet_count: new_ratchet_count.clone(),
-        };
-        let receiver_chain = ReceiverChain::new(ratchet_key, remote_chain, new_ratchet_count);
-
-        Some((ratchet, receiver_chain))
-    }
-
     fn ratchet_key(&self) -> RatchetPublicKey {
         RatchetPublicKey::from(self.active_ratchet.ratchet_key())
     }
 
     fn next_message_key(&mut self) -> MessageKey {
-        self.symmetric_key_ratchet.create_message_key(self.ratchet_key())
+        self.symmetric_key_ratchet
+            .create_message_key(self.ratchet_key(), self.previous_chain_length)
     }
 }
 
@@ -328,7 +165,6 @@ impl Debug for ActiveDoubleRatchet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let active_ratchet_public_key: RatchetPublicKey = self.active_ratchet.ratchet_key().into();
         f.debug_struct("ActiveDoubleRatchet")
-            .field("ratchet_count", &self.ratchet_count)
             .field("parent_ratchet_key", &self.parent_ratchet_key)
             .field("ratchet_key", &active_ratchet_public_key)
             .field("chain_index", &self.symmetric_key_ratchet.index())
@@ -336,187 +172,51 @@ impl Debug for ActiveDoubleRatchet {
     }
 }
 
-/// The number of times the ratchet has been advanced, `i`.
-///
-/// This starts at 0 for the first prekey messages from Alice to Bob,
-/// increments to 1 when Bob replies, and then increments each time the
-/// conversation changes direction.
-///
-/// It may be unknown, if the ratchet was restored from a pickle
-/// which didn't track it.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub(super) enum RatchetCount {
-    Known(u64),
-    Unknown(()),
-}
-
-impl RatchetCount {
-    pub(super) const fn new() -> RatchetCount {
-        RatchetCount::Known(0)
-    }
-
-    pub(super) const fn unknown() -> RatchetCount {
-        RatchetCount::Unknown(())
-    }
-
-    pub(super) fn advance(&self) -> RatchetCount {
-        match self {
-            RatchetCount::Known(count) => RatchetCount::Known(count + 1),
-            RatchetCount::Unknown(_) => RatchetCount::Unknown(()),
-        }
-    }
-}
-
-impl Debug for RatchetCount {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RatchetCount::Known(count) => write!(f, "{count}"),
-            RatchetCount::Unknown(_) => write!(f, "<unknown>"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use assert_matches2::assert_matches;
+    use super::RemoteRatchetKey;
+    use crate::ratchet::olm::session::testing::{message, pair};
 
-    use super::{
-        ActiveDoubleRatchet, DoubleRatchet, DoubleRatchetState, InactiveDoubleRatchet, RatchetCount,
-    };
-    use crate::{
-        Curve25519PublicKey,
-        olm::{Account, OlmMessage, Session, SessionConfig, session::ratchet::RemoteRatchetKey},
-    };
+    #[test]
+    fn every_turn_makes_a_new_ratchet_key() {
+        let (mut alice, mut bob) = pair();
 
-    fn create_session_pair(alice: &Account, bob: &mut Account) -> (Session, Session) {
-        let bob_otks = bob.generate_one_time_keys(1);
-        let bob_otk = bob_otks.created.first().expect("Couldn't get a one-time-key for bob");
-        let bob_identity_key = bob.identity_keys().curve25519;
-        let mut alice_session = alice
-            .create_outbound_session(SessionConfig::version_1(), bob_identity_key, *bob_otk)
-            .unwrap();
+        let alice_key = alice.sending_ratchet_key();
+        let bob_key = bob.sending_ratchet_key();
 
-        let message = "It's a secret to everybody";
-        let olm_message = alice_session.encrypt(message).unwrap();
-        assert_matches!(olm_message, OlmMessage::PreKey(prekey_message));
+        // Bob made his sending chain when he read the first message.
+        let reply = message(&mut bob, b"sssh");
+        assert_eq!(reply.ratchet_key, bob_key);
+        alice.decrypt(&reply).unwrap();
+        assert_ne!(alice.sending_ratchet_key(), alice_key);
 
-        let alice_identity_key = alice.identity_keys().curve25519;
-        let bob_session_creation_result = bob
-            .create_inbound_session(SessionConfig::version_1(), alice_identity_key, &prekey_message)
-            .expect("Unable to create inbound session");
-        assert_eq!(bob_session_creation_result.plaintext, message.as_bytes());
-        (alice_session, bob_session_creation_result.session)
-    }
-
-    fn assert_active_ratchet(sending_ratchet: &DoubleRatchet) -> &ActiveDoubleRatchet {
-        match &sending_ratchet.inner {
-            DoubleRatchetState::Inactive(_) => panic!("Not an active ratchet"),
-            DoubleRatchetState::Active(s) => s,
-        }
-    }
-
-    fn assert_inactive_ratchet(sending_ratchet: &DoubleRatchet) -> &InactiveDoubleRatchet {
-        match &sending_ratchet.inner {
-            DoubleRatchetState::Active(_) => panic!("Not an inactive ratchet"),
-            DoubleRatchetState::Inactive(s) => s,
-        }
+        let again = message(&mut alice, b"sssh");
+        assert_ne!(again.ratchet_key, alice_key);
+        bob.decrypt(&again).unwrap();
+        assert_ne!(bob.sending_ratchet_key(), bob_key);
     }
 
     #[test]
-    fn ratchet_counts() {
-        let (mut alice_session, mut bob_session) =
-            create_session_pair(&Account::new(), &mut Account::new());
-
-        // Both ratchets should start with count 0.
-        assert_eq!(
-            assert_active_ratchet(&alice_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(0)
-        );
-        assert_eq!(
-            assert_inactive_ratchet(&bob_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(0)
-        );
-
-        // Once Bob replies, the ratchets should bump to 1.
-        let olm_message = bob_session.encrypt("sssh").unwrap();
-        alice_session.decrypt(&olm_message).expect("Alice could not decrypt message from Bob");
-        assert_eq!(
-            assert_inactive_ratchet(&alice_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(1)
-        );
-        assert_eq!(
-            assert_active_ratchet(&bob_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(1)
-        );
-
-        // Now Alice replies again.
-        let olm_message = alice_session.encrypt("sssh").unwrap();
-        bob_session.decrypt(&olm_message).expect("Bob could not decrypt message from Alice");
-        assert_eq!(
-            assert_active_ratchet(&alice_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(2)
-        );
-        assert_eq!(
-            assert_inactive_ratchet(&bob_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(2)
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "libolm-compat")]
-    fn ratchet_counts_for_imported_session() {
-        let (_, _, mut alice_session, bob_libolm_session) =
-            crate::olm::session::test::session_and_libolm_pair()
-                .expect("unable to create sessions");
-
-        // Import the libolm session into a proper vodozemac session.
-        let key = b"DEFAULT_PICKLE_KEY";
-        let pickle =
-            bob_libolm_session.pickle(olm_rs::PicklingMode::Encrypted { key: key.to_vec() });
-        let mut bob_session =
-            Session::from_libolm_pickle(&pickle, key).expect("Should be able to unpickle session");
-
-        assert_eq!(
-            assert_inactive_ratchet(&bob_session.sending_ratchet).ratchet_count,
-            RatchetCount::Unknown(())
-        );
-
-        // Once Bob replies, Alice's count bumps to 1, but Bob's remains
-        // unknown.
-        let olm_message = bob_session.encrypt("sssh").unwrap();
-        alice_session.decrypt(&olm_message).expect("Alice could not decrypt message from Bob");
-        assert_eq!(
-            assert_inactive_ratchet(&alice_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(1)
-        );
-        assert_eq!(
-            assert_active_ratchet(&bob_session.sending_ratchet).ratchet_count,
-            RatchetCount::Unknown(())
-        );
-
-        // Now Alice replies again.
-        let olm_message = alice_session.encrypt("sssh").unwrap();
-        bob_session.decrypt(&olm_message).expect("Bob could not decrypt message from Alice");
-        assert_eq!(
-            assert_active_ratchet(&alice_session.sending_ratchet).ratchet_count,
-            RatchetCount::Known(2)
-        );
-        assert_eq!(
-            assert_inactive_ratchet(&bob_session.sending_ratchet).ratchet_count,
-            RatchetCount::Unknown(())
-        );
+    fn pn_is_the_length_of_the_previous_chain() {
+        let (mut alice, mut bob) = pair();
+        // Alice sent one message in her first chain (the key exchange message).
+        let first = message(&mut alice, b"2");
+        assert_eq!((first.chain_index, first.previous_chain_length), (1, 0));
+        let reply = message(&mut bob, b"r");
+        alice.decrypt(&reply).unwrap();
+        // Her second chain starts after two messages.
+        let next = message(&mut alice, b"3");
+        assert_eq!((next.chain_index, next.previous_chain_length), (0, 2));
+        bob.decrypt(&next).unwrap();
     }
 
     #[test]
     fn advance_with_non_contributory_key_fails() {
-        let (mut alice_session, _) = create_session_pair(&Account::new(), &mut Account::new());
-
-        let ratchet = &mut alice_session.sending_ratchet;
-        let ratchet_key = RemoteRatchetKey(Curve25519PublicKey::from_bytes([0u8; 32]));
-
+        let (alice, _) = pair();
         assert!(
-            ratchet.advance(ratchet_key).is_none(),
-            "We shouldn't be able to advance the session with a non-contributory remote ratchet key"
+            alice
+                .advance_with(RemoteRatchetKey::from([0u8; 32]))
+                .is_err()
         );
     }
 }

@@ -1,38 +1,29 @@
-//! OMEMO 2 (XEP-0384 version 0.9.1, namespace `urn:xmpp:omemo:2`): a safe wrapper around
-//! libomemo-c, with no XMPP and no I/O. See `docs/omemo-plan.md`.
+//! OMEMO 2 (XEP-0384 version 0.9.1, namespace `urn:xmpp:omemo:2`) in pure Rust, with no
+//! XMPP and no I/O. See `docs/omemo-plan.md`.
 //!
-//! Chord does not write its own crypto. The protocol parts come from libomemo-c, the C
-//! library that Dino and QXmpp use. We vendor it in `vendor/libomemo-c` and build it in
-//! `build.rs`. libomemo-c does:
+//! The Double Ratchet comes from a fork of vodozemac (Apache-2.0), which was audited by Least
+//! Authority in 2022. The fork is in `src/ratchet`. It changes the code for OMEMO 2: the key
+//! agreement is X3DH, the KDF strings, the message crypto and the message formats are those
+//! of XEP-0384. `src/ratchet/FORK.md` lists every change. The code is tested against
+//! python-twomemo (see `tests/interop`). The changes need an outside review before the
+//! feature is called stable.
 //!
-//! - X3DH, the Double Ratchet, and the OMEMO 2 message formats (protocol version 4);
-//! - key generation, and the signature of the signed prekey.
-//!
-//! libomemo-c asks the host for random, HMAC-SHA-256, SHA-512 and AES. `provider.rs` gives
-//! them with one call each into RustCrypto crates.
-//!
-//! The one OMEMO 2 step that libomemo-c does not do is the encryption of the `<payload>`.
-//! It is in `payload`, as a composition of RustCrypto calls. Read the note there.
+//! The primitives are RustCrypto and dalek crates. This crate has no cipher code of its own.
 //!
 //! - [`identity`]: the keys of this device, and the bundle to publish.
 //! - [`session`]: [`encrypt_key`] and [`decrypt_key`] for one `<key>` element.
 //! - [`payload`]: the encryption of the `<payload>` element.
 //! - [`aesgcm`]: the file encryption of XEP-0454 (not built yet).
 //!
-//! The caller keeps all state as bytes: [`Identity::to_bytes`] and the session records.
-//! Every call reads its inputs and returns new state. It never changes an input. Trust is
-//! not decided here. Every call returns the identity key of the other device, and the
-//! caller decides.
-//!
-//! License: libomemo-c is GPL-3.0. A program that links this crate is a covered work. See
-//! `vendor/libomemo-c/VENDOR.md`.
+//! The caller keeps all state as bytes: [`Identity::to_bytes`] and the session records. Every
+//! call reads its inputs and returns new state. It never changes an input. Trust is not
+//! decided here. Every call returns the identity key of the other device, and the caller
+//! decides.
 
 pub mod aesgcm;
-mod ffi;
 pub mod identity;
-mod native;
 pub mod payload;
-mod provider;
+mod ratchet;
 pub mod session;
 
 pub use identity::{Bundle, Identity, PREKEY_COUNT, PREKEY_MIN, fingerprint};
@@ -55,8 +46,6 @@ pub enum Error {
     NoSession,
     /// The random source failed.
     Rng,
-    /// Another error of libomemo-c. The number is its result code.
-    Library(i32),
 }
 
 impl core::fmt::Display for Error {
@@ -69,7 +58,6 @@ impl core::fmt::Display for Error {
             Error::Duplicate => f.write_str("duplicate message"),
             Error::NoSession => f.write_str("no session"),
             Error::Rng => f.write_str("random source failed"),
-            Error::Library(code) => write!(f, "libomemo-c error {code}"),
         }
     }
 }

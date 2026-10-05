@@ -11,322 +11,272 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-use std::fmt::Debug;
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 use prost::Message as ProstMessage;
-use serde::{Deserialize, Serialize};
 
-use crate::{
-    Curve25519PublicKey, DecodeError,
-    cipher::{Mac, MessageMac},
-    utilities::{base64_decode, base64_encode, encode_protobuf_message, extract_mac},
-};
+use super::DecodeError;
+use crate::ratchet::{Curve25519PublicKey, cipher::MAC_LEN};
 
-pub(crate) const MAC_TRUNCATED_VERSION: u8 = 3;
-pub(crate) const VERSION: u8 = 4;
+/// The longest `OMEMOAuthenticatedMessage` that we parse, in bytes. The key material of
+/// an OMEMO message is 48 bytes, so a real message is about 130 bytes long.
+pub(crate) const MAX_AUTHENTICATED_MESSAGE_LEN: usize = 2048;
+/// The longest ciphertext that we accept in an `OMEMOMessage`, in bytes.
+pub(crate) const MAX_CIPHERTEXT_LEN: usize = 1024;
 
-/// An encrypted Olm message.
+/// Read a Curve25519 public key from the wire: 32 bytes, with the top bit clear.
 ///
-/// Contains metadata that is required to find the correct ratchet state of a
-/// [`Session`] necessary to decrypt the message.
+/// X25519 ignores the top bit of the u-coordinate (RFC 7748, section 5), so a key with the
+/// bit set would give the same shared secret as the key without it. A key that a real
+/// client sends never has the bit set. We refuse it: no message has two valid encodings.
+pub(super) fn parse_public_key(
+    bytes: &[u8],
+    field: &'static str,
+) -> Result<Curve25519PublicKey, DecodeError> {
+    let key = Curve25519PublicKey::from_slice(bytes).map_err(|_| DecodeError::BadLength(field))?;
+    if key.as_bytes_ref()[31] & 0x80 != 0 {
+        return Err(DecodeError::InvalidKey(field));
+    }
+    Ok(key)
+}
+
+/// The protobuf message `OMEMOMessage`. All fields are optional here, and
+/// `Message::from_bytes` checks that the required ones are there: the prost derive
+/// does not check `required` fields.
 ///
-/// [`Session`]: crate::olm::Session
+/// Source of the field numbers and types: XEP-0384 0.9, section 12 (Protobuf Schema) (the proto file of
+/// namespace `urn:xmpp:omemo:2`), and the descriptor of python-twomemo (`twomemo.proto`):
+/// `n` uint32 = 1, `pn` uint32 = 2, `dh_pub` bytes = 3, `ciphertext` bytes = 4 (optional).
+#[derive(Clone, PartialEq, ProstMessage)]
+struct ProtoOmemoMessage {
+    #[prost(uint32, optional, tag = "1")]
+    n: Option<u32>,
+    #[prost(uint32, optional, tag = "2")]
+    pn: Option<u32>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    dh_pub: Option<Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "4")]
+    ciphertext: Option<Vec<u8>>,
+}
+
+/// The protobuf message `OMEMOAuthenticatedMessage`: `mac` bytes = 1, `message` bytes = 2
+/// (the serialized `OMEMOMessage`). Same sources as above.
+#[derive(Clone, PartialEq, ProstMessage)]
+pub(super) struct ProtoAuthenticatedMessage {
+    #[prost(bytes = "vec", optional, tag = "1")]
+    pub(super) mac: Option<Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub(super) message: Option<Vec<u8>>,
+}
+
+/// An encrypted OMEMO message: an `OMEMOAuthenticatedMessage` with the `OMEMOMessage` in
+/// it.
+///
+/// It holds the header (`n`, `pn`, the ratchet key) and the ciphertext. The MAC covers
+/// the associated data and `message_bytes`, the exact bytes of the `OMEMOMessage`.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Message {
-    pub(crate) version: u8,
+pub(crate) struct Message {
     pub(crate) ratchet_key: Curve25519PublicKey,
-    pub(crate) chain_index: u64,
+    /// `n`: the index of the message in its chain.
+    pub(crate) chain_index: u32,
+    /// `pn`: the length of the previous sending chain of the sender.
+    pub(crate) previous_chain_length: u32,
     pub(crate) ciphertext: Vec<u8>,
-    pub(crate) mac: MessageMac,
+    pub(crate) mac: [u8; MAC_LEN],
+    /// The serialized `OMEMOMessage`. The MAC covers these bytes.
+    pub(crate) message_bytes: Vec<u8>,
 }
 
-impl Message {
-    /// The public part of the ratchet key, that was used when the message was
-    /// encrypted.
-    pub const fn ratchet_key(&self) -> Curve25519PublicKey {
-        self.ratchet_key
-    }
-
-    /// The index of the chain that was used when the message was encrypted.
-    pub const fn chain_index(&self) -> u64 {
-        self.chain_index
-    }
-
-    /// The actual ciphertext of the message.
-    pub fn ciphertext(&self) -> &[u8] {
-        &self.ciphertext
-    }
-
-    /// The version of the Olm message.
-    pub const fn version(&self) -> u8 {
-        self.version
-    }
-
-    /// Try to decode the given byte slice as a Olm [`Message`].
-    ///
-    /// The expected format of the byte array is described in the
-    /// [`Message::to_bytes()`] method.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-        Self::try_from(bytes)
-    }
-
-    /// Encode the `Message` as an array of bytes.
-    ///
-    /// Olm `Message`s consist of a one-byte version, followed by a variable
-    /// length payload and a fixed length message authentication code.
-    ///
-    /// ```text
-    /// +--------------+------------------------------------+-----------+
-    /// | Version Byte | Payload Bytes                      | MAC Bytes |
-    /// +--------------+------------------------------------+-----------+
-    /// ```
-    ///
-    /// The payload uses a format based on the Protocol Buffers encoding. It
-    /// consists of the following key-value pairs:
-    ///
-    /// **Name**   |**Tag**|**Type**|               **Meaning**
-    /// :---------:|:-----:|:------:|:-----------------------------------------:
-    /// Ratchet-Key|  0x0A | String |The public part of the ratchet key
-    /// Chain-Index|  0x10 | Integer|The chain index, of the message
-    /// Cipher-Text|  0x22 | String |The cipher-text of the message
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut message = self.encode();
-        message.extend(self.mac.as_bytes());
-
-        message
-    }
-
-    /// Try to decode the given string as a Olm [`Message`].
-    ///
-    /// The string needs to be a base64 encoded byte array that follows the
-    /// format described in the [`Message::to_bytes()`] method.
-    pub fn from_base64(message: &str) -> Result<Self, DecodeError> {
-        Self::try_from(message)
-    }
-
-    /// Encode the [`Message`] as a string.
-    ///
-    /// This method first calls [`Message::to_bytes()`] and then encodes the
-    /// resulting byte array as a string using base64 encoding.
-    pub fn to_base64(&self) -> String {
-        base64_encode(self.to_bytes())
-    }
-
-    #[cfg(feature = "experimental-session-config")]
-    pub(crate) fn new(
-        ratchet_key: Curve25519PublicKey,
-        chain_index: u64,
-        ciphertext: Vec<u8>,
-    ) -> Self {
-        Self {
-            version: VERSION,
-            ratchet_key,
-            chain_index,
-            ciphertext,
-            mac: Mac([0u8; Mac::LENGTH]).into(),
-        }
-    }
-
-    pub(crate) fn new_truncated_mac(
-        ratchet_key: Curve25519PublicKey,
-        chain_index: u64,
-        ciphertext: Vec<u8>,
-    ) -> Self {
-        Self {
-            version: MAC_TRUNCATED_VERSION,
-            ratchet_key,
-            chain_index,
-            ciphertext,
-            mac: [0u8; Mac::TRUNCATED_LEN].into(),
-        }
-    }
-
-    fn encode(&self) -> Vec<u8> {
-        let message = ProtoBufMessage {
-            ratchet_key: self.ratchet_key.to_bytes().to_vec(),
-            chain_index: self.chain_index,
-            ciphertext: self.ciphertext.clone(),
-        };
-
-        encode_protobuf_message(message, self.version())
-    }
-
-    pub(crate) fn to_mac_bytes(&self) -> Vec<u8> {
-        self.encode()
-    }
-
-    pub(crate) fn set_mac(&mut self, mac: Mac) {
-        match self.mac {
-            MessageMac::Truncated(_) => self.mac = mac.truncate().into(),
-            MessageMac::Full(_) => self.mac = mac.into(),
-        }
-    }
-}
-
-impl Serialize for Message {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let message = self.to_base64();
-        serializer.serialize_str(&message)
-    }
-}
-
-impl<'de> Deserialize<'de> for Message {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let ciphertext = String::deserialize(d)?;
-        Message::from_base64(&ciphertext).map_err(serde::de::Error::custom)
-    }
-}
-
-impl TryFrom<&str> for Message {
-    type Error = DecodeError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let decoded = base64_decode(value)?;
-
-        Self::try_from(decoded)
-    }
-}
-
-impl TryFrom<Vec<u8>> for Message {
-    type Error = DecodeError;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_slice())
-    }
-}
-
-impl TryFrom<&[u8]> for Message {
-    type Error = DecodeError;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        let version = *value.first().ok_or(DecodeError::MissingVersion)?;
-
-        let mac_length = match version {
-            VERSION => Mac::LENGTH,
-            MAC_TRUNCATED_VERSION => Mac::TRUNCATED_LEN,
-            _ => return Err(DecodeError::InvalidVersion(VERSION, version)),
-        };
-
-        if value.len() < mac_length + 2 {
-            Err(DecodeError::MessageTooShort(value.len()))
-        } else {
-            let inner = ProtoBufMessage::decode(
-                value
-                    .get(1..value.len() - mac_length)
-                    .ok_or(DecodeError::MessageTooShort(value.len()))?,
-            )?;
-
-            let mac_slice = &value[value.len() - mac_length..];
-
-            if mac_slice.len() != mac_length {
-                Err(DecodeError::InvalidMacLength(mac_length, mac_slice.len()))
-            } else {
-                let mac = extract_mac(mac_slice, version == MAC_TRUNCATED_VERSION);
-
-                let chain_index = inner.chain_index;
-                let ciphertext = inner.ciphertext;
-                let ratchet_key = Curve25519PublicKey::from_slice(&inner.ratchet_key)?;
-
-                let message = Message { version, ratchet_key, chain_index, ciphertext, mac };
-
-                Ok(message)
-            }
-        }
-    }
-}
-
-impl Debug for Message {
+impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { version, ratchet_key, chain_index, ciphertext: _, mac: _ } = self;
-
         f.debug_struct("Message")
-            .field("version", version)
-            .field("ratchet_key", ratchet_key)
-            .field("chain_index", chain_index)
+            .field("ratchet_key", &self.ratchet_key)
+            .field("chain_index", &self.chain_index)
+            .field("previous_chain_length", &self.previous_chain_length)
             .finish_non_exhaustive()
     }
 }
 
-#[derive(ProstMessage, PartialEq, Eq)]
-struct ProtoBufMessage {
-    #[prost(bytes, tag = "1")]
-    ratchet_key: Vec<u8>,
-    #[prost(uint64, required, tag = "2")]
-    chain_index: u64,
-    #[prost(bytes, tag = "4")]
-    ciphertext: Vec<u8>,
+impl Message {
+    /// Make a message from its parts. The MAC is zero until `set_mac` sets it.
+    pub(crate) fn new(
+        ratchet_key: Curve25519PublicKey,
+        chain_index: u32,
+        previous_chain_length: u32,
+        ciphertext: Vec<u8>,
+    ) -> Self {
+        let message_bytes = ProtoOmemoMessage {
+            n: Some(chain_index),
+            pn: Some(previous_chain_length),
+            dh_pub: Some(ratchet_key.to_bytes().to_vec()),
+            ciphertext: Some(ciphertext.clone()),
+        }
+        .encode_to_vec();
+
+        Self {
+            ratchet_key,
+            chain_index,
+            previous_chain_length,
+            ciphertext,
+            mac: [0u8; MAC_LEN],
+            message_bytes,
+        }
+    }
+
+    /// The bytes that the MAC covers: the associated data, then the `OMEMOMessage`.
+    /// Source: python-twomemo, `AEADImpl.encrypt`; XEP-0384 0.9, section 4.3 (ENCRYPT).
+    pub(crate) fn mac_bytes(&self, associated_data: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(associated_data.len() + self.message_bytes.len());
+        bytes.extend_from_slice(associated_data);
+        bytes.extend_from_slice(&self.message_bytes);
+        bytes
+    }
+
+    pub(crate) fn set_mac(&mut self, mac: [u8; MAC_LEN]) {
+        self.mac = mac;
+    }
+
+    /// Encode the message as an `OMEMOAuthenticatedMessage`.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        ProtoAuthenticatedMessage {
+            mac: Some(self.mac.to_vec()),
+            message: Some(self.message_bytes.clone()),
+        }
+        .encode_to_vec()
+    }
+
+    /// Try to decode the given byte slice as an `OMEMOAuthenticatedMessage`.
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        if bytes.len() > MAX_AUTHENTICATED_MESSAGE_LEN {
+            return Err(DecodeError::TooLong);
+        }
+        let outer = ProtoAuthenticatedMessage::decode(bytes)?;
+        Self::from_proto(outer)
+    }
+
+    pub(super) fn from_proto(outer: ProtoAuthenticatedMessage) -> Result<Self, DecodeError> {
+        let mac = outer.mac.ok_or(DecodeError::MissingField("mac"))?;
+        let message_bytes = outer.message.ok_or(DecodeError::MissingField("message"))?;
+        let mac: [u8; MAC_LEN] = mac.try_into().map_err(|_| DecodeError::BadLength("mac"))?;
+
+        if message_bytes.len() > MAX_AUTHENTICATED_MESSAGE_LEN {
+            return Err(DecodeError::TooLong);
+        }
+        let inner = ProtoOmemoMessage::decode(message_bytes.as_slice())?;
+        let chain_index = inner.n.ok_or(DecodeError::MissingField("n"))?;
+        let previous_chain_length = inner.pn.ok_or(DecodeError::MissingField("pn"))?;
+        let dh_pub = inner.dh_pub.ok_or(DecodeError::MissingField("dh_pub"))?;
+        let ciphertext = inner
+            .ciphertext
+            .ok_or(DecodeError::MissingField("ciphertext"))?;
+        let ratchet_key = parse_public_key(&dh_pub, "dh_pub")?;
+
+        if ciphertext.len() > MAX_CIPHERTEXT_LEN {
+            return Err(DecodeError::TooLong);
+        }
+
+        Ok(Self {
+            ratchet_key,
+            chain_index,
+            previous_chain_length,
+            ciphertext,
+            mac,
+            message_bytes,
+        })
+    }
 }
 
 #[cfg(test)]
-mod test {
-    use assert_matches2::{assert_let, assert_matches};
+mod tests {
+    use super::*;
 
-    use super::Message;
-    use crate::{
-        Curve25519PublicKey, DecodeError,
-        olm::messages::message::{MAC_TRUNCATED_VERSION, VERSION},
-    };
-
-    #[test]
-    fn encode() {
-        let message = b"\x03\n\x20ratchetkeyhereprettyplease123456\x10\x02\"\nciphertext";
-        let message_mac =
-            b"\x03\n\x20ratchetkeyhereprettyplease123456\x10\x02\"\nciphertextMACHEREE";
-
-        let ratchet_key = Curve25519PublicKey::from(*b"ratchetkeyhereprettyplease123456");
-        let ciphertext = b"ciphertext";
-        let chain_index = 2;
-
-        let mut encoded = Message::new_truncated_mac(ratchet_key, chain_index, ciphertext.to_vec());
-        encoded.mac = (*b"MACHEREE").into();
-
-        assert_eq!(encoded.to_mac_bytes(), message.as_slice());
-        assert_eq!(encoded.to_bytes(), message_mac.as_slice());
-        assert_eq!(encoded.ciphertext(), ciphertext.to_vec());
-        assert_eq!(encoded.chain_index(), chain_index);
-        assert_eq!(encoded.version(), MAC_TRUNCATED_VERSION);
+    fn sample() -> Message {
+        let mut m = Message::new(
+            Curve25519PublicKey::from_bytes([9u8; 32]),
+            3,
+            2,
+            vec![5u8; 48],
+        );
+        m.set_mac([7u8; MAC_LEN]);
+        m
     }
 
     #[test]
-    fn from_bytes_normal_message() {
-        let bytes = b"\x04\n\x20ratchetkeyhereprettyplease123456\x10\x02\"\nciphertextMAC_01234567890_01234567890_HERE";
-        let result = Message::try_from(bytes.as_slice());
-        assert_let!(Ok(message) = result);
-
-        let Message { version, ratchet_key, chain_index, ciphertext, mac } = message;
-
-        assert_eq!(version, VERSION);
-        assert_eq!(ratchet_key.as_bytes(), b"ratchetkeyhereprettyplease123456");
-        assert_eq!(chain_index, 2);
-        assert_eq!(ciphertext, b"ciphertext");
-        assert_eq!(mac.as_bytes(), b"MAC_01234567890_01234567890_HERE");
+    fn round_trip() {
+        let m = sample();
+        let again = Message::from_bytes(&m.to_bytes()).unwrap();
+        assert_eq!(m, again);
+        assert_eq!(again.to_bytes(), m.to_bytes());
     }
 
     #[test]
-    fn from_bytes_too_short() {
-        let bytes = vec![MAC_TRUNCATED_VERSION, 0, 0, 0, 0, 0, 0, 0, 0];
-        let result = Message::try_from(bytes);
-        assert_matches!(result, Err(DecodeError::MessageTooShort(9)));
+    fn field_numbers_are_those_of_the_xep() {
+        let m = sample();
+        let outer = m.to_bytes();
+        // mac: tag 1, length 16.
+        assert_eq!(&outer[..2], &[0x0a, 16]);
+        // message: tag 2.
+        assert_eq!(outer[18], 0x12);
+        // n: tag 1 (varint), pn: tag 2 (varint), dh_pub: tag 3, ciphertext: tag 4.
+        assert_eq!(&m.message_bytes[..4], &[0x08, 3, 0x10, 2]);
+        assert_eq!(m.message_bytes[4], 0x1a);
+        assert_eq!(m.message_bytes[4 + 2 + 32], 0x22);
     }
 
     #[test]
-    fn from_bytes_decoding_error() {
-        let bytes = vec![MAC_TRUNCATED_VERSION, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let result = Message::try_from(bytes);
-        assert_matches!(result, Err(DecodeError::ProtoBufError(_)));
+    fn a_zero_counter_is_still_written() {
+        // A required field is on the wire even when its value is 0.
+        let m = Message::new(
+            Curve25519PublicKey::from_bytes([1u8; 32]),
+            0,
+            0,
+            vec![1u8; 16],
+        );
+        assert_eq!(&m.message_bytes[..4], &[0x08, 0, 0x10, 0]);
     }
 
     #[test]
-    fn from_bytes_invalid_tag() {
-        let bytes = [
-            VERSION, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
-        let result = Message::try_from(bytes.to_vec());
-        assert_matches!(result, Err(DecodeError::ProtoBufError(_)));
+    fn missing_fields_are_refused() {
+        let no_mac = ProtoAuthenticatedMessage {
+            mac: None,
+            message: Some(vec![]),
+        }
+        .encode_to_vec();
+        assert!(matches!(
+            Message::from_bytes(&no_mac),
+            Err(DecodeError::MissingField("mac"))
+        ));
+        let inner = ProtoOmemoMessage {
+            n: Some(1),
+            pn: None,
+            dh_pub: Some(vec![0; 32]),
+            ciphertext: Some(vec![0; 16]),
+        };
+        let outer = ProtoAuthenticatedMessage {
+            mac: Some(vec![0; 16]),
+            message: Some(inner.encode_to_vec()),
+        };
+        assert!(matches!(
+            Message::from_bytes(&outer.encode_to_vec()),
+            Err(DecodeError::MissingField("pn"))
+        ));
+    }
+
+    #[test]
+    fn bad_lengths_are_refused() {
+        let mut m = sample();
+        m.mac = [0; MAC_LEN];
+        let mut outer = ProtoAuthenticatedMessage::decode(m.to_bytes().as_slice()).unwrap();
+        outer.mac = Some(vec![0; 8]);
+        assert!(matches!(
+            Message::from_bytes(&outer.encode_to_vec()),
+            Err(DecodeError::BadLength("mac"))
+        ));
+        let long = vec![0u8; MAX_AUTHENTICATED_MESSAGE_LEN + 1];
+        assert!(matches!(
+            Message::from_bytes(&long),
+            Err(DecodeError::TooLong)
+        ));
     }
 }

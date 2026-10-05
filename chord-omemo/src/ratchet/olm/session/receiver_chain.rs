@@ -11,65 +11,80 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 use std::fmt::Debug;
 
-use arrayvec::ArrayVec;
 use serde::{Deserialize, Serialize};
 
 use super::{
     DecryptionError, chain_key::RemoteChainKey, message_key::RemoteMessageKey,
     ratchet::RemoteRatchetKey,
 };
-use crate::olm::{
-    SessionConfig, messages::Message, session::double_ratchet::RatchetCount,
-    session_config::Version,
-};
+use crate::ratchet::olm::messages::Message;
 
-/// The maximum number of message keys that can be skipped in a single receiver
-/// chain.
-pub(crate) const MAX_MESSAGE_GAP: u64 = 2000;
+/// The maximum number of message keys that can be skipped in a single message.
+///
+/// Source: XEP-0384 0.9, section 4.3 (MAX_SKIP): "modern hardware is safe to choose values
+/// of around 1000"; python-twomemo uses 1000 (`max_num_per_message_skipped_keys`, which
+/// defaults to the per-session maximum of 1000).
+pub(crate) const MAX_MESSAGE_GAP: u64 = 1000;
 
-/// The maximum number of message keys to retain when messages arrive out of
-/// order.
+/// The maximum number of skipped message keys to retain in one receiver chain.
 ///
-/// For example, if we receive a message with chain index 2, we will cache the
-/// skipped message keys for chain indices 0 and 1.
-///
-/// This limit applies per receiver chain. With the current configuration,
-/// that results in storing up to 200 skipped message keys in total.
-///
-/// Matrix servers buffer messages and generally attempt to deliver them in
-/// send order. In practice, this limit does not need to be higher. Increasing
-/// it would add risk without providing any meaningful benefit.
-/// The number of message keys we'll store if we receive an out of order
-/// message.
-///
-/// More info on the tradeoffs can be found in the double ratchet spec:
-/// https://signal.org/docs/specifications/doubleratchet/#deletion-of-skipped-message-keys
-pub(crate) const MAX_MESSAGE_KEYS: usize = 40;
+/// Source: XEP-0384 0.9, section 4.3 (MAX_SKIP): "It is RECOMMENDED to keep 1000 skipped
+/// message keys around per session"; python-twomemo uses 1000
+/// (`max_num_per_session_skipped_keys`). The limit for a whole session is in
+/// [`MAX_SESSION_MESSAGE_KEYS`]: the oldest keys go first.
+pub(crate) const MAX_MESSAGE_KEYS: usize = 1000;
+
+/// The maximum number of skipped message keys that one session keeps, over all of its
+/// receiver chains. The oldest key goes first (XEP-0384 0.9, section 4.3, "deletion policy
+/// for skipped message keys": FIFO).
+pub(crate) const MAX_SESSION_MESSAGE_KEYS: usize = 1000;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct MessageKeyStore {
-    inner: ArrayVec<RemoteMessageKey, MAX_MESSAGE_KEYS>,
+    inner: Vec<RemoteMessageKey>,
 }
 
 impl MessageKeyStore {
     fn new() -> Self {
-        Self { inner: ArrayVec::new() }
+        Self { inner: Vec::new() }
     }
 
     fn push(&mut self, message_key: RemoteMessageKey) {
-        if self.inner.is_full() {
-            self.inner.pop_at(0);
+        if self.inner.len() >= MAX_MESSAGE_KEYS {
+            self.inner.remove(0);
         }
 
         self.inner.push(message_key)
     }
 
+    /// Keep at most `MAX_MESSAGE_KEYS` keys. The oldest go first. Used after a load.
+    fn trim(&mut self) {
+        let extra = self.inner.len().saturating_sub(MAX_MESSAGE_KEYS);
+        self.inner.drain(..extra);
+    }
+
     fn merge(&mut self, mut store: MessageKeyStore) {
         for key in store.inner.drain(..) {
             self.push(key);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Drop the oldest key. Returns false if there is none.
+    fn drop_oldest(&mut self) -> bool {
+        if self.inner.is_empty() {
+            false
+        } else {
+            self.inner.remove(0);
+            true
         }
     }
 
@@ -97,18 +112,14 @@ impl FoundMessageKey<'_> {
     fn decrypt(
         &self,
         message: &Message,
-        config: &SessionConfig,
+        associated_data: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
         let message_key = match self {
             FoundMessageKey::Existing(m) => m,
             FoundMessageKey::New(m) => &m.2,
         };
 
-        match config.version {
-            Version::V1 => message_key.decrypt_truncated_mac(message),
-            #[cfg(feature = "experimental-session-config")]
-            Version::V2 => message_key.decrypt(message),
-        }
+        message_key.decrypt(message, associated_data)
     }
 }
 
@@ -147,21 +158,17 @@ pub(super) struct ReceiverChain {
     ///
     /// This allows us to handle out-of-order messages.
     skipped_message_keys: MessageKeyStore,
-
-    /// The number of times `i` the ratchet was advanced before this chain.
-    ///
-    /// This is not required to implement the algorithm: it is maintained solely
-    /// for diagnostic output.
-    #[serde(default = "RatchetCount::unknown")]
-    ratchet_count: RatchetCount,
 }
 
 impl Debug for ReceiverChain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { ratchet_count, ratchet_key, hkdf_ratchet, skipped_message_keys } = self;
+        let Self {
+            ratchet_key,
+            hkdf_ratchet,
+            skipped_message_keys,
+        } = self;
 
         f.debug_struct("ReceiverChain")
-            .field("ratchet_count", &ratchet_count)
             .field("ratchet_key", &ratchet_key)
             .field("chain_index", &hkdf_ratchet.chain_index())
             .field("skipped_message_keys", &skipped_message_keys.inner)
@@ -170,16 +177,11 @@ impl Debug for ReceiverChain {
 }
 
 impl ReceiverChain {
-    pub(super) fn new(
-        ratchet_key: RemoteRatchetKey,
-        chain_key: RemoteChainKey,
-        ratchet_count: RatchetCount,
-    ) -> Self {
+    pub(super) fn new(ratchet_key: RemoteRatchetKey, chain_key: RemoteChainKey) -> Self {
         ReceiverChain {
             ratchet_key,
             hkdf_ratchet: chain_key,
             skipped_message_keys: Default::default(),
-            ratchet_count,
         }
     }
 
@@ -187,7 +189,10 @@ impl ReceiverChain {
         let message_gap = chain_index.saturating_sub(self.hkdf_ratchet.chain_index());
 
         if message_gap > MAX_MESSAGE_GAP {
-            Err(DecryptionError::TooBigMessageGap(message_gap, MAX_MESSAGE_GAP))
+            Err(DecryptionError::TooBigMessageGap(
+                message_gap,
+                MAX_MESSAGE_GAP,
+            ))
         } else if self.hkdf_ratchet.chain_index() > chain_index {
             self.skipped_message_keys
                 .get_message_key(chain_index)
@@ -223,19 +228,40 @@ impl ReceiverChain {
             // Create now our desired message key
             let message_key = ratchet.create_message_key();
 
-            Ok(FoundMessageKey::New(Box::new((ratchet, skipped_keys, message_key))))
+            Ok(FoundMessageKey::New(Box::new((
+                ratchet,
+                skipped_keys,
+                message_key,
+            ))))
         }
     }
 
+    /// Cut the skipped keys to the limit of one chain. Used after a load.
+    pub(super) fn trim(&mut self) {
+        self.skipped_message_keys.trim();
+    }
+
+    /// The number of skipped message keys that this chain holds.
+    pub(super) fn skipped_key_count(&self) -> usize {
+        self.skipped_message_keys.len()
+    }
+
+    /// Drop the oldest skipped message key. Returns false if there is none.
+    pub(super) fn drop_oldest_skipped_key(&mut self) -> bool {
+        self.skipped_message_keys.drop_oldest()
+    }
+
+    /// Decrypt a message. A failure changes nothing in this chain: the new state is
+    /// kept apart, and it replaces the old one only after the MAC and the padding are good.
     pub(super) fn decrypt(
         &mut self,
         message: &Message,
-        config: &SessionConfig,
+        associated_data: &[u8],
     ) -> Result<Vec<u8>, DecryptionError> {
-        let chain_index = message.chain_index;
+        let chain_index = u64::from(message.chain_index);
         let message_key = self.find_message_key(chain_index)?;
 
-        let plaintext = message_key.decrypt(message, config)?;
+        let plaintext = message_key.decrypt(message, associated_data)?;
 
         match message_key {
             FoundMessageKey::Existing(m) => {
@@ -253,16 +279,6 @@ impl ReceiverChain {
         Ok(plaintext)
     }
 
-    #[cfg(feature = "libolm-compat")]
-    pub(super) const fn ratchet_key(&self) -> RemoteRatchetKey {
-        self.ratchet_key
-    }
-
-    #[cfg(feature = "libolm-compat")]
-    pub(super) fn insert_message_key(&mut self, message_key: RemoteMessageKey) {
-        self.skipped_message_keys.push(message_key)
-    }
-
     pub(super) fn belongs_to(&self, ratchet_key: &RemoteRatchetKey) -> bool {
         &self.ratchet_key == ratchet_key
     }
@@ -270,16 +286,10 @@ impl ReceiverChain {
 
 #[cfg(test)]
 mod test {
-    use assert_matches2::assert_matches;
-
-    use super::MessageKeyStore;
-    use crate::olm::{
-        DecryptionError,
-        session::{
-            ReceiverChain, RemoteChainKey, double_ratchet::RatchetCount,
-            message_key::RemoteMessageKey, ratchet::RemoteRatchetKey,
-            receiver_chain::MAX_MESSAGE_GAP,
-        },
+    use super::{MAX_MESSAGE_GAP, MessageKeyStore};
+    use crate::ratchet::olm::session::{
+        DecryptionError, ReceiverChain, chain_key::RemoteChainKey, message_key::RemoteMessageKey,
+        ratchet::RemoteRatchetKey,
     };
 
     #[test]
@@ -288,38 +298,40 @@ mod test {
         let key_bytes = *b"11111111111111111111111111111111";
         let chain_index: u64 = 1;
         let key = RemoteMessageKey::new(Box::new(key_bytes), chain_index);
-        assert_matches!(store.get_message_key(chain_index), None);
+        assert!(store.get_message_key(chain_index).is_none());
         store.push(key);
-        assert_matches!(store.get_message_key(chain_index), Some(key));
+        let key = store.get_message_key(chain_index).unwrap();
         assert_eq!(key.key.as_ref(), &key_bytes);
         assert_eq!(key.index, chain_index);
         store.remove_message_key(chain_index);
-        assert_matches!(store.get_message_key(chain_index), None);
+        assert!(store.get_message_key(chain_index).is_none());
     }
 
     #[test]
     fn merge() {
         let mut store1 = MessageKeyStore::new();
-        let key_bytes1 = *b"11111111111111111111111111111111";
-        let chain_index1: u64 = 1;
-        let key1 = RemoteMessageKey::new(Box::new(key_bytes1), chain_index1);
-        store1.push(key1);
-
+        store1.push(RemoteMessageKey::new(Box::new([1u8; 32]), 1));
         let mut store2 = MessageKeyStore::new();
-        let key_bytes2 = *b"22222222222222222222222222222222";
-        let chain_index2: u64 = 2;
-        let key2 = RemoteMessageKey::new(Box::new(key_bytes2), chain_index2);
-        store2.push(key2);
+        store2.push(RemoteMessageKey::new(Box::new([2u8; 32]), 2));
 
-        assert_matches!(store1.get_message_key(chain_index1), Some(_));
-        assert_matches!(store1.get_message_key(chain_index2), None);
-        assert_matches!(store2.get_message_key(chain_index1), None);
-        assert_matches!(store2.get_message_key(chain_index2), Some(_));
-
+        assert!(store1.get_message_key(2).is_none());
         store1.merge(store2);
+        assert!(store1.get_message_key(1).is_some());
+        assert!(store1.get_message_key(2).is_some());
+    }
 
-        assert_matches!(store1.get_message_key(chain_index1), Some(_));
-        assert_matches!(store1.get_message_key(chain_index2), Some(_));
+    #[test]
+    fn the_store_drops_the_oldest_key_first() {
+        let mut store = MessageKeyStore::new();
+        for i in 0..(super::MAX_MESSAGE_KEYS as u64 + 5) {
+            store.push(RemoteMessageKey::new(Box::new([0u8; 32]), i));
+        }
+        assert_eq!(store.len(), super::MAX_MESSAGE_KEYS);
+        assert!(store.get_message_key(4).is_none());
+        assert!(store.get_message_key(5).is_some());
+        assert!(store.drop_oldest());
+        assert!(store.get_message_key(5).is_none());
+        assert!(store.get_message_key(6).is_some());
     }
 
     #[test]
@@ -327,13 +339,13 @@ mod test {
         let ratchet_key = RemoteRatchetKey::from([0u8; 32]);
         let chain_key = RemoteChainKey::new([0u8; 32].into());
 
-        let receiver_chain = ReceiverChain::new(ratchet_key, chain_key, RatchetCount::Known(0));
+        let receiver_chain = ReceiverChain::new(ratchet_key, chain_key);
 
-        assert_matches!(
+        assert!(matches!(
             receiver_chain.find_message_key(MAX_MESSAGE_GAP + 1),
             Err(DecryptionError::TooBigMessageGap(max_invalid_gap, MAX_MESSAGE_GAP))
-        );
-        assert_eq!(max_invalid_gap, MAX_MESSAGE_GAP + 1);
-        assert_matches!(receiver_chain.find_message_key(MAX_MESSAGE_GAP), Ok(_));
+                if max_invalid_gap == MAX_MESSAGE_GAP + 1
+        ));
+        assert!(receiver_chain.find_message_key(MAX_MESSAGE_GAP).is_ok());
     }
 }

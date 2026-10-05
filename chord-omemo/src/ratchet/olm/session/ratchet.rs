@@ -11,18 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 use std::fmt::Debug;
 
-use matrix_pickle::Decode;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::SharedSecret;
 
 use super::{
+    RatchetError,
     chain_key::RemoteChainKey,
     root_key::{RemoteRootKey, RootKey},
 };
-use crate::{Curve25519PublicKey, types::Curve25519SecretKey};
+use crate::ratchet::{Curve25519PublicKey, types::Curve25519SecretKey};
 
 /// A ratchet key which we created ourselves.
 ///
@@ -34,8 +36,7 @@ use crate::{Curve25519PublicKey, types::Curve25519SecretKey};
 /// Since this is *our own* key, we have both the secret and public parts of the
 /// key.
 ///
-/// The [Olm spec](https://gitlab.matrix.org/matrix-org/olm/blob/master/docs/olm.md) refers to
-/// ratchet keys as `T`<sub>`i`</sub>.
+/// The Double Ratchet spec refers to the ratchet key as the DH ratchet key pair.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(transparent)]
 pub(super) struct RatchetKey(pub(super) Curve25519SecretKey);
@@ -48,7 +49,7 @@ pub struct RatchetPublicKey(Curve25519PublicKey);
 ///
 /// See [`RatchetKey`] for explanation about ratchet keys in general. Since this
 /// is the other side's key, we have only the public part of the key.
-#[derive(Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize, Decode)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(super) struct RemoteRatchetKey(pub(super) Curve25519PublicKey);
 
@@ -58,19 +59,21 @@ impl Debug for RemoteRatchetKey {
     }
 }
 
+impl Debug for RatchetKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RatchetKey(..)")
+    }
+}
+
 impl RatchetKey {
-    pub(super) fn new() -> Self {
-        Self(Curve25519SecretKey::new())
+    pub(super) fn new() -> Result<Self, RatchetError> {
+        Ok(Self(
+            Curve25519SecretKey::new().map_err(|_| RatchetError::Rng)?,
+        ))
     }
 
     pub(super) fn diffie_hellman(&self, other: &RemoteRatchetKey) -> Option<SharedSecret> {
         self.0.diffie_hellman(&other.0)
-    }
-}
-
-impl Default for RatchetKey {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -123,24 +126,21 @@ pub(super) struct Ratchet {
 }
 
 impl Ratchet {
-    pub(super) fn new(root_key: RootKey) -> Self {
-        let ratchet_key = RatchetKey::new();
-
-        Self { root_key, ratchet_key }
-    }
-
     pub(super) const fn new_with_ratchet_key(root_key: RootKey, ratchet_key: RatchetKey) -> Self {
-        Self { root_key, ratchet_key }
+        Self {
+            root_key,
+            ratchet_key,
+        }
     }
 
     pub(super) fn advance(
         &self,
         remote_key: RemoteRatchetKey,
-    ) -> Option<(RemoteRootKey, RemoteChainKey)> {
+    ) -> Result<(RemoteRootKey, RemoteChainKey), RatchetError> {
         let (remote_root_key, remote_chain_key) =
             self.root_key.advance(&self.ratchet_key, &remote_key)?;
 
-        Some((remote_root_key, remote_chain_key))
+        Ok((remote_root_key, remote_chain_key))
     }
 
     pub(super) const fn ratchet_key(&self) -> &RatchetKey {
@@ -150,8 +150,8 @@ impl Ratchet {
 
 #[cfg(test)]
 mod test {
-    use super::RatchetKey;
-    use crate::{Curve25519SecretKey, olm::RatchetPublicKey};
+    use super::{RatchetKey, RatchetPublicKey};
+    use crate::ratchet::Curve25519SecretKey;
 
     #[test]
     fn ratchet_key_from_curve_25519_secret_key() {
@@ -165,5 +165,11 @@ mod test {
         let bytes = b"aaaaaaaaaaaaaaawaaaaaaaaaaaaaaaa";
         let key = RatchetPublicKey::from(*bytes);
         assert_eq!(key.0.to_bytes().as_slice(), bytes);
+    }
+
+    #[test]
+    fn ratchet_key_debug_hides_the_secret() {
+        let key = RatchetKey::from(Curve25519SecretKey::from_slice(&[3u8; 32]));
+        assert_eq!(format!("{key:?}"), "RatchetKey(..)");
     }
 }

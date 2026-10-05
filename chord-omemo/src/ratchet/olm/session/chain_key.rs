@@ -11,6 +11,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
+// Modified for OMEMO 2 by the Chord authors, 2026.
 
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -22,6 +24,11 @@ use super::{
     ratchet::RatchetPublicKey,
 };
 
+/// KDF_CK: HMAC-SHA-256 with the chain key as the key. The single byte 0x01 as the input
+/// gives the message key, the single byte 0x02 gives the next chain key.
+/// Source: XEP-0384 0.9, section 4.3 (KDF_CK); python-twomemo
+/// `DoubleRatchetImpl.MESSAGE_CHAIN_CONSTANT = b"\x02\x01"` (the first HMAC is the new
+/// chain key, the second is the message key).
 const MESSAGE_KEY_SEED: &[u8; 1] = b"\x01";
 const ADVANCEMENT_SEED: &[u8; 1] = b"\x02";
 
@@ -66,16 +73,14 @@ pub(super) struct RemoteChainKey {
 
 impl RemoteChainKey {
     pub(super) const fn new(bytes: Box<[u8; 32]>) -> Self {
-        Self { key: bytes, index: 0 }
+        Self {
+            key: bytes,
+            index: 0,
+        }
     }
 
     pub(super) const fn chain_index(&self) -> u64 {
         self.index
-    }
-
-    #[cfg(feature = "libolm-compat")]
-    pub(super) fn from_bytes_and_index(bytes: Box<[u8; 32]>, index: u32) -> Self {
-        Self { key: bytes, index: index.into() }
     }
 
     pub(super) fn advance(&mut self) {
@@ -97,12 +102,10 @@ impl RemoteChainKey {
 
 impl ChainKey {
     pub(super) const fn new(bytes: Box<[u8; 32]>) -> Self {
-        Self { key: bytes, index: 0 }
-    }
-
-    #[cfg(feature = "libolm-compat")]
-    pub(super) fn from_bytes_and_index(bytes: Box<[u8; 32]>, index: u32) -> Self {
-        Self { key: bytes, index: index.into() }
+        Self {
+            key: bytes,
+            index: 0,
+        }
     }
 
     pub(super) fn advance(&mut self) {
@@ -116,9 +119,15 @@ impl ChainKey {
         self.index
     }
 
-    pub(super) fn create_message_key(&mut self, ratchet_key: RatchetPublicKey) -> MessageKey {
+    /// The next message key. `previous_chain_length` is `pn`, the length of the
+    /// sending chain before this one: it goes into the message header.
+    pub(super) fn create_message_key(
+        &mut self,
+        ratchet_key: RatchetPublicKey,
+        previous_chain_length: u64,
+    ) -> MessageKey {
         let key = expand_chain_key(&self.key);
-        let message_key = MessageKey::new(key, ratchet_key, self.index);
+        let message_key = MessageKey::new(key, ratchet_key, self.index, previous_chain_length);
 
         self.advance();
 
@@ -126,10 +135,26 @@ impl ChainKey {
     }
 }
 
+impl std::fmt::Debug for ChainKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChainKey")
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for RemoteChainKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteChainKey")
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ChainKey;
-    use crate::olm::session::chain_key::RemoteChainKey;
+    use crate::ratchet::olm::session::chain_key::RemoteChainKey;
 
     #[test]
     fn advancing_chain_key_increments_index() {
@@ -145,5 +170,18 @@ mod tests {
         assert_eq!(key.chain_index(), 0);
         key.advance();
         assert_eq!(key.chain_index(), 1);
+    }
+
+    #[test]
+    fn both_sides_make_the_same_keys() {
+        let mut ours = ChainKey::new(Box::new([5u8; 32]));
+        let mut theirs = RemoteChainKey::new(Box::new([5u8; 32]));
+        let ratchet_key = super::RatchetPublicKey::from([1u8; 32]);
+        for i in 0..4 {
+            let a = ours.create_message_key(ratchet_key, 0);
+            let b = theirs.create_message_key();
+            assert_eq!(b.chain_index(), i);
+            assert_eq!(a.key(), b.key.as_ref());
+        }
     }
 }
