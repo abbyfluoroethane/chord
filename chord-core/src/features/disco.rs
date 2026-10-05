@@ -47,6 +47,8 @@ pub const FEATURES: &[&str] = &[
     "urn:chord:pins:0+notify",
     // Tunes (XEP-0118): Chord shows what a contact plays. It publishes none.
     "http://jabber.org/protocol/tune+notify",
+    // OMEMO 2 (XEP-0384): the device lists of our contacts (omemo/).
+    "urn:xmpp:omemo:2:devices+notify",
     // Message Displayed Synchronization (XEP-0490): we publish and read the node.
     "urn:xmpp:mds:displayed:0+notify",
     "http://jabber.org/protocol/chatstates",
@@ -447,11 +449,11 @@ mod tests {
         // not from the code under test. Update it when `FEATURES` or `INFO_FEATURES` changes.
         let hex = |caps: Caps| -> String { caps.ver.iter().map(|b| format!("{b:02x}")).collect() };
         // With the version and time features (the default).
-        assert_eq!(hex(caps()), "2f1b1eb2201f6961b3f431ee785fc6bdb093e0dd");
+        assert_eq!(hex(caps()), "32a7e2a8dbd1738223057a0066fa92b96b3b7696");
         // With sharing off: `FEATURES` alone.
         assert_eq!(
             hex(caps_with(false)),
-            "35236609ea3174a720ae8660d541b8401f2c16f6"
+            "3870b9e6caa6f763397e64d2f6578731e75e3e11"
         );
     }
 

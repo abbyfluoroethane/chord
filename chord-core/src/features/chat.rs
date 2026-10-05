@@ -1,5 +1,7 @@
 //! 1:1 chat messages (RFC 6121): store, report, and send them.
 
+use std::borrow::Cow;
+
 use jid::{BareJid, Jid};
 use xmpp_parsers::delay::Delay;
 use xmpp_parsers::message::{Id, Message, MessageType};
@@ -8,6 +10,8 @@ use xmpp_parsers::stanza_error::StanzaError;
 use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
 use super::message_ext::{self, Incoming, Outgoing};
+use super::omemo::receive::{self, Intake, Source};
+use super::omemo::{self, ENCRYPTION_FAILED, ENCRYPTION_OMEMO};
 use super::{Ctx, new_id};
 use crate::actor::ClientEvent;
 use crate::store::queries::{self, Direction, KeyKind, LOCAL_KEY_PREFIX, MessageKind, NewMessage};
@@ -25,7 +29,14 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
     if let Some(stanza_id) = &ids.stanza_id {
         super::mam::on_live(ctx, stanza_id);
     }
-    store(ctx, message, ids, delay_ms(message), true);
+    // An OMEMO message becomes its decrypted content, or a placeholder.
+    let (message, encryption) = match receive::intake(ctx, message, Source::Live) {
+        Intake::Plain => (Cow::Borrowed(message), None),
+        Intake::Decrypted(m) => (Cow::Owned(*m), Some(ENCRYPTION_OMEMO)),
+        Intake::Failed(m) => (Cow::Owned(*m), Some(ENCRYPTION_FAILED)),
+        Intake::Done => return,
+    };
+    store(ctx, &message, ids, delay_ms(&message), true, encryption);
 }
 
 /// Store a chat message from our account archive (MAM). `archive_id` is the MAM result
@@ -41,23 +52,32 @@ pub(crate) fn store_archived(
     }
     let mut ids = MessageIds::of(message, ctx.account);
     ids.stanza_id = Some(archive_id.to_owned());
+    let (message, encryption) = match receive::intake(ctx, message, Source::Archive(archive_id)) {
+        Intake::Plain => (Cow::Borrowed(message), None),
+        Intake::Decrypted(m) => (Cow::Owned(*m), Some(ENCRYPTION_OMEMO)),
+        Intake::Failed(m) => (Cow::Owned(*m), Some(ENCRYPTION_FAILED)),
+        Intake::Done => return,
+    };
     // History is not news: it goes to the store and the views, but not to the events.
     store(
         ctx,
-        message,
+        &message,
         ids,
-        timestamp.or_else(|| delay_ms(message)),
+        timestamp.or_else(|| delay_ms(&message)),
         false,
+        encryption,
     );
 }
 
 /// Store a message. With `live`, also report it as `ClientEvent::MessageReceived`.
+/// `encryption` is the `messages.encryption` value of an OMEMO message.
 fn store(
     ctx: &mut Ctx<'_>,
     message: &Message,
     ids: MessageIds,
     timestamp: Option<i64>,
     live: bool,
+    encryption: Option<&str>,
 ) {
     if !matches!(message.type_, MessageType::Chat | MessageType::Normal) {
         return;
@@ -118,7 +138,8 @@ fn store(
             Err(e) => ctx.store_error("update a message key", e),
         }
     }
-    let extras = message_ext::extras(message, &ids);
+    let mut extras = message_ext::extras(message, &ids);
+    extras.encryption = encryption.map(str::to_owned);
     // A message without both ids gets a local key. The `id` attribute of the sender keeps
     // a repeat of the same stanza out. Without an `id`, the key is random and a repeat
     // cannot be found.
@@ -226,6 +247,9 @@ pub(crate) fn send_with_oob(ctx: &mut Ctx<'_>, to: Jid, body: String, oob: Optio
 
 /// Send a chat message with extra payloads and references, and store it. Returns its
 /// origin-id, which is also its `id` attribute.
+///
+/// If OMEMO is on for the chat, the message goes out encrypted, or it fails and its row
+/// says so. It never goes out as plain text.
 pub(crate) fn send_message(ctx: &mut Ctx<'_>, to: Jid, body: String, out: Outgoing) -> String {
     let origin_id = new_id();
     let mut message = Message::chat(to.clone())
@@ -238,14 +262,17 @@ pub(crate) fn send_message(ctx: &mut Ctx<'_>, to: Jid, body: String, out: Outgoi
     message.payloads.push(super::markers::request_payload());
     message.payloads.extend(out.payloads);
     message.id = Some(Id(origin_id.clone()));
-    ctx.send(message);
 
     let peer = to.to_bare();
     let peer_str = peer.to_string();
     let sender = ctx.account.to_string();
+    let encrypted = omemo::is_on(ctx, &peer);
     let mut extras = out.extras;
     extras.message_id = Some(origin_id.clone());
     extras.origin_id = Some(origin_id.clone());
+    if encrypted {
+        extras.encryption = Some(ENCRYPTION_OMEMO.to_owned());
+    }
     let new = NewMessage {
         kind: MessageKind::Chat,
         key_kind: KeyKind::OriginId,
@@ -259,6 +286,10 @@ pub(crate) fn send_message(ctx: &mut Ctx<'_>, to: Jid, body: String, out: Outgoi
     };
     if let Err(e) = queries::insert_message(ctx.store.conn(), ctx.account_id, &new) {
         ctx.store_error("store a sent message", e);
+    }
+    // The row exists, so a failed send can mark it.
+    if let Err(e) = omemo::send::outgoing(ctx, &peer, message) {
+        omemo::send::fail(ctx, &peer, Some(&origin_id), &e.to_string());
     }
     super::chat_states::on_sent(ctx, &peer_str);
     ctx.changed(ViewKey::Timeline(peer));

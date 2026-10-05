@@ -211,6 +211,13 @@ fn start_upload(
     if filename.is_empty() {
         return Err((ClientError::Invalid("the file name is empty".into()), reply));
     }
+    // The server would hold the file as plain text. Encrypted files (XEP-0454) come later.
+    if super::omemo::is_on(ctx, &to.to_bare()) {
+        let e = ClientError::Unsupported(
+            "files in an OMEMO chat need XEP-0454, which Chord does not have yet".into(),
+        );
+        return Err((e, reply));
+    }
     if size > MAX_UPLOAD_BYTES {
         let e = ClientError::Invalid(format!(
             "the file has {size} bytes, and the limit is {MAX_UPLOAD_BYTES}"

@@ -6,6 +6,7 @@
 //! - node `urn:xmpp:mds:displayed:0` from our own account: `mds::on_event`,
 //! - node `urn:xmpp:avatar:metadata` (PEP of any contact): `avatars::on_metadata_event`,
 //! - node `http://jabber.org/protocol/tune` (PEP of any contact): `tune::on_event`,
+//! - node `urn:xmpp:omemo:2:devices` (PEP of any contact and of us): `omemo::on_devices_event`,
 //! - a data form `subscribe_authorization` from the pubsub service: `spaces::on_authorization`,
 //! - anything else (a pubsub service, for example a space node): `spaces::on_event`.
 //!
@@ -26,8 +27,8 @@ use xmpp_parsers::pubsub::event::{Event, Payload};
 use xmpp_parsers::stanza_error::{DefinedCondition, StanzaError};
 
 use super::{
-    Ctx, IqResponse, Pending as FeaturePending, PendingIq, avatars, bookmarks, mds, pins, spaces,
-    tune,
+    Ctx, IqResponse, Pending as FeaturePending, PendingIq, avatars, bookmarks, mds, omemo, pins,
+    spaces, tune,
 };
 
 pub const NODE_BOOKMARKS: &str = "urn:xmpp:bookmarks:1";
@@ -77,6 +78,7 @@ pub(crate) fn on_event(ctx: &mut Ctx<'_>, message: &Message) -> bool {
         }
         NODE_AVATAR_METADATA => avatars::on_metadata_event(ctx, &from.to_bare(), event.payload),
         tune::NODE_TUNE => tune::on_event(ctx, &from.to_bare(), event.payload),
+        omemo::xml::NODE_DEVICES => omemo::on_devices_event(ctx, &from.to_bare(), event.payload),
         _ => spaces::on_event(ctx, &from, event.payload),
     }
     true

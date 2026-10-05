@@ -25,11 +25,20 @@ pub(crate) struct Harness {
 
 impl Harness {
     pub fn new() -> Self {
-        let store = Store::open_in_memory().unwrap();
-        let account_id = queries::ensure_account(store.conn(), ACCOUNT).unwrap();
+        Self::for_account(ACCOUNT)
+    }
+
+    /// A harness for another account, for a test with two accounts.
+    pub fn for_account(jid: &str) -> Self {
+        Self::with_store(Store::open_in_memory().unwrap(), jid)
+    }
+
+    /// A harness on a store that exists already: a restart of the client.
+    pub fn with_store(store: Store, jid: &str) -> Self {
+        let account_id = queries::ensure_account(store.conn(), jid).unwrap();
         Self {
             store,
-            account: BareJid::new(ACCOUNT).unwrap(),
+            account: BareJid::new(jid).unwrap(),
             account_id,
             state: FeatureState::default(),
             effects: Vec::new(),
