@@ -7,6 +7,7 @@
   import LogoutModal from './LogoutModal.svelte';
   import SettingsAbout from './SettingsAbout.svelte';
   import SettingsAccount from './SettingsAccount.svelte';
+  import SettingsEncryption from './SettingsEncryption.svelte';
   import SettingsAppearance from './SettingsAppearance.svelte';
   import SettingsChat from './SettingsChat.svelte';
   import SettingsBehaviour from './SettingsBehaviour.svelte';
@@ -23,6 +24,7 @@
   const titles = {
     account: 'My account',
     privacy: 'Privacy',
+    encryption: 'Encryption',
     notifications: 'Notifications',
     behaviour: 'App behaviour',
     appearance: 'Appearance',
@@ -63,6 +65,8 @@
           <SettingsAccount />
         {:else if ui.settingsPage === 'privacy'}
           <SettingsPrivacy />
+        {:else if ui.settingsPage === 'encryption'}
+          <SettingsEncryption />
         {:else if ui.settingsPage === 'notifications'}
           <SettingsNotifications />
         {:else if ui.settingsPage === 'behaviour'}

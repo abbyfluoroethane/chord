@@ -552,7 +552,14 @@ export const timelines: Record<string, TimelineItem[]> = {
     { id: 'd3', who: 'rin', ts: at(0, 12, 42), body: 'The valve order on page two is wrong.', mention: true }
   ]),
   'pad-crew@conference.foid.space': small(['bay', 'abby', 'rin', 'kit', 'bay'], 50),
-  'sam@other.example': small(['sam', 'abby'], 40),
+  // An encrypted chat for the preview (see fixtures/omemo.ts).
+  'sam@other.example': build([
+    { id: 'e1', who: 'sam', ts: at(1, 18, 2), body: 'Before the lock: this one came as plain text.' },
+    { id: 'e2', who: 'abby', ts: at(0, 9, 10), body: 'I turned on encryption for this chat.', encryption: 'omemo' },
+    { id: 'e3', who: 'sam', ts: at(0, 9, 12), body: 'Good. I can read you.', encryption: 'omemo' },
+    { id: 'e4', who: 'sam', ts: at(0, 9, 15), body: 'This message cannot be decrypted. The key was not for this device.', encryption: 'undecryptable' },
+    { id: 'sam-fail', who: 'abby', ts: at(0, 9, 20), body: 'Can you send me the file again?', encryption: 'omemo', status: 'failed' }
+  ]),
   'jo@foid.space': [],
   'lee@foid.space': []
 };

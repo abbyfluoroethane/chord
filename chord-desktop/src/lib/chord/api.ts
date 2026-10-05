@@ -27,6 +27,8 @@ import type {
   MemberItem,
   NotificationLevel,
   NotificationSetting,
+  OmemoDevice,
+  OmemoTrust,
   OpenInfo,
   OwnPresence,
   PendingJoin,
@@ -488,6 +490,26 @@ export const setNotificationLevel = (peer: string, level: NotificationLevel, mut
 export const notificationLevel = (peer: string) =>
   invoke<NotificationSetting>('notification_level', { peer });
 export const pushRegistrations = () => invoke<PushRegistration[]>('push_registrations');
+
+// ---------------------------------------------------------------- OMEMO
+
+/** True if OMEMO is on for the chat with `peer`. Off by default. Works offline. */
+export const omemoEnabled = (peer: string) => invoke<boolean>('omemo_enabled', { peer });
+/** Turn OMEMO on or off for the chat with `peer`. While on, no plain text goes out. */
+export const setOmemoEnabled = (peer: string, enabled: boolean) =>
+  invoke<void>('set_omemo_enabled', { peer, enabled });
+/** The devices that we know for `jid`, from the store. Call `refreshOmemoDevices` for fresh data. */
+export const omemoDevices = (jid: string) => invoke<OmemoDevice[]>('omemo_devices', { jid });
+/** The OMEMO devices of our own account. The one with `thisDevice` is this client. */
+export const ownOmemoDevices = () => invoke<OmemoDevice[]>('own_omemo_devices');
+/** Fetch the device list and the keys of `jid` from the server. */
+export const refreshOmemoDevices = (jid: string) => invoke<void>('refresh_omemo_devices', { jid });
+/** `fingerprint` is the text of `OmemoDevice.fingerprint`. */
+export const setOmemoTrust = (jid: string, fingerprint: string, trust: OmemoTrust) =>
+  invoke<void>('set_omemo_trust', { jid, fingerprint, trust });
+/** Remove one of our other devices. This device cannot remove itself. */
+export const removeOwnOmemoDevice = (deviceId: number) =>
+  invoke<void>('remove_own_omemo_device', { deviceId });
 
 // ---------------------------------------------------------------- pins
 

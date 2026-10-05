@@ -1,6 +1,9 @@
 <script lang="ts">
   // One message, cozy layout. Grouped follow-ups drop the avatar and name.
+  import Lock from 'lucide-svelte/icons/lock';
+  import ShieldAlert from 'lucide-svelte/icons/shield-alert';
   import Avatar from './Avatar.svelte';
+  import Icon from './Icon.svelte';
   import AttachmentView from './AttachmentView.svelte';
   import DeleteModal from './DeleteModal.svelte';
   import EmojiPicker from './EmojiPicker.svelte';
@@ -20,6 +23,8 @@
   import { linkPreviews } from './linkpreviews.svelte';
   import { mayAutoLoad } from './mediatrust';
   import { prefs } from './prefs.svelte';
+  import { omemo } from './omemo.svelte';
+  import { sendFailedText } from './omemodata';
   import { previewUrls, xmppUrls } from './markdown';
   import type { TimelineItem } from './types';
   import { ui } from './ui.svelte';
@@ -49,6 +54,9 @@
   const foreign = $derived(domainOf(item.sender) !== domainOf(app.me.address));
   const action = $derived(actionText(item.body));
   const full = $derived(new Date(item.timestamp).toLocaleString());
+  const secret = $derived(item.encryption === 'omemo');
+  const unreadable = $derived(item.encryption === 'undecryptable');
+  const failure = $derived(omemo.failureOf(item));
 
   // Embeds load for me, for contacts, and for anyone when "Load files from people who are
   // not contacts" is on. Otherwise the message shows no embeds: the file is a plain link.
@@ -195,6 +203,11 @@
 
     {#if item.retracted}
       <p class="retracted">Message deleted.</p>
+    {:else if unreadable}
+      <p class="unreadable">
+        <Icon icon={ShieldAlert} size={14} />
+        <span>{item.body}</span>
+      </p>
     {:else if editing}
       <MessageEdit {item} />
     {:else}
@@ -208,6 +221,9 @@
             <MessageBody body={item.body} />
           {/if}
           {#if item.edited}<span class="edited meta">(edited)</span>{/if}
+          {#if secret}
+            <span class="lock" role="img" aria-label="Encrypted" title="Encrypted"><Icon icon={Lock} size={12} /></span>
+          {/if}
         </div>
       {/if}
       {#if item.attachment}
@@ -228,7 +244,10 @@
       {/if}
       <ReactionPills reactions={item.reactions} ontoggle={(e) => app.toggleReaction(item.id, e)} />
       {#if item.status === 'failed'}
-        <p class="failed">Not sent. <button onclick={() => app.retry(item)}>Try again</button></p>
+        <p class="failed">
+          {failure ? sendFailedText(failure) : 'Not sent.'}
+          <button onclick={() => app.retry(item)}>Try again</button>
+        </p>
       {/if}
     {/if}
   </div>
@@ -446,6 +465,21 @@
   .retracted {
     margin: 0;
     color: var(--ink-muted);
+    font-style: italic;
+  }
+  .lock {
+    display: inline-grid;
+    vertical-align: middle;
+    margin-left: var(--space-1);
+    color: var(--ink-muted);
+  }
+  .unreadable {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    color: var(--ink-muted);
+    font-size: 14px;
     font-style: italic;
   }
   .failed {

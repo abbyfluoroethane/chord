@@ -240,7 +240,8 @@ export function toTimelineItem(t: BTimeline, ctx: TimelineContext): TimelineItem
     // The UI has no "received" or "displayed" mark. It shows a failed message.
     status: t.status === 'failed' ? 'failed' : 'sent',
     // The bridge tells about mentions in Notification events. The store adds the flag.
-    mention: false
+    mention: false,
+    encryption: t.encryption ?? 'none'
   };
 }
 

@@ -4,11 +4,15 @@
   import Hash from 'lucide-svelte/icons/hash';
   import Users from 'lucide-svelte/icons/users';
   import UserRound from 'lucide-svelte/icons/user-round';
+  import Lock from 'lucide-svelte/icons/lock';
+  import ShieldCheck from 'lucide-svelte/icons/shield-check';
   import Icon from './Icon.svelte';
   import PinsPanel from './PinsPanel.svelte';
   import Presence from './Presence.svelte';
   import SearchPanel from './SearchPanel.svelte';
   import { app } from './app.svelte';
+  import { canEncrypt } from './omemodata';
+  import { omemo } from './omemo.svelte';
   import { tooltip } from './tooltip';
   import { isGroup, presenceKind } from './types';
   import { ui } from './ui.svelte';
@@ -16,6 +20,8 @@
   const c = $derived(app.channel);
   const isDm = $derived(c?.kind === 'dm');
   const group = $derived(!!c && isGroup(c));
+  const secure = $derived(canEncrypt(c));
+  const locked = $derived(secure && !!c && omemo.isOn(c.jid));
   // The rail button: the member list of a room or a group, the profile of a DM peer.
   const railWhat = $derived(app.sideRail === 'profile' ? 'user profile' : 'member list');
 </script>
@@ -24,6 +30,11 @@
   {#if c}
     <span class="ico"><Icon icon={isDm ? AtSign : group ? Users : Hash} size={20} /></span>
     <h1 class="title">{c.name}</h1>
+    {#if locked}
+      <span class="lock" role="img" aria-label="Encrypted chat" use:tooltip={{ text: 'Encrypted chat', side: 'bottom' }}>
+        <Icon icon={Lock} size={14} />
+      </span>
+    {/if}
     {#if isDm && c.unknownPresence !== true}
       <Presence kind={presenceKind(c.online, c.show)} size={10} />
     {/if}
@@ -33,6 +44,16 @@
     {/if}
   {/if}
   <span class="spacer"></span>
+  {#if secure && c}
+    <button
+      class="icon"
+      aria-label="Encryption devices"
+      use:tooltip={{ text: 'Encryption devices', side: 'bottom' }}
+      onclick={() => omemo.openDevices(c.jid)}
+    >
+      <Icon icon={ShieldCheck} size={20} />
+    </button>
+  {/if}
   {#if app.sideRail}
     <button
       class="icon"
@@ -69,6 +90,10 @@
   h1 {
     margin: 0;
     white-space: nowrap;
+  }
+  .lock {
+    display: grid;
+    color: var(--online);
   }
   .divider {
     width: 1px;
