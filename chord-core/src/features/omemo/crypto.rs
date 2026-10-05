@@ -111,7 +111,7 @@ pub(crate) struct SealedKey {
     pub data: Vec<u8>,
     pub kex: bool,
     /// The new session record. Store it.
-    pub session: Vec<u8>,
+    pub session: Zeroizing<Vec<u8>>,
 }
 
 /// Encrypt `material` for one device. With a `session` the call continues it. Without,
@@ -134,7 +134,7 @@ pub(crate) fn encrypt_key(
     Ok(SealedKey {
         data: sealed.data,
         kex: sealed.kex,
-        session: sealed.session,
+        session: Zeroizing::new(sealed.session),
     })
 }
 
@@ -149,7 +149,7 @@ pub(crate) enum OpenError {
 pub(crate) struct OpenedKey {
     pub material: Zeroizing<Vec<u8>>,
     /// The new session record. Store it.
-    pub session: Vec<u8>,
+    pub session: Zeroizing<Vec<u8>>,
     /// The one-time prekey that a key exchange used.
     pub used_prekey: Option<u32>,
     /// The `<ik>` of the sender device.
@@ -168,7 +168,7 @@ pub(crate) fn decrypt_key(
     match chord_omemo::decrypt_key(&keys.0, session, data, kex) {
         Ok(d) => Ok(OpenedKey {
             material: d.key_material,
-            session: d.session,
+            session: Zeroizing::new(d.session),
             used_prekey: d.used_prekey_id,
             remote_identity_key: d.remote_identity_key,
             heartbeat_ratchet_key: d.heartbeat_due.then_some(d.ratchet_key),

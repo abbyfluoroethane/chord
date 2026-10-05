@@ -33,10 +33,22 @@ pub(super) enum Wait {
     Bundle(BareJid, u32),
 }
 
+/// What to do when a change of a message (a correction, a retraction, a reaction) is sent.
+pub(crate) type OnSent = Box<dyn FnOnce(&mut Ctx<'_>) + Send>;
+
 /// A message that waits to be encrypted.
 pub(super) struct Held {
     pub message: Message,
     pub peer: BareJid,
+    /// For a change of an earlier message: the id of that message, and the local change.
+    /// The local change runs only when the message goes out. If the send fails, nothing
+    /// changed in the store, and the failure names the target.
+    pub change: Option<Change>,
+}
+
+pub(crate) struct Change {
+    pub target_id: String,
+    pub on_sent: OnSent,
 }
 
 pub(super) enum Kind {
@@ -56,12 +68,21 @@ pub(super) struct Job {
 }
 
 /// Start a job that sends `message` to `peer`.
-pub(super) fn submit_send(ctx: &mut Ctx<'_>, message: Message, peer: BareJid) {
+pub(super) fn submit_send(
+    ctx: &mut Ctx<'_>,
+    message: Message,
+    peer: BareJid,
+    change: Option<Change>,
+) {
     let own = ctx.account.clone();
     add(
         ctx,
         vec![peer.clone(), own],
-        Kind::Send(Box::new(Held { message, peer })),
+        Kind::Send(Box::new(Held {
+            message,
+            peer,
+            change,
+        })),
     );
 }
 
@@ -250,12 +271,7 @@ pub(super) fn fail_all(ctx: &mut Ctx<'_>, reason: &str) {
     ctx.state.omemo.in_flight.clear();
     for job in std::mem::take(&mut ctx.state.omemo.jobs) {
         match job.kind {
-            Kind::Send(held) => send::fail(
-                ctx,
-                &held.peer,
-                held.message.id.as_ref().map(|i| i.0.as_str()),
-                reason,
-            ),
+            Kind::Send(held) => send::fail_held(ctx, *held, reason),
             Kind::Refresh(reply) => {
                 if let Some(reply) = reply {
                     let _ = reply.send(Err(ClientError::NotConnected));

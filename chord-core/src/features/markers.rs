@@ -666,6 +666,7 @@ mod tests {
             peer,
             sender,
             timestamp: None,
+            encrypted: false,
         };
         h.with_ctx(|ctx| on_message(ctx, &incoming))
     }
@@ -728,6 +729,7 @@ mod tests {
             peer,
             sender,
             timestamp: None,
+            encrypted: false,
         };
         let stored = StoredMessage {
             rowid: 1,

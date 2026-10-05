@@ -334,10 +334,12 @@ pub struct MessageRow {
     pub body: String,
     pub timestamp: i64,
     pub retracted: bool,
+    /// `messages.encryption`: `None` for plain text.
+    pub encryption: Option<String>,
 }
 
 const ROW_COLUMNS: &str = "id, kind, direction, peer, sender, message_id, origin_id, stanza_id,
-     COALESCE(edited_body, body), timestamp, retracted_at IS NOT NULL";
+     COALESCE(edited_body, body), timestamp, retracted_at IS NOT NULL, encryption";
 
 fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
     Ok(MessageRow {
@@ -352,6 +354,7 @@ fn message_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MessageRow> {
         body: row.get(8)?,
         timestamp: row.get(9)?,
         retracted: row.get(10)?,
+        encryption: row.get(11)?,
     })
 }
 

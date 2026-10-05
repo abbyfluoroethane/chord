@@ -14,7 +14,7 @@ use jid::{BareJid, Jid};
 use xmpp_parsers::message::{Id, Message, MessageType};
 use xmpp_parsers::minidom::Element;
 
-use super::jobs::{self, Held};
+use super::jobs::{self, Change, Held, OnSent};
 use super::store;
 use super::xml::{Encrypted, Envelope, KeyEntry, RecipientKeys};
 use super::{crypto, trust};
@@ -62,7 +62,44 @@ pub(crate) fn outgoing(
         return Ok(());
     }
     precheck(ctx, peer)?;
-    jobs::submit_send(ctx, message, peer.clone());
+    jobs::submit_send(ctx, message, peer.clone(), None);
+    Ok(())
+}
+
+/// Send a change of an earlier message of a 1:1 chat: a correction, a retraction, or a
+/// reaction. `target_id` is the id of that message and `target_encrypted` says that its row
+/// has an encryption mark. `on_sent` makes the local change. It runs when the message goes
+/// out: at once for plain text, or later for an encrypted message. If the send fails, it
+/// does not run, and `OmemoSendFailed` names the target.
+///
+/// A change of an encrypted message never goes out as plain text, also when OMEMO is off
+/// for the chat now.
+pub(crate) fn outgoing_change(
+    ctx: &mut Ctx<'_>,
+    peer: &BareJid,
+    message: Message,
+    target_id: String,
+    target_encrypted: bool,
+    on_sent: OnSent,
+) -> Result<(), ClientError> {
+    if !super::is_on(ctx, peer) {
+        if target_encrypted {
+            return Err(ClientError::Invalid(
+                "This message is encrypted. Turn OMEMO on for the chat to change it.".into(),
+            ));
+        }
+        ctx.send(message);
+        on_sent(ctx);
+        return Ok(());
+    }
+    if nothing_secret(&message) {
+        ctx.send(message);
+        on_sent(ctx);
+        return Ok(());
+    }
+    precheck(ctx, peer)?;
+    let change = Change { target_id, on_sent };
+    jobs::submit_send(ctx, message, peer.clone(), Some(change));
     Ok(())
 }
 
@@ -110,6 +147,30 @@ pub(crate) fn fail(ctx: &mut Ctx<'_>, peer: &BareJid, id: Option<&str>, reason: 
     });
 }
 
+/// Fail a held message. A change of an earlier message has no row of its own: the failure
+/// names the target, and the target row stays as it is.
+pub(super) fn fail_held(ctx: &mut Ctx<'_>, held: Held, reason: &str) {
+    match held.change {
+        Some(change) => {
+            log::info!(
+                "OMEMO change of {} for {} failed: {reason}",
+                change.target_id,
+                held.peer
+            );
+            super::timeline_changed(ctx, &held.peer);
+            ctx.emit(ClientEvent::OmemoSendFailed {
+                peer: held.peer,
+                message_id: change.target_id,
+                reason: reason.to_owned(),
+            });
+        }
+        None => {
+            let id = held.message.id.as_ref().map(|i| i.0.as_str());
+            fail(ctx, &held.peer, id, reason);
+        }
+    }
+}
+
 /// A device that gets a key.
 struct Target {
     jid: BareJid,
@@ -135,14 +196,37 @@ fn targets(ctx: &Ctx<'_>, jid: &BareJid, this: u32) -> Vec<Target> {
         .collect()
 }
 
+/// The active devices of `jid` whose key we do not know. They get no key: we have no
+/// bundle for them. Our own device is not in the list.
+fn unknown_key_devices(ctx: &Ctx<'_>, jid: &BareJid, this: u32) -> Vec<u32> {
+    store::list_devices(ctx.store, ctx.account_id, jid.as_str())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.active && r.identity_key.is_none())
+        .filter(|r| !(*jid == *ctx.account && r.device_id == this))
+        .map(|r| r.device_id)
+        .collect()
+}
+
 /// The keys are here: encrypt `held` and send it, or fail it.
 pub(super) fn encrypt_and_send(ctx: &mut Ctx<'_>, held: Held) {
-    let Held { message, peer } = held;
-    let id = message.id.as_ref().map(|i| i.0.clone());
-    let id = id.as_deref();
+    match build(ctx, &held.message, &held.peer) {
+        Ok(out) => {
+            ctx.send(out);
+            if let Some(change) = held.change {
+                (change.on_sent)(ctx);
+            }
+        }
+        Err(reason) => fail_held(ctx, held, &reason),
+    }
+}
+
+/// The `<encrypted/>` message for `message`, or the reason why there is none.
+fn build(ctx: &mut Ctx<'_>, message: &Message, peer: &BareJid) -> Result<Message, String> {
+    let peer = peer.clone();
     let Some(engine) = &ctx.state.omemo.engine else {
         let why = ctx.state.omemo.problem.clone().unwrap_or_default();
-        return fail(ctx, &peer, id, &format!("OMEMO is not ready: {why}"));
+        return Err(format!("OMEMO is not ready: {why}"));
     };
     let this = engine.keys.device_id();
     let own = ctx.account.clone();
@@ -150,11 +234,11 @@ pub(super) fn encrypt_and_send(ctx: &mut Ctx<'_>, held: Held) {
     let peer_rows =
         store::list_devices(ctx.store, ctx.account_id, peer.as_str()).unwrap_or_default();
     if !peer_rows.iter().any(|r| r.active) {
-        return fail(ctx, &peer, id, &format!("{peer} has no OMEMO device."));
+        return Err(format!("{peer} has no OMEMO device."));
     }
     let peer_targets = targets(ctx, &peer, this);
     if peer_targets.is_empty() {
-        return fail(ctx, &peer, id, &no_trusted(&peer));
+        return Err(no_trusted(&peer));
     }
     // A chat with ourselves has one list of devices.
     let own_targets = if peer == own {
@@ -164,7 +248,7 @@ pub(super) fn encrypt_and_send(ctx: &mut Ctx<'_>, held: Held) {
     };
 
     // The envelope: the secret parts of the message.
-    let secret: Vec<Element> = secret_parts(&message);
+    let secret: Vec<Element> = secret_parts(message);
     let envelope = Envelope {
         content: secret,
         rpad: super::xml::new_rpad(&super::random_bytes::<201>()),
@@ -174,20 +258,27 @@ pub(super) fn encrypt_and_send(ctx: &mut Ctx<'_>, held: Held) {
     };
     let (material, payload) = match crypto::encrypt_payload(&envelope.to_bytes()) {
         Ok(done) => done,
-        Err(e) => return fail(ctx, &peer, id, &format!("Encryption failed: {e}")),
+        Err(e) => return Err(format!("Encryption failed: {e}")),
     };
 
     let mut groups = Vec::new();
     let mut peer_keys = 0;
+    let mut skipped: Vec<(BareJid, Vec<u32>)> = Vec::new();
     for (n, (jid, list)) in [(&peer, peer_targets), (&own, own_targets)]
         .into_iter()
         .enumerate()
     {
         let mut entries = Vec::new();
+        // Active devices with no key that we know (no bundle came) are left out too.
+        let mut left_out = unknown_key_devices(ctx, jid, this);
         for target in list {
-            if let Some(entry) = key_for(ctx, &target, &material) {
-                entries.push(entry);
+            match key_for(ctx, &target, &material) {
+                Some(entry) => entries.push(entry),
+                None => left_out.push(target.device),
             }
+        }
+        if !left_out.is_empty() {
+            skipped.push((jid.clone(), left_out));
         }
         if n == 0 {
             peer_keys = entries.len();
@@ -200,12 +291,16 @@ pub(super) fn encrypt_and_send(ctx: &mut Ctx<'_>, held: Held) {
         }
     }
     if peer_keys == 0 {
-        return fail(
-            ctx,
-            &peer,
-            id,
-            &format!("Chord has no way to encrypt for {peer} now."),
-        );
+        return Err(format!("Chord has no way to encrypt for {peer} now."));
+    }
+    // Some devices got no key (no bundle, or the key changed). They cannot read this
+    // message. Tell the frontends.
+    for (jid, device_ids) in skipped {
+        log::info!("no OMEMO key for devices {device_ids:?} of {jid}");
+        ctx.emit(ClientEvent::OmemoDevicesSkipped {
+            peer: jid,
+            device_ids,
+        });
     }
     let encrypted = Encrypted {
         sid: this,
@@ -222,7 +317,7 @@ pub(super) fn encrypt_and_send(ctx: &mut Ctx<'_>, held: Held) {
         .cloned()
         .collect();
     super::xml::wrap(&mut out, &encrypted);
-    ctx.send(out);
+    Ok(out)
 }
 
 /// Encrypt the key material for one device, and save the new session. `None` if the device
@@ -244,6 +339,23 @@ fn key_for(ctx: &mut Ctx<'_>, target: &Target, material: &[u8]) -> Option<KeyEnt
         Some(_) => None,
         None => omemo.bundles.remove(&(target.jid.clone(), target.device)),
     };
+    // A cached bundle can be older than the key that we know for the device (the device came
+    // back with a new key, and the trust was decided for the new one). Do not pair them.
+    // The bundle is gone from the cache, so the next send asks for a new one.
+    if let Some(b) = &bundle {
+        let known = store::list_devices(ctx.store, account_id, target.jid.as_str())
+            .ok()
+            .and_then(|rows| rows.into_iter().find(|d| d.device_id == target.device))
+            .and_then(|d| d.identity_key);
+        if known.as_deref() != Some(b.ik.as_slice()) {
+            log::info!(
+                "the bundle of device {} of {} does not match its key: left out",
+                target.device,
+                target.jid
+            );
+            return None;
+        }
+    }
     if session.is_none() && bundle.is_none() {
         log::info!(
             "no session and no bundle for device {} of {}",
@@ -294,10 +406,12 @@ fn secret_parts(message: &Message) -> Vec<Element> {
     inner.bodies = message.bodies.clone();
     inner.subjects = message.subjects.clone();
     inner.thread = message.thread.clone();
+    // The origin-id goes inside too (and stays outside for servers and other clients). The
+    // receiver prefers the one inside: it is the one that the envelope protects.
     inner.payloads = message
         .payloads
         .iter()
-        .filter(|p| !is_outside(p))
+        .filter(|p| !is_outside(p) || p.is("origin-id", "urn:xmpp:sid:0"))
         .cloned()
         .collect();
     Element::from(inner).children().cloned().collect()

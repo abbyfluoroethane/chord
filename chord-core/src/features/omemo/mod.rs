@@ -49,7 +49,7 @@ pub(crate) mod store;
 mod trust;
 pub(crate) mod xml;
 
-pub(crate) use store::{ENCRYPTION_FAILED, ENCRYPTION_OMEMO};
+pub(crate) use store::{ENCRYPTION_FAILED, ENCRYPTION_OMEMO, ENCRYPTION_UNTRUSTED};
 
 type Reply<T> = oneshot::Sender<Result<T, ClientError>>;
 
@@ -325,9 +325,20 @@ pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     }
 }
 
-/// True if OMEMO is on for the 1:1 chat with `peer`.
+/// True if OMEMO is on for the 1:1 chat with `peer`. If the store cannot answer, the answer
+/// is yes: a send then goes the encrypted way and fails, and never leaks plain text.
 pub(crate) fn is_on(ctx: &Ctx<'_>, peer: &BareJid) -> bool {
-    store::conversation_enabled(ctx.store, ctx.account_id, peer.as_str()).unwrap_or(false)
+    store::conversation_enabled(ctx.store, ctx.account_id, peer.as_str()).unwrap_or_else(|e| {
+        log::warn!("cannot read the OMEMO switch of {peer}: {e}. Treated as on.");
+        true
+    })
+}
+
+/// True if the OMEMO switch is set for `room`. It must never be: OMEMO is for 1:1 chats.
+/// A room send checks it and fails, so a message to a room never goes out under a switch
+/// that promises encryption.
+pub(crate) fn switch_set_for_room(ctx: &Ctx<'_>, room: &BareJid) -> bool {
+    store::conversation_enabled(ctx.store, ctx.account_id, room.as_str()).unwrap_or(false)
 }
 
 pub(crate) fn on_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqResponse) {
@@ -365,7 +376,11 @@ pub(crate) fn on_command(ctx: &mut Ctx<'_>, command: Command) {
             enabled,
             reply,
         } => {
-            let result = set_enabled(ctx.store, ctx.account_id, &peer, enabled);
+            let result = if enabled && super::muc::is_muc_service(ctx, &peer) {
+                Err(room_error(&peer))
+            } else {
+                set_enabled(ctx.store, ctx.account_id, &peer, enabled)
+            };
             if result.is_ok() && enabled {
                 // Warm up: read the devices of the peer now, so that the first send is quick.
                 jobs::refresh(ctx, peer, None);
@@ -442,6 +457,10 @@ pub(crate) fn offline(store: &Store, account_id: i64, command: Command) {
     }
 }
 
+fn room_error(peer: &BareJid) -> ClientError {
+    ClientError::Invalid(format!("OMEMO is for 1:1 chats only. {peer} is a room."))
+}
+
 fn store_error(e: impl std::fmt::Display) -> ClientError {
     ClientError::Invalid(format!("store: {e}"))
 }
@@ -458,6 +477,10 @@ fn set_enabled(
 ) -> Result<(), ClientError> {
     if enabled && !crypto::AVAILABLE {
         return Err(ClientError::Unsupported("this build has no OMEMO".into()));
+    }
+    // OMEMO is for 1:1 chats. A room that we know has no switch.
+    if enabled && store::is_room(store, account_id, peer.as_str()) {
+        return Err(room_error(peer));
     }
     store::set_conversation_enabled(store, account_id, peer.as_str(), enabled).map_err(store_error)
 }

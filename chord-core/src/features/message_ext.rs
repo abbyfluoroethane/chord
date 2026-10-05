@@ -23,7 +23,7 @@ use super::{
     retraction,
 };
 use crate::actor::ClientError;
-use crate::store::queries::{Direction, MessageExtras, MessageKind, StoredMessage};
+use crate::store::queries::{self, Direction, MessageExtras, MessageKind, StoredMessage};
 use crate::views::ViewKey;
 
 /// A chat or groupchat message, as the extension features see it.
@@ -39,6 +39,9 @@ pub(crate) struct Incoming<'a> {
     pub sender: &'a str,
     /// Unix time in ms, from the archive or the XEP-0203 delay.
     pub timestamp: Option<i64>,
+    /// True if the message came in an OMEMO envelope that we opened. A change (correction,
+    /// retraction, reaction) of an encrypted message must be encrypted too.
+    pub encrypted: bool,
 }
 
 /// The timeline view of a stored peer: `PrivateTimeline` for room@service/nick, else
@@ -63,6 +66,20 @@ pub(crate) fn intercept(ctx: &mut Ctx<'_>, incoming: &Incoming<'_>) -> bool {
         || retraction::on_message(ctx, incoming)
         || reactions::on_message(ctx, incoming)
         || markers::on_message(ctx, incoming)
+}
+
+/// True if `incoming` is a plain-text change (correction, retraction, reaction) of an
+/// encrypted message. Such a change is dropped: the server or an outsider could forge it,
+/// and the row would still show its lock on the forged text.
+pub(crate) fn refuse_plain_change(row: &queries::MessageRow, incoming: &Incoming<'_>) -> bool {
+    if row.encryption.is_some() && !incoming.encrypted {
+        log::debug!(
+            "a plain-text change from {} for an encrypted message dropped",
+            incoming.sender
+        );
+        return true;
+    }
+    false
 }
 
 /// The ids and references of a new message.
@@ -183,6 +200,49 @@ pub(crate) fn send_to_peer(
         // With OMEMO on for the chat, the message is encrypted, or it fails.
         MessageKind::Chat => super::omemo::send::outgoing(ctx, &to.to_bare(), message),
         MessageKind::Groupchat => muc::send_to_room(ctx, &to.to_bare(), message),
+    }
+}
+
+/// Send a change of the message `row` (a correction, a retraction, or a reaction) to `to`,
+/// and make the local change with `on_sent` when the message goes out. For a room or an
+/// occupant that is at once. For an encrypted 1:1 chat it can be later, and a failed send
+/// never runs it (see `omemo::send::outgoing_change`).
+pub(crate) fn send_change(
+    ctx: &mut Ctx<'_>,
+    row: &queries::MessageRow,
+    to: &Jid,
+    mut message: Message,
+    on_sent: impl FnOnce(&mut Ctx<'_>) + Send + 'static,
+) -> Result<(), ClientError> {
+    match row.kind {
+        MessageKind::Chat if to.resource().is_some() => {
+            message
+                .payloads
+                .push(Element::builder("x", muc::NS_MUC_USER).build());
+            muc::send_to_room(ctx, &to.to_bare(), message)?;
+            on_sent(ctx);
+            Ok(())
+        }
+        MessageKind::Chat => {
+            let target_id = row
+                .message_id
+                .clone()
+                .or_else(|| row.origin_id.clone())
+                .unwrap_or_default();
+            super::omemo::send::outgoing_change(
+                ctx,
+                &to.to_bare(),
+                message,
+                target_id,
+                row.encryption.is_some(),
+                Box::new(on_sent),
+            )
+        }
+        MessageKind::Groupchat => {
+            muc::send_to_room(ctx, &to.to_bare(), message)?;
+            on_sent(ctx);
+            Ok(())
+        }
     }
 }
 

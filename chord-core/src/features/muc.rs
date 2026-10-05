@@ -1859,7 +1859,7 @@ fn leave(ctx: &mut Ctx<'_>, room: &BareJid) -> Result<(), ClientError> {
 
 /// True if the domain of `jid` is a MUC service of our server (XEP-0045 disco identity
 /// `conference/text`).
-fn is_muc_service(ctx: &Ctx<'_>, jid: &BareJid) -> bool {
+pub(crate) fn is_muc_service(ctx: &Ctx<'_>, jid: &BareJid) -> bool {
     let domain = jid.domain().as_str();
     ctx.state.disco.services.iter().any(|(service, info)| {
         service.domain().as_str() == domain
@@ -2062,6 +2062,7 @@ pub(crate) fn store_private(
         peer: &peer,
         sender: &sender,
         timestamp,
+        encrypted: false,
     };
     // Corrections, retractions, reactions, and markers change earlier messages.
     if message_ext::intercept(ctx, &incoming) {
@@ -2131,6 +2132,13 @@ pub(crate) fn send_to_room(
     room: &BareJid,
     message: Message,
 ) -> Result<(), ClientError> {
+    // OMEMO is for 1:1 chats. If the switch is set for a room, a plain message would break
+    // the promise of the switch: fail instead.
+    if super::omemo::switch_set_for_room(ctx, room) {
+        return Err(ClientError::Invalid(format!(
+            "OMEMO is on for {room}, but a room cannot use it. Turn it off first."
+        )));
+    }
     if ctx.state.muc.nicks.contains_key(room) {
         ctx.send(message);
         return Ok(());
@@ -2403,6 +2411,7 @@ fn store(
             peer: room.as_str(),
             sender: &sender_jid,
             timestamp,
+            encrypted: false,
         };
         super::retraction::on_moderation(ctx, &incoming);
         return;
@@ -2420,6 +2429,7 @@ fn store(
         peer: room.as_str(),
         sender: &sender_jid,
         timestamp,
+        encrypted: false,
     };
     // Corrections, retractions, reactions, and markers change earlier messages.
     if message_ext::intercept(ctx, &incoming) {

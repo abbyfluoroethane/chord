@@ -11,7 +11,7 @@ use xmpp_parsers::stanza_id::{OriginId, StanzaId};
 
 use super::message_ext::{self, Incoming, Outgoing};
 use super::omemo::receive::{self, Intake, Source};
-use super::omemo::{self, ENCRYPTION_FAILED, ENCRYPTION_OMEMO};
+use super::omemo::{self, ENCRYPTION_FAILED, ENCRYPTION_OMEMO, ENCRYPTION_UNTRUSTED};
 use super::{Ctx, new_id};
 use crate::actor::ClientEvent;
 use crate::store::queries::{self, Direction, KeyKind, LOCAL_KEY_PREFIX, MessageKind, NewMessage};
@@ -33,8 +33,16 @@ pub(crate) fn on_message(ctx: &mut Ctx<'_>, message: &Message) {
     let (message, encryption) = match receive::intake(ctx, message, Source::Live) {
         Intake::Plain => (Cow::Borrowed(message), None),
         Intake::Decrypted(m) => (Cow::Owned(*m), Some(ENCRYPTION_OMEMO)),
+        Intake::DecryptedUntrusted(m) => (Cow::Owned(*m), Some(ENCRYPTION_UNTRUSTED)),
         Intake::Failed(m) => (Cow::Owned(*m), Some(ENCRYPTION_FAILED)),
         Intake::Done => return,
+    };
+    // A decrypted message has the ids that the sender signed: its origin-id is the one
+    // inside the envelope. The stanza-id of our server stays.
+    let ids = if matches!(encryption, Some(ENCRYPTION_OMEMO | ENCRYPTION_UNTRUSTED)) {
+        MessageIds::of(&message, ctx.account)
+    } else {
+        ids
     };
     store(ctx, &message, ids, delay_ms(&message), true, encryption);
 }
@@ -55,9 +63,23 @@ pub(crate) fn store_archived(
     let (message, encryption) = match receive::intake(ctx, message, Source::Archive(archive_id)) {
         Intake::Plain => (Cow::Borrowed(message), None),
         Intake::Decrypted(m) => (Cow::Owned(*m), Some(ENCRYPTION_OMEMO)),
+        Intake::DecryptedUntrusted(m) => (Cow::Owned(*m), Some(ENCRYPTION_UNTRUSTED)),
         Intake::Failed(m) => (Cow::Owned(*m), Some(ENCRYPTION_FAILED)),
         Intake::Done => return,
     };
+    // A decrypted message has the ids and the time that the sender signed. Those win over
+    // the ones that the archive result carries.
+    let signed = matches!(encryption, Some(ENCRYPTION_OMEMO | ENCRYPTION_UNTRUSTED));
+    let timestamp = if signed {
+        delay_ms(&message).or(timestamp)
+    } else {
+        timestamp
+    };
+    if signed {
+        let stanza_id = ids.stanza_id.take();
+        ids = MessageIds::of(&message, ctx.account);
+        ids.stanza_id = stanza_id;
+    }
     // History is not news: it goes to the store and the views, but not to the events.
     store(
         ctx,
@@ -105,6 +127,7 @@ fn store(
         peer: peer.as_str(),
         sender: &sender,
         timestamp,
+        encrypted: encryption.is_some(),
     };
     // Corrections, retractions, reactions, and markers change earlier messages.
     if message_ext::intercept(ctx, &incoming) {
