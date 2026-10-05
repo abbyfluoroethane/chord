@@ -1,7 +1,8 @@
 //! Human and JSON forms of the view items and diffs.
 
 use chord_core::views::{
-    ChannelItem, ChannelKind, DeliveryStatus, ListDiff, MemberItem, SpaceItem, TimelineItem,
+    ChannelItem, ChannelKind, DeliveryStatus, Encryption, ListDiff, MemberItem, SpaceItem,
+    TimelineItem,
 };
 
 use crate::json::Obj;
@@ -133,6 +134,11 @@ impl Show for TimelineItem {
                 _ => " (delivered)",
             });
         }
+        match self.encryption {
+            Encryption::None => {}
+            Encryption::Omemo => text.push_str(" [encrypted]"),
+            Encryption::Undecryptable => text.push_str(" [UNDECRYPTABLE]"),
+        }
         let quote = self
             .reply_to
             .as_ref()
@@ -207,6 +213,14 @@ impl Show for TimelineItem {
                 self.attachment_info
                     .as_ref()
                     .and_then(|i| i.sha256.as_deref()),
+            )
+            .str(
+                "encryption",
+                match self.encryption {
+                    Encryption::None => "none",
+                    Encryption::Omemo => "omemo",
+                    Encryption::Undecryptable => "undecryptable",
+                },
             )
             .str(
                 "status",

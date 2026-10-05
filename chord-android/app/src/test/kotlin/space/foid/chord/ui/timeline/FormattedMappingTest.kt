@@ -25,6 +25,7 @@ class FormattedMappingTest {
         id = "m:1", stanzaId = null, originId = null, sender = "alice@x.org", senderName = name, avatar = null,
         body = body, timestamp = 0, outgoing = outgoing, sameSenderAsPrevious = false, edited = false,
         retracted = retracted, reactions = emptyList(), replyTo = replyTo, attachment = null, status = DeliveryStatus.SENT,
+        encryption = uniffi.chord_ffi.Encryption.NONE,
     )
 
     @Test fun no_palette_means_no_formatted_text() = assertNull(item().toMessageUi().formatted)

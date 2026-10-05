@@ -68,6 +68,11 @@
 //!   ice [--secrets]                 STUN and TURN servers of the server (XEP-0215)
 //!   call <jid> [audio|video] [--retract-after <secs>] [--finish]   propose a call (XEP-0353)
 //!   call-answer accept|reject [reason] [--ring] | call-watch [--secs N]
+//!   omemo <jid> [on|off]            show or set OMEMO for a chat (also with --offline)
+//!   omemo-devices [<jid>]           devices, fingerprints, trust. No JID: our account (--offline ok)
+//!   omemo-refresh <jid>             fetch the device list and bundles
+//!   omemo-trust <jid> <fingerprint> verify|distrust|blind|undecided   (also with --offline)
+//!   omemo-remove-device <id>        remove another device of our account
 //!
 //! --json prints JSON. --offline reads the local database and does not log in.
 //! `timeline --follow` prints each diff as it arrives, as a UI gets it.
@@ -103,6 +108,7 @@ mod actions;
 mod calls;
 mod forms;
 mod json;
+mod omemo;
 mod show;
 mod views;
 
@@ -145,6 +151,8 @@ push-enable <service> <node> | push-disable <service> [node] | push-list | \
 adhoc <jid> <node> [name=value ...] | adhoc-list <jid> | adhoc-run <jid> <node> [name=value ...] | \
 room-form <room> [name=value ...] | passwd | delete-account <address> | register-form | register [name=value ...] | ice [--secrets] | call <jid> [audio|video] [--retract-after <secs>] [--finish] | \
 call-answer accept|reject [reason] [--ring] | call-watch [--secs N] | \
+omemo <jid> [on|off] | omemo-devices [<jid>] | omemo-refresh <jid> | \
+omemo-trust <jid> <fingerprint> verify|distrust|blind|undecided | omemo-remove-device <id> | \
 notify <jid> [all|mentions|none [--until <unix-ms>]] | \
 presence [available|away|dnd|xa|invisible [status]] | search <text> [--in <jid>] | \
 profile [jid] | set-nickname <text>|--remove | avatar-set <file> | avatar-get <jid>";
@@ -380,6 +388,11 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         "set-nickname",
         "avatar-set",
         "avatar-get",
+        "omemo",
+        "omemo-devices",
+        "omemo-refresh",
+        "omemo-trust",
+        "omemo-remove-device",
     ];
     if !known.contains(command) {
         return Err(USAGE.to_owned().into());
@@ -407,6 +420,9 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             | "presence"
             | "search"
             | "space-pending"
+            | "omemo"
+            | "omemo-devices"
+            | "omemo-trust"
     );
     if needs_session && opts.offline {
         return Err(format!("{command} needs a session, not --offline").into());
@@ -426,10 +442,10 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
             }
             Ok(())
         }
-        ("send", [to, text]) => send(&client, to, text).await,
+        ("send", [to, text]) => send(&mut client, to, text).await,
         // Stay online for a moment, so that an error message for the send can arrive.
         ("send", [to, text, "--wait"]) => {
-            let sent = send(&client, to, text).await;
+            let sent = send(&mut client, to, text).await;
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             sent
         }
@@ -535,6 +551,11 @@ async fn run(opts: &Opts, args: &[&str]) -> Result<(), CliError> {
         ("call", args) => calls::call(&mut client, args).await,
         ("call-answer", args) => calls::call_answer(&mut client, args).await,
         ("call-watch", args) => calls::call_watch(&mut client, args).await,
+        ("omemo", args) => omemo::omemo(opts, &client, args).await,
+        ("omemo-devices", args) => omemo::devices(opts, &client, args).await,
+        ("omemo-refresh", args) => omemo::refresh(&client, args).await,
+        ("omemo-trust", args) => omemo::trust(&client, args).await,
+        ("omemo-remove-device", args) => omemo::remove_device(&client, args).await,
         _ => Err(USAGE.to_owned().into()),
     };
     let stopped = stop_client(client).await;
@@ -720,13 +741,28 @@ async fn stop_client(client: Client) -> Result<(), CliError> {
     }
 }
 
-async fn send(client: &Client, to: &str, text: &str) -> Result<(), CliError> {
+async fn send(client: &mut Client, to: &str, text: &str) -> Result<(), CliError> {
     let to = Jid::new(to).map_err(|e| format!("bad JID {to}: {e}"))?;
+    // With OMEMO on, the message waits for the keys of the peer. Fetch them first, and
+    // stay online until the message is out or has failed. A refresh error is not final:
+    // the send gives its own error.
+    let peer = to.to_bare();
+    let encrypted = client
+        .handle
+        .omemo_enabled(peer.clone())
+        .await
+        .unwrap_or(false);
+    if encrypted {
+        let _ = client.handle.refresh_omemo_devices(peer).await;
+    }
     let id = client
         .handle
         .send_chat(to.clone(), text.to_owned())
         .await
         .map_err(|e| e.to_string())?;
+    if encrypted && let Some(reason) = watch_omemo(client, Duration::from_secs(3)).await {
+        return Err(reason.into());
+    }
     println!("sent to {to}: {text} (origin-id {id})");
     Ok(())
 }
@@ -795,10 +831,29 @@ async fn listen(client: &mut Client, once: bool) -> Result<(), CliError> {
                 reason.map_or(String::new(), |r| format!(": {r}")),
                 alternate.map_or(String::new(), |a| format!(" (use {a} instead)"))
             ),
-            other => log::debug!("event: {other:?}"),
+            other => match omemo::event_line(&other) {
+                Some(line) => println!("{line}"),
+                None => log::debug!("event: {other:?}"),
+            },
         }
     }
     Ok(())
+}
+
+/// Wait for `duration`, and print the OMEMO events that arrive. Returns the line of a
+/// failed send, if one came.
+async fn watch_omemo(client: &mut Client, duration: Duration) -> Option<String> {
+    let end = tokio::time::Instant::now() + duration;
+    let mut failed = None;
+    while let Ok(Some(event)) = tokio::time::timeout_at(end, next(&mut client.events)).await {
+        if let Some(line) = omemo::event_line(&event) {
+            println!("{line}");
+            if matches!(event, ClientEvent::OmemoSendFailed { .. }) {
+                failed = Some(line);
+            }
+        }
+    }
+    failed
 }
 
 /// `csi active|inactive [seconds]`: send the client state (XEP-0352). With `seconds`, watch

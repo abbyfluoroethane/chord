@@ -1293,6 +1293,67 @@ impl ChordClient {
             .await?;
         Ok(list.into_iter().map(|j| j.to_string()).collect())
     }
+
+    // ---- OMEMO ----
+
+    /// True if OMEMO is on for the chat with `peer`. Off by default. Works offline.
+    pub async fn omemo_enabled(&self, peer: String) -> Result<bool, ChordError> {
+        let peer = parse_bare(&peer)?;
+        self.call(move |h| async move { h.omemo_enabled(peer).await })
+            .await
+    }
+
+    /// Turn OMEMO on or off for the chat with `peer`. While it is on, Chord sends no plain
+    /// text to the peer: a message that Chord cannot encrypt fails. Works offline.
+    pub async fn set_omemo_enabled(&self, peer: String, enabled: bool) -> Result<(), ChordError> {
+        let peer = parse_bare(&peer)?;
+        self.call(move |h| async move { h.set_omemo_enabled(peer, enabled).await })
+            .await
+    }
+
+    /// The devices that we know for `jid`, with fingerprint, trust, and state. Works
+    /// offline. Call `refresh_omemo_devices` first for fresh data.
+    pub async fn omemo_devices(&self, jid: String) -> Result<Vec<OmemoDevice>, ChordError> {
+        let jid = parse_bare(&jid)?;
+        let list = self
+            .call(move |h| async move { h.omemo_devices(jid).await })
+            .await?;
+        Ok(list.into_iter().map(Into::into).collect())
+    }
+
+    /// The devices of our own account. The one with `this_device` is this client.
+    pub async fn own_omemo_devices(&self) -> Result<Vec<OmemoDevice>, ChordError> {
+        let list = self
+            .call(|h| async move { h.own_omemo_devices().await })
+            .await?;
+        Ok(list.into_iter().map(Into::into).collect())
+    }
+
+    /// Fetch the device list and the bundles of `jid` from the server.
+    pub async fn refresh_omemo_devices(&self, jid: String) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.refresh_omemo_devices(jid).await })
+            .await
+    }
+
+    /// Set the trust in a key of `jid`. `fingerprint` is the text of
+    /// `OmemoDevice.fingerprint`. Works offline.
+    pub async fn set_omemo_trust(
+        &self,
+        jid: String,
+        fingerprint: String,
+        trust: OmemoTrust,
+    ) -> Result<(), ChordError> {
+        let jid = parse_bare(&jid)?;
+        self.call(move |h| async move { h.set_omemo_trust(jid, fingerprint, trust.into()).await })
+            .await
+    }
+
+    /// Remove one of our other devices from our device list.
+    pub async fn remove_own_omemo_device(&self, device_id: u32) -> Result<(), ChordError> {
+        self.call(move |h| async move { h.remove_own_omemo_device(device_id).await })
+            .await
+    }
 }
 
 #[cfg(test)]
