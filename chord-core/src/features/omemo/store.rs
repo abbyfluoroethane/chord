@@ -7,7 +7,7 @@
 //! associated data names the table and the row, so a blob that moves to another row does
 //! not open. Public data (device identity keys, fingerprints) is not sealed.
 
-// Nothing calls these functions yet. The OMEMO feature will.
+// The identity blob holds all keys, so some functions for single prekeys stay unused.
 #![allow(dead_code)]
 
 use core::fmt;
@@ -318,6 +318,18 @@ pub(crate) fn save_identity(
         ],
     )?;
     Ok(())
+}
+
+/// The device id of our own device, without the secrets. `None` before the first start.
+pub(crate) fn own_device_id(store: &Store, account_id: i64) -> Result<Option<u32>> {
+    Ok(store
+        .conn()
+        .query_row(
+            "SELECT device_id FROM omemo_identity WHERE account_id = ?1",
+            params![account_id],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 // ---------------------------------------------------------------------------------------

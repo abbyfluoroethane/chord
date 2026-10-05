@@ -164,6 +164,27 @@ pub enum ClientEvent {
     /// A call changed (XEP-0353): someone proposes a call, a peer rings or proceeds, or a
     /// call ends. This is the message layer only. See `features::jmi`.
     Call(crate::features::jmi::CallEvent),
+    /// The OMEMO keys of this device were lost (the keychain lost the data key). Chord made
+    /// a new device. Contacts see it as a new device, and old messages stay unreadable.
+    OmemoKeysReset,
+    /// A device of `jid` has a key that needs a decision (the user verified another key of
+    /// this contact before). It gets no message keys until you call `set_omemo_trust`.
+    /// `fingerprint` is the text to show.
+    OmemoTrustNeeded {
+        jid: BareJid,
+        device_id: u32,
+        fingerprint: String,
+    },
+    /// The OMEMO devices or the trust of `jid` changed. Read the list again with
+    /// `omemo_devices`.
+    OmemoDevicesChanged(BareJid),
+    /// An encrypted message could not go out. Chord did not send it as plain text. The row
+    /// of the message is marked as failed. `message_id` is empty if the message has no id.
+    OmemoSendFailed {
+        peer: BareJid,
+        message_id: String,
+        reason: String,
+    },
 }
 
 /// An error from a `ClientHandle` call.
@@ -473,6 +494,7 @@ impl<S: Session> Actor<S> {
     /// Keep the room passwords in `secrets` (the system keychain) instead of the database.
     /// Call it before `run`. A password that the database holds moves over at its next use.
     pub fn set_secret_store(&mut self, secrets: std::sync::Arc<dyn crate::secrets::SecretStore>) {
+        self.state.omemo.set_secret_store(secrets.clone());
         self.state.muc.set_secret_store(secrets);
     }
 

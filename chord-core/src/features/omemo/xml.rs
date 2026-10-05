@@ -10,7 +10,7 @@
 //!
 //! No function here panics on bad input. A parse error is an `Error`.
 
-// Nothing calls this module yet.
+// A few helpers have no caller yet (for example `parse_bundle_event`).
 #![allow(dead_code)]
 
 use std::fmt;

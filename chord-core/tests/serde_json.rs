@@ -170,3 +170,58 @@ fn values_from_the_ui_deserialize() {
         json!({"type": "privateMessage", "room": "r@m", "nick": "bob"})
     );
 }
+
+#[test]
+fn omemo_events_and_values() {
+    use chord_core::features::omemo::{OmemoDevice, OmemoTrust};
+    let jid: BareJid = "bob@example.org".parse().unwrap();
+    assert_eq!(
+        serde_json::to_value(ClientEvent::OmemoKeysReset).unwrap(),
+        json!({"type": "omemoKeysReset"})
+    );
+    assert_eq!(
+        serde_json::to_value(ClientEvent::OmemoTrustNeeded {
+            jid: jid.clone(),
+            device_id: 7,
+            fingerprint: "aa".into(),
+        })
+        .unwrap(),
+        json!({"type": "omemoTrustNeeded", "data": {
+            "jid": "bob@example.org", "deviceId": 7, "fingerprint": "aa"
+        }})
+    );
+    assert_eq!(
+        serde_json::to_value(ClientEvent::OmemoDevicesChanged(jid.clone())).unwrap(),
+        json!({"type": "omemoDevicesChanged", "data": "bob@example.org"})
+    );
+    assert_eq!(
+        serde_json::to_value(ClientEvent::OmemoSendFailed {
+            peer: jid,
+            message_id: "m1".into(),
+            reason: "no device".into(),
+        })
+        .unwrap(),
+        json!({"type": "omemoSendFailed", "data": {
+            "peer": "bob@example.org", "messageId": "m1", "reason": "no device"
+        }})
+    );
+    let device = OmemoDevice {
+        jid: "bob@example.org".into(),
+        device_id: 7,
+        fingerprint: Some("aa".into()),
+        label: None,
+        trust: Some(OmemoTrust::Blind),
+        active: true,
+        own: false,
+        this_device: false,
+    };
+    assert_eq!(
+        serde_json::to_value(device).unwrap(),
+        json!({
+            "jid": "bob@example.org", "deviceId": 7, "fingerprint": "aa", "label": null,
+            "trust": "blind", "active": true, "own": false, "thisDevice": false
+        })
+    );
+    let trust: OmemoTrust = serde_json::from_value(json!("verified")).unwrap();
+    assert_eq!(trust, OmemoTrust::Verified);
+}

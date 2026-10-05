@@ -6,8 +6,9 @@ license.workspace = true
 
 [features]
 default = ["native-session"]
-# The tokio-xmpp session. Turn it off for the wasm32 build.
-native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl", "dep:reqwest", "dep:futures-util"]
+# The tokio-xmpp session and the OMEMO crypto (chord-omemo links C code). Turn it off for
+# the wasm32 build. Then OMEMO is off: no encrypted send, and no decrypt.
+native-session = ["dep:tokio-xmpp", "dep:tokio", "dep:sasl", "dep:reqwest", "dep:futures-util", "dep:chord-omemo"]
 # Plain TCP to a dev server (ServerAddr::InsecureTcp). Off by default.
 # chord-ffi and release builds must never enable it. CI checks this.
 dev-insecure = ["native-session", "tokio-xmpp/insecure-tcp"]
@@ -18,6 +19,8 @@ serde = ["dep:serde", "jid/serde"]
 
 [dependencies]
 xmpp-parsers.workspace = true
+# The OMEMO crypto. Only features/omemo/crypto.rs calls it.
+chord-omemo = { workspace = true, optional = true }
 # Base64 of keys and payloads in OMEMO stanzas. Already in the lock file.
 base64 = "0.22"
 sha1.workspace = true

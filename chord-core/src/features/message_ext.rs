@@ -180,10 +180,8 @@ pub(crate) fn send_to_peer(
                 .push(Element::builder("x", muc::NS_MUC_USER).build());
             muc::send_to_room(ctx, &to.to_bare(), message)
         }
-        MessageKind::Chat => {
-            ctx.send(message);
-            Ok(())
-        }
+        // With OMEMO on for the chat, the message is encrypted, or it fails.
+        MessageKind::Chat => super::omemo::send::outgoing(ctx, &to.to_bare(), message),
         MessageKind::Groupchat => muc::send_to_room(ctx, &to.to_bare(), message),
     }
 }

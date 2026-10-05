@@ -119,6 +119,7 @@ pub(crate) enum Pending {
     Mds(mds::Pending),
     Profile(profile::Pending),
     Pubsub(pubsub::Pending),
+    Omemo(omemo::Pending),
 }
 
 /// An IQ that waits for its answer.
@@ -166,6 +167,7 @@ pub(crate) struct FeatureState {
     pub jmi: jmi::State,
     pub presence: presence::State,
     pub mds: mds::State,
+    pub omemo: omemo::State,
     /// What the user keeps back from the contacts. It stays across sessions.
     pub privacy: Privacy,
     /// Commands that need a server service (pubsub, upload) and arrived before service
@@ -210,6 +212,7 @@ pub(crate) enum FeatureCommand {
     OwnerForm(owner_form::Command),
     Profile(profile::Command),
     Disco(disco::Command),
+    Omemo(omemo::Command),
 }
 
 /// Everything a feature function can use.
@@ -318,6 +321,7 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     chat_states::on_new_session(ctx);
     // The MUC state keeps the rooms to join again, and fails the joins that wait.
     let muc_state = muc::next_session(ctx);
+    let omemo_state = omemo::next_session(ctx);
     // Commands that wait for service discovery stay: the new session runs discovery again.
     let deferred = std::mem::take(&mut ctx.state.deferred);
     let inactive = ctx.state.csi.inactive;
@@ -328,12 +332,14 @@ pub(crate) fn on_connected(ctx: &mut Ctx<'_>, resumed: bool, stream_features: &[
     ctx.state.disco.hide_info = hide_info;
     ctx.state.privacy = privacy;
     ctx.state.muc = muc_state;
+    ctx.state.omemo = omemo_state;
     ctx.state.csi.inactive = inactive;
     ctx.state.presence.idle_since = idle_since;
     ctx.state.deferred = deferred;
     if let Err(e) = crate::store::queries::clear_volatile(ctx.store, ctx.account_id) {
         ctx.store_error("clear presence and occupants", e);
     }
+    omemo::on_connected(ctx);
     presence::on_connected(ctx);
     carbons::on_connected(ctx);
     disco::on_connected(ctx);
@@ -470,6 +476,7 @@ pub(crate) fn on_iq_response(ctx: &mut Ctx<'_>, pending: Pending, response: IqRe
         Pending::Mds(p) => mds::on_response(ctx, p, response),
         Pending::Profile(p) => profile::on_response(ctx, p, response),
         Pending::Pubsub(p) => pubsub::on_response(ctx, p, response),
+        Pending::Omemo(p) => omemo::on_response(ctx, p, response),
     }
 }
 
@@ -520,6 +527,7 @@ pub(crate) fn on_services_ready(ctx: &mut Ctx<'_>) {
     push::on_services_ready(ctx);
     presence::on_services_ready(ctx);
     mam::on_services_ready(ctx);
+    omemo::on_services_ready(ctx);
     for command in std::mem::take(&mut ctx.state.deferred) {
         dispatch(ctx, command);
     }
@@ -553,6 +561,7 @@ fn dispatch(ctx: &mut Ctx<'_>, command: FeatureCommand) {
         FeatureCommand::OwnerForm(c) => owner_form::on_command(ctx, c),
         FeatureCommand::Profile(c) => profile::on_command(ctx, c),
         FeatureCommand::Disco(c) => disco::on_command(ctx, c),
+        FeatureCommand::Omemo(c) => omemo::on_command(ctx, c),
     }
 }
 
@@ -604,6 +613,7 @@ pub(crate) fn on_command_offline(store: &Store, account_id: i64, command: Featur
         FeatureCommand::OwnerForm(c) => owner_form::offline(c),
         FeatureCommand::Profile(c) => profile::offline(c),
         FeatureCommand::Disco(c) => disco::offline(c),
+        FeatureCommand::Omemo(c) => omemo::offline(store, account_id, c),
         FeatureCommand::ChatStates(c) => chat_states::offline(c),
         FeatureCommand::Blocking(c) => blocking::offline(c),
         // The actor keeps the wanted state (`csi::offline`), so it never gets here.
@@ -623,6 +633,7 @@ pub(crate) fn on_tick(ctx: &mut Ctx<'_>) {
     extdisco::on_tick(ctx);
     jmi::on_tick(ctx);
     mam::on_tick(ctx);
+    omemo::on_tick(ctx);
 }
 
 /// The session gave up on a stanza: the stream lost it, and sending it again did not work.

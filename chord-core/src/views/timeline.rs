@@ -81,7 +81,8 @@ pub enum Encryption {
     None,
     /// OMEMO 2. We decrypted it, or we sent it encrypted.
     Omemo,
-    /// An OMEMO message that we could not decrypt. The body is empty.
+    /// An OMEMO message that we could not decrypt. The body is a short notice, not the
+    /// fallback text of the sender.
     Undecryptable,
 }
 
