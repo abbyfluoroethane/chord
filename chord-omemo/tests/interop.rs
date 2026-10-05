@@ -269,6 +269,32 @@ fn python_starts_the_session() {
     t.conversation();
 }
 
+/// Python sends 60 messages and never hears from Rust. Its counter and ours must agree, so
+/// the heartbeat (XEP-0384, counter 53 or higher) is due at message 53 and not before.
+#[test]
+#[ignore = "needs the python venv, see tests/interop/README.md"]
+fn counters_from_python_show_the_heartbeat_at_53() {
+    let mut t = start(false);
+    let mut first_due = None;
+    for n in 0..60u32 {
+        let m = t.py.ok(
+            json!({"cmd": "encrypt", "device_id": t.me.device_id(), "plaintext": hex::encode("x")}),
+        );
+        let kex = m["kex"].as_bool().unwrap();
+        let dec = decrypt_key(&t.me, t.session.as_deref(), &hx(&m["data"]), kex).unwrap();
+        if let Some(id) = dec.used_prekey_id {
+            assert!(t.me.remove_prekey(id));
+        }
+        t.session = Some(dec.session);
+        assert_eq!(dec.counter, n, "python and libomemo-c count the same");
+        assert_eq!(dec.heartbeat_due, n >= 53);
+        if dec.heartbeat_due && first_due.is_none() {
+            first_due = Some(n);
+        }
+    }
+    assert_eq!(first_due, Some(53));
+}
+
 /// Python refuses damaged data from Rust, and Rust refuses damaged data from Python.
 #[test]
 #[ignore = "needs the python venv, see tests/interop/README.md"]

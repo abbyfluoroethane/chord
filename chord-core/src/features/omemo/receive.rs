@@ -161,8 +161,25 @@ pub(crate) fn intake(ctx: &mut Ctx<'_>, message: &Message, source: Source<'_>) -
     }
     // A new session from a key exchange: answer with an empty message, so that the other
     // device sees that the session works (XEP-0384, 4.3). History gets no answer.
+    let mut answered = false;
     if kex && !had_session && matches!(source, Source::Live) {
         send::send_empty(ctx, &sender, enc.sid);
+        answered = true;
+    }
+    // A heartbeat (XEP-0384, section 6): the sender used 53 messages or more on one ratchet
+    // key without an answer. An empty message to that device moves the ratchet on. One
+    // heartbeat for each ratchet key. A key exchange answer above is already such a message.
+    if let Some(ratchet_key) = opened.heartbeat_ratchet_key
+        && matches!(source, Source::Live)
+    {
+        let seen = (sender.clone(), enc.sid);
+        let known = ctx.state.omemo.heartbeats.get(&seen) == Some(&ratchet_key);
+        if !known {
+            ctx.state.omemo.heartbeats.insert(seen, ratchet_key);
+            if !answered {
+                send::send_empty(ctx, &sender, enc.sid);
+            }
+        }
     }
 
     let Some(payload) = &enc.payload else {

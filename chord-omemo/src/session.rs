@@ -13,6 +13,11 @@ use crate::ffi::{self, signal_buffer};
 use crate::identity::{Bundle, Identity};
 use crate::native::{Buf, Ctx, Rc, address, check};
 
+/// The counter at which XEP-0384 asks for a heartbeat (section 6, business rules): "When a
+/// client receives the first message for a given ratchet key with a counter of 53 or
+/// higher, it MUST send a heartbeat message."
+pub const HEARTBEAT_COUNTER: u32 = 53;
+
 /// The result of [`encrypt_key`].
 #[derive(Debug)]
 pub struct EncryptedKey {
@@ -38,6 +43,16 @@ pub struct DecryptedKey {
     /// The Ed25519 identity key of the other device (as in its `<ik>` element). Check it
     /// against the trust decision for that device.
     pub remote_identity_key: Vec<u8>,
+    /// The counter of the message in its sending chain. It starts at 0. libomemo-c reads it
+    /// from the message, we only pass it on.
+    pub counter: u32,
+    /// The ratchet key of the sender that this message uses (Ed25519 form). A new key
+    /// means a new sending chain, and the counter starts again at 0.
+    pub ratchet_key: Vec<u8>,
+    /// True when `counter` is [`HEARTBEAT_COUNTER`] or more. The caller must send an empty
+    /// OMEMO message to the sender, but only for the first such message of a ratchet key.
+    /// The caller tracks that with `ratchet_key`: this crate keeps no state between calls.
+    pub heartbeat_due: bool,
 }
 
 impl core::fmt::Debug for DecryptedKey {
@@ -45,6 +60,7 @@ impl core::fmt::Debug for DecryptedKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DecryptedKey")
             .field("used_prekey_id", &self.used_prekey_id)
+            .field("counter", &self.counter)
             .finish_non_exhaustive()
     }
 }
@@ -254,6 +270,25 @@ fn remote_identity(ctx: &Ctx, record: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
+/// The counter and the ratchet key of a parsed message.
+///
+/// # Safety
+/// `message` must be a live `signal_message`.
+unsafe fn chain_position(message: *const ffi::signal_message) -> Result<(u32, Vec<u8>), Error> {
+    // SAFETY: the caller gives a live message. The key is borrowed from it, and the buffer
+    // is a copy that we own.
+    unsafe {
+        let counter = ffi::signal_message_get_counter(message);
+        let key = ffi::signal_message_get_sender_ratchet_key(message);
+        if key.is_null() {
+            return Err(Error::Malformed("message"));
+        }
+        let buf = Buf::from_raw(ffi::ec_public_key_get_ed(key))
+            .ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
+        Ok((counter, buf.bytes().to_vec()))
+    }
+}
+
 /// Decrypt the bytes of one `<key>` element.
 ///
 /// `kex` is the `kex` attribute of the element. `session_record` is the session with this
@@ -274,6 +309,7 @@ pub fn decrypt_key(
     let cipher = cipher(&ctx)?;
 
     let mut plaintext: *mut signal_buffer = std::ptr::null_mut();
+    let position;
     if kex {
         let mut message = std::ptr::null_mut();
         // SAFETY: `data` is a valid slice. `message` is owned by `Rc` at once. The
@@ -288,6 +324,11 @@ pub fn decrypt_key(
             ))
             .map_err(|_| Error::Malformed("key exchange message"))?;
             let message = Rc::from_raw(message).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
+            let inner = ffi::pre_key_signal_message_get_signal_message(message.as_ptr());
+            if inner.is_null() {
+                return Err(Error::Malformed("key exchange message"));
+            }
+            position = chain_position(inner)?;
             let code = ffi::session_cipher_decrypt_pre_key_signal_message(
                 cipher.0,
                 message.as_ptr(),
@@ -317,6 +358,7 @@ pub fn decrypt_key(
             ))
             .map_err(|_| Error::Malformed("message"))?;
             let message = Rc::from_raw(message).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
+            position = chain_position(message.as_ptr())?;
             ffi::session_cipher_decrypt_signal_message(
                 cipher.0,
                 message.as_ptr(),
@@ -342,6 +384,9 @@ pub fn decrypt_key(
         session,
         used_prekey_id: ctx.state().used_prekey,
         remote_identity_key,
+        counter: position.0,
+        ratchet_key: position.1,
+        heartbeat_due: position.0 >= HEARTBEAT_COUNTER,
     })
 }
 

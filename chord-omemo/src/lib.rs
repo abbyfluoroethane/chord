@@ -36,7 +36,7 @@ mod provider;
 pub mod session;
 
 pub use identity::{Bundle, Identity, PREKEY_COUNT, PREKEY_MIN, fingerprint};
-pub use session::{DecryptedKey, EncryptedKey, decrypt_key, encrypt_key};
+pub use session::{DecryptedKey, EncryptedKey, HEARTBEAT_COUNTER, decrypt_key, encrypt_key};
 
 /// An error of the OMEMO layer. The text never holds key material.
 #[derive(Debug, Clone, PartialEq, Eq)]
