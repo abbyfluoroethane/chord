@@ -1,5 +1,5 @@
-//! Rust-to-Rust tests of the wrapper. libomemo-c does the protocol. These tests check that
-//! the wrapper passes bytes and state through correctly.
+//! Rust-to-Rust tests of the public API: two devices that talk to each other, and the way
+//! that the API passes bytes and state through.
 
 use chord_omemo::{Error, Identity, decrypt_key, encrypt_key, fingerprint, payload};
 

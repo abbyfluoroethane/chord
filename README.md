@@ -33,8 +33,6 @@ Check changes with `./dev/quick-check.sh`.
 
 ## License
 
-The Chord source files are [MIT](LICENSE).
+[MIT](LICENSE)
 
-The OMEMO code links libomemo-c, which is GPL-3.0 ([text](vendor/libomemo-c/LICENSE)). The
-built app is therefore distributed under the GPL-3.0. The other bundled parts and their
-licenses are in [THIRD-PARTY.md](THIRD-PARTY.md).
+Third-party code and its licenses: [THIRD-PARTY.md](THIRD-PARTY.md).

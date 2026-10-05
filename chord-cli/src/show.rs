@@ -137,6 +137,7 @@ impl Show for TimelineItem {
         match self.encryption {
             Encryption::None => {}
             Encryption::Omemo => text.push_str(" [encrypted]"),
+            Encryption::OmemoUntrusted => text.push_str(" [encrypted, key not checked]"),
             Encryption::Undecryptable => text.push_str(" [UNDECRYPTABLE]"),
         }
         let quote = self
@@ -219,6 +220,7 @@ impl Show for TimelineItem {
                 match self.encryption {
                     Encryption::None => "none",
                     Encryption::Omemo => "omemo",
+                    Encryption::OmemoUntrusted => "omemo-untrusted",
                     Encryption::Undecryptable => "undecryptable",
                 },
             )

@@ -57,6 +57,27 @@ The owner chose libomemo-c by FFI on 2026-10-05. This replaces the recommendatio
 - Interop: the test against python-twomemo passes. See `chord-omemo/tests/interop`.
 - License: the Chord source stays MIT. The built app links GPL-3.0 code, so Chord distributes it under GPL-3.0. See the License section of `README.md` and `THIRD-PARTY.md`.
 
+### Decision update (2026-10-05, later the same day)
+
+The owner rejected GPL code in the shipped apps and asked for proven libraries. This
+replaces the libomemo-c decision above. `chord-omemo` no longer links libomemo-c.
+
+- `chord-omemo` now uses a fork of the Double Ratchet code of vodozemac 0.11.1 (Apache-2.0,
+  audited by Least Authority in 2022). The fork is in `chord-omemo/src/ratchet`. The first commit
+  of that folder holds the upstream files with no change, so a review sees only our changes.
+- The fork changes vodozemac for OMEMO 2: X3DH with the signed prekey, the OMEMO KDF strings and
+  chain constants, the message crypto (AES-256-CBC and a 16-byte HMAC-SHA-256 over the
+  associated data), the protobuf messages of XEP-0384, MAX_SKIP of 1000, and a sending chain that
+  starts when a new ratchet key arrives. `chord-omemo/src/ratchet/FORK.md` lists every change
+  with its reason and the XEP section.
+- The payload step stays as it was: a composition of RustCrypto calls in `chord-omemo/src/payload.rs`.
+- The code is tested against python-twomemo: the interop tests, and known-answer vectors made
+  with python-twomemo, python-doubleratchet and python-x3dh.
+- The changes to vodozemac need an outside review before the feature is called stable.
+- The license: the Chord source and the built apps are MIT again. The fork is Apache-2.0. The
+  Apache-2.0 text travels with the apps (the About pages and `THIRD-PARTY.md`).
+- Removed: `vendor/libomemo-c`, the C build, the GPL notes, and the CI job for the C build.
+
 ### Old recommendation (superseded on 2026-10-05, kept for the record)
 
 Recommendation: write a small crate, `chord-omemo`, from RustCrypto and dalek parts. It has no XMPP code. It offers the pure protocol: key generation, bundle build, X3DH, Double Ratchet, the OMEMO message and key exchange formats, the key derivation for the payload, and the SCE envelope. The size is about 1500 lines plus tests. Parts:
