@@ -27,5 +27,5 @@ You need Rust, Node 22, and the [Tauri prerequisites](https://v2.tauri.app/start
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) <br>
 [GIWTWM-PL](https://github.com/abbyfluoroethane/GIWTWMPL/blob/main/LICENSE.md)
