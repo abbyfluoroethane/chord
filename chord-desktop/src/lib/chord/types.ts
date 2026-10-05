@@ -168,7 +168,7 @@ export interface TimelineItem {
 }
 
 /** The protection of a stored message. `undecryptable`: the body is a short notice from the core. */
-export type Encryption = 'none' | 'omemo' | 'undecryptable';
+export type Encryption = 'none' | 'omemo' | 'omemo-untrusted' | 'undecryptable';
 
 /** How much we trust a key of an OMEMO device. */
 export type OmemoTrust = 'undecided' | 'blind' | 'verified' | 'distrusted';
@@ -279,7 +279,13 @@ export type ClientEvent =
   /** The devices or the trust of `jid` changed. Read `omemoDevices` again. */
   | { type: 'omemoDevicesChanged'; data: Jid }
   /** An encrypted message did not go out. The core did not send it as plain text. */
-  | { type: 'omemoSendFailed'; data: { peer: Jid; messageId: string; reason: string } };
+  /**
+   * `messageId` names the message. For a correction, a retraction or a reaction it names the
+   * target message, and the target row stays as it was.
+   */
+  | { type: 'omemoSendFailed'; data: { peer: Jid; messageId: string; reason: string } }
+  /** A message went out, but not to these devices: they have no usable key. */
+  | { type: 'omemoDevicesSkipped'; data: { peer: Jid; deviceIds: number[] } };
 
 // ---------------------------------------------------------------- values
 

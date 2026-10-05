@@ -27,6 +27,10 @@ class OmemoState {
   keysReset = $state(false);
   /** The reason of each failed send, by message id. */
   failures = $state<Record<string, string>>(live ? {} : { ...fx.failures });
+  /** The devices that a send left out, by peer. */
+  skipped = $state<Record<string, number[]>>(
+    live ? {} : { ...fx.skipped }
+  );
   /** A counter for each jid, and for `own`. It grows when the devices or the trust change. */
   changes = $state<Record<string, number>>({});
 
@@ -124,7 +128,19 @@ class OmemoState {
     return null;
   }
 
-  /** Handle the four OMEMO events of the core. */
+  dismissSkipped(jid: string) {
+    const { [jid]: _gone, ...rest } = this.skipped;
+    this.skipped = rest;
+  }
+
+  /** Forget the failure of a message. */
+  clearFailure(item: Pick<TimelineItem, 'originId' | 'stanzaId' | 'id'>) {
+    const next = { ...this.failures };
+    for (const id of [item.originId, item.stanzaId, item.id]) if (id) delete next[id];
+    this.failures = next;
+  }
+
+  /** Handle the OMEMO events of the core. */
   onEvent(e: ClientEvent) {
     switch (e.type) {
       case 'omemoKeysReset':
@@ -141,6 +157,9 @@ class OmemoState {
       case 'omemoDevicesChanged':
         this.bump(e.data);
         this.bump('own');
+        break;
+      case 'omemoDevicesSkipped':
+        this.skipped = { ...this.skipped, [e.data.peer]: e.data.deviceIds };
         break;
       case 'omemoSendFailed':
         if (e.data.messageId) this.failures = { ...this.failures, [e.data.messageId]: e.data.reason };

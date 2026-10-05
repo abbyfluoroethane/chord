@@ -26,7 +26,7 @@
   import { isSendKey } from './sendkey';
   import { tooltip } from './tooltip';
   import { isGroup } from './types';
-  import { canEncrypt, lockView, uploadState } from './omemodata';
+  import { canEncrypt, lockView, skippedText, uploadState } from './omemodata';
   import { omemo } from './omemo.svelte';
   import {
     loadShortcodes,
@@ -375,6 +375,15 @@
   }}
   ondrop={dropped}
 >
+  {#if lock.show && omemo.skipped[app.selectedJid]?.length}
+    <div class="skipped" role="status">
+      <span>{skippedText(omemo.skipped[app.selectedJid].length)}</span>
+      <button onclick={() => omemo.openDevices(app.selectedJid)}>Devices</button>
+      <button aria-label="Close" onclick={() => omemo.dismissSkipped(app.selectedJid)}>
+        <Icon icon={X} size={14} />
+      </button>
+    </div>
+  {/if}
   {#if app.replyingTo}
     <div class="reply">
       <span>Replying to <b>{app.replyingTo.senderName}</b></span>
@@ -536,6 +545,22 @@
   .composer {
     flex: none;
     padding: 0 var(--space-4);
+  }
+  .skipped {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-3);
+    color: var(--ink-muted);
+    font-size: 13px;
+  }
+  .skipped button {
+    display: inline-grid;
+    place-items: center;
+  }
+  .skipped button:first-of-type {
+    text-decoration: underline;
+    color: var(--ink);
   }
   .reply {
     display: flex;

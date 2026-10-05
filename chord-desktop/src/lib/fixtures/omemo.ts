@@ -9,6 +9,9 @@ export const failures: Record<string, string> = {
   'sam-fail': 'Sam has no device that you trust.'
 };
 
+/** A send that left out two devices. */
+export const skipped: Record<string, number[]> = { 'sam@other.example': [772901, 330518] };
+
 export const devices: Record<string, OmemoDevice[]> = {
   'sam@other.example': [
     {

@@ -24,7 +24,7 @@
   import { mayAutoLoad } from './mediatrust';
   import { prefs } from './prefs.svelte';
   import { omemo } from './omemo.svelte';
-  import { sendFailedText } from './omemodata';
+  import { UNTRUSTED_HINT, lockKind, sendFailedText } from './omemodata';
   import { previewUrls, xmppUrls } from './markdown';
   import type { TimelineItem } from './types';
   import { ui } from './ui.svelte';
@@ -54,7 +54,7 @@
   const foreign = $derived(domainOf(item.sender) !== domainOf(app.me.address));
   const action = $derived(actionText(item.body));
   const full = $derived(new Date(item.timestamp).toLocaleString());
-  const secret = $derived(item.encryption === 'omemo');
+  const lockOf = $derived(lockKind(item.encryption));
   const unreadable = $derived(item.encryption === 'undecryptable');
   const failure = $derived(omemo.failureOf(item));
 
@@ -221,8 +221,15 @@
             <MessageBody body={item.body} />
           {/if}
           {#if item.edited}<span class="edited meta">(edited)</span>{/if}
-          {#if secret}
+          {#if lockOf === 'ok'}
             <span class="lock" role="img" aria-label="Encrypted" title="Encrypted"><Icon icon={Lock} size={12} /></span>
+          {:else if lockOf === 'warn'}
+            <button
+              class="lock warn"
+              aria-label={UNTRUSTED_HINT}
+              title={UNTRUSTED_HINT}
+              onclick={() => omemo.openDevices(item.sender)}><Icon icon={ShieldAlert} size={12} /></button
+            >
           {/if}
         </div>
       {/if}
@@ -243,6 +250,12 @@
         </div>
       {/if}
       <ReactionPills reactions={item.reactions} ontoggle={(e) => app.toggleReaction(item.id, e)} />
+      {#if item.status !== 'failed' && failure}
+        <p class="failed">
+          {sendFailedText(failure)}
+          <button onclick={() => omemo.clearFailure(item)}>Dismiss</button>
+        </p>
+      {/if}
       {#if item.status === 'failed'}
         <p class="failed">
           {failure ? sendFailedText(failure) : 'Not sent.'}
@@ -472,6 +485,9 @@
     vertical-align: middle;
     margin-left: var(--space-1);
     color: var(--ink-muted);
+  }
+  .lock.warn {
+    color: var(--away);
   }
   .unreadable {
     display: flex;

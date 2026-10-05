@@ -7,6 +7,9 @@ import {
   fingerprintBlocks,
   fingerprintText,
   isBlocked,
+  lockKind,
+  skippedText,
+  UNTRUSTED_HINT,
   lockView,
   normalizeFingerprint,
   sendFailedText,
@@ -143,5 +146,20 @@ describe('devices and failures', () => {
   it('shows the reason of a failed send', () => {
     expect(sendFailedText('No key for this contact.')).toBe('Not sent. No key for this contact.');
     expect(sendFailedText(undefined)).toBe('Not sent.');
+  });
+});
+
+describe('untrusted messages and skipped devices', () => {
+  it('picks the lock of a message', () => {
+    expect(lockKind('omemo')).toBe('ok');
+    expect(lockKind('omemo-untrusted')).toBe('warn');
+    expect(lockKind('undecryptable')).toBe('none');
+    expect(lockKind(undefined)).toBe('none');
+    expect(UNTRUSTED_HINT).toBe('From an unverified device.');
+  });
+
+  it('counts the skipped devices', () => {
+    expect(skippedText(1)).toBe('Not sent to 1 device.');
+    expect(skippedText(2)).toBe('Not sent to 2 devices.');
   });
 });
