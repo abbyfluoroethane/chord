@@ -18,6 +18,8 @@ serde = ["dep:serde", "jid/serde"]
 
 [dependencies]
 xmpp-parsers.workspace = true
+# Base64 of keys and payloads in OMEMO stanzas. Already in the lock file.
+base64 = "0.22"
 sha1.workspace = true
 # The SHA-256 of an uploaded file (XEP-0446).
 sha2 = "0.10"
