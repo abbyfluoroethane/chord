@@ -21,3 +21,6 @@ __pycache__/
 flatpak-build/
 flatpak-repo/
 .flatpak-work/
+
+# chord-omemo interop test venv
+chord-omemo/tests/interop/venv/
