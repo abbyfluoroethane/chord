@@ -286,7 +286,7 @@ fn counters_from_python_show_the_heartbeat_at_53() {
             assert!(t.me.remove_prekey(id));
         }
         t.session = Some(dec.session);
-        assert_eq!(dec.counter, n, "python and libomemo-c count the same");
+        assert_eq!(dec.counter, n, "python and chord-omemo count the same");
         assert_eq!(dec.heartbeat_due, n >= 53);
         if dec.heartbeat_due && first_due.is_none() {
             first_due = Some(n);

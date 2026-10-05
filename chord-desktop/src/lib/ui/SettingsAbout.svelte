@@ -163,11 +163,9 @@
   <li>highlight.js code highlighting, BSD 3-Clause License.</li>
   <li>GIF search powered by KLIPY.</li>
   <li>
-    libomemo-c 0.5.1 for OMEMO encryption, GNU General Public License 3.0, with an extra permission for
-    the Apple App Store. Its code and its licence text are in the
-    <a href={`${SOURCE}/tree/main/vendor/libomemo-c`} target="_blank" rel="noopener noreferrer">Chord source</a>.
+    vodozemac 0.11.1, Apache License 2.0. The OMEMO encryption code is a fork of it, changed for OMEMO 2. See
+    <a href={`${SOURCE}/tree/main/chord-omemo/src/ratchet`} target="_blank" rel="noopener noreferrer">Chord source</a>.
   </li>
-  <li>protobuf-c, BSD 2-Clause License, in libomemo-c.</li>
 </ul>
 
 <style>

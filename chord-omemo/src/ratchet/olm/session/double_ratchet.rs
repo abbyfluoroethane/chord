@@ -41,7 +41,7 @@ use crate::ratchet::olm::messages::Message;
 /// the next message goes out. That is a problem for OMEMO: a stored session that has
 /// not seen our reply would not know the ratchet key that the other device uses for its next
 /// chain. python-doubleratchet makes the chain at once (`DiffieHellmanRatchet.next_decryption_key`),
-/// and so do Signal and libomemo-c.
+/// and so does Signal.
 ///
 /// We don't handle decryption here (that's done in [`ReceiverChain`]).
 #[derive(Serialize, Deserialize, Clone)]
