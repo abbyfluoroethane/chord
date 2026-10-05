@@ -26,6 +26,19 @@ jobs:
       - name: Generate the Kotlin bindings
         run: ./dev/ffi-bindgen-check.sh
 
+  # chord-omemo builds C code (libomemo-c) with the cc crate. Build and test it on
+  # Windows (MSVC) and macOS too. Linux is in the native job.
+  omemo-c:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p chord-omemo
+
   # The Tauri desktop app: the Svelte front end, then the Rust side.
   desktop:
     runs-on: ubuntu-latest

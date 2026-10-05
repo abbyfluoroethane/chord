@@ -2,7 +2,8 @@
 name = "chord-omemo"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+# The crate links libomemo-c (GPL-3.0). Its own Rust files are MIT.
+license = "GPL-3.0-only"
 description = "OMEMO 2 (XEP-0384) for Chord: a safe wrapper around the vendored libomemo-c (GPL-3.0), plus the payload encryption. No XMPP and no I/O."
 
 [dependencies]

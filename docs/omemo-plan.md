@@ -45,7 +45,19 @@ We need a Double Ratchet and X3DH that match XEP-0384 byte for byte. Here is wha
 | `vodozemac` | 0.11.0, 2026-09-11, Apache-2.0 | It implements Olm and Megolm for Matrix. Olm is a different protocol with its own message format. It does not produce OMEMO messages. The README does not say it exposes a generic Double Ratchet. | No. It is a good code base to read, but it is wire-incompatible. |
 | `dziber-omemo` | 0.0.3, 2026-06-14, 92 downloads, BSD-2-Clause | The description says legacy v0 (libsignal-compatible). Not OMEMO 2. Very young. | No, unless a check shows OMEMO 2 support. |
 | `double-ratchet-2`, `x3dh-ke`, `xxxdh`, `ratchetx2` and similar | Small, low downloads, last release 2019 to 2025 | General Signal-style code. We did not check the KDF labels, the message format, or the skipped key limits. None is audited as far as we know. | No. Do not build a security feature on them. |
-| libomemo-c (C library, fork of libsignal-protocol-c) | Not checked | (Unverified) Dino may use it. The license may be GPL-3.0, which we could not link into an MIT app. | Check the license. Probably no. |
+| libomemo-c (C library, fork of libsignal-protocol-c) | v0.5.1, 2025-02-28, GPL-3.0 (updated 2026-10-05) | It speaks OMEMO 2 (protocol version 4). Dino uses it. It is the most tested OMEMO code that we can link. The GPL-3.0 license means that the built app is GPL-3.0. | Yes. The owner chose it on 2026-10-05. See the decision below. |
+
+### Decision (2026-10-05)
+
+The owner chose libomemo-c by FFI on 2026-10-05. This replaces the recommendation below.
+
+- The rule: we write no crypto by hand when a maintained and tested alternative exists. libomemo-c is that alternative. The recommendation below was a fallback for the case that no such library exists.
+- Version: libomemo-c v0.5.1. It speaks OMEMO 2 (protocol version 4). It is vendored in `vendor/libomemo-c`. `chord-omemo/build.rs` builds it with the `cc` crate. See `vendor/libomemo-c/VENDOR.md`.
+- The payload step is not in libomemo-c. HKDF, AES-256-CBC, and HMAC-SHA-256 are a composition of RustCrypto calls in `chord-omemo`. The owner accepted this.
+- Interop: the test against python-twomemo passes. See `chord-omemo/tests/interop`.
+- License: the Chord source stays MIT. The built app links GPL-3.0 code, so Chord distributes it under GPL-3.0. See the License section of `README.md` and `THIRD-PARTY.md`.
+
+### Old recommendation (superseded on 2026-10-05, kept for the record)
 
 Recommendation: write a small crate, `chord-omemo`, from RustCrypto and dalek parts. It has no XMPP code. It offers the pure protocol: key generation, bundle build, X3DH, Double Ratchet, the OMEMO message and key exchange formats, the key derivation for the payload, and the SCE envelope. The size is about 1500 lines plus tests. Parts:
 
@@ -157,7 +169,7 @@ One developer, in weeks.
 
 | Phase | Work | Weeks |
 |---|---|---|
-| 0 | Decisions. Check which of Conversations, Dino, Gajim, Monal, and Siskin support OMEMO 2 today. Read the XEP again for KDF labels, skipped key limits, and the wire format change since 0.8. Check the `libomemo-c` license. Test the PEP node config on chat.foid.space. | 0.5 |
+| 0 | Decisions. (Done for the crate choice on 2026-10-05: libomemo-c.) Check which of Conversations, Dino, Gajim, Monal, and Siskin support OMEMO 2 today. Read the XEP again for KDF labels, skipped key limits, and the wire format change since 0.8. Check the `libomemo-c` license. Test the PEP node config on chat.foid.space. | 0.5 |
 | 1 | `chord-omemo`: keys, X3DH, Double Ratchet, formats, SCE, test vectors, fuzzing of the parsers. | 2 |
 | 2 | `features/omemo.rs`: PEP publish and fetch, device cache, prekey replacement, events. | 1 |
 | 3 | Store migration, the `SecretBox` interface, keychain wiring on desktop. | 0.7 |
