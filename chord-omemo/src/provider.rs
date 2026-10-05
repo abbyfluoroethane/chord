@@ -76,7 +76,10 @@ unsafe extern "C" fn hmac_update(
     guard(|| {
         // SAFETY: `ctx` comes from `hmac_init`. `data` has `len` readable bytes.
         let (mac, data) = unsafe {
-            (&mut *ctx.cast::<Hmac<Sha256>>(), std::slice::from_raw_parts(data, len))
+            (
+                &mut *ctx.cast::<Hmac<Sha256>>(),
+                std::slice::from_raw_parts(data, len),
+            )
         };
         mac.update(data);
         0
@@ -123,8 +126,12 @@ unsafe extern "C" fn sha512_update(
 ) -> c_int {
     guard(|| {
         // SAFETY: `ctx` comes from `sha512_init`. `data` has `len` readable bytes.
-        let (hasher, data) =
-            unsafe { (&mut *ctx.cast::<Sha512>(), std::slice::from_raw_parts(data, len)) };
+        let (hasher, data) = unsafe {
+            (
+                &mut *ctx.cast::<Sha512>(),
+                std::slice::from_raw_parts(data, len),
+            )
+        };
         hasher.update(data);
         0
     })
@@ -210,7 +217,11 @@ unsafe fn aes_callback(
             (
                 std::slice::from_raw_parts(key.0, key.1),
                 std::slice::from_raw_parts(iv.0, iv.1),
-                if input.1 == 0 { &[][..] } else { std::slice::from_raw_parts(input.0, input.1) },
+                if input.1 == 0 {
+                    &[][..]
+                } else {
+                    std::slice::from_raw_parts(input.0, input.1)
+                },
             )
         };
         match aes(encrypt, cipher, key, iv, input) {
@@ -233,7 +244,16 @@ unsafe extern "C" fn encrypt(
     _user: *mut c_void,
 ) -> c_int {
     // SAFETY: the pointers come from libomemo-c and are valid for the given lengths.
-    unsafe { aes_callback(true, out, cipher, (key, key_len), (iv, iv_len), (data, data_len)) }
+    unsafe {
+        aes_callback(
+            true,
+            out,
+            cipher,
+            (key, key_len),
+            (iv, iv_len),
+            (data, data_len),
+        )
+    }
 }
 
 unsafe extern "C" fn decrypt(
@@ -248,7 +268,16 @@ unsafe extern "C" fn decrypt(
     _user: *mut c_void,
 ) -> c_int {
     // SAFETY: the pointers come from libomemo-c and are valid for the given lengths.
-    unsafe { aes_callback(false, out, cipher, (key, key_len), (iv, iv_len), (data, data_len)) }
+    unsafe {
+        aes_callback(
+            false,
+            out,
+            cipher,
+            (key, key_len),
+            (iv, iv_len),
+            (data, data_len),
+        )
+    }
 }
 
 /// The provider table. libomemo-c copies it, so a value on the stack is enough.

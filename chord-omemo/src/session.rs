@@ -43,7 +43,9 @@ pub struct DecryptedKey {
 impl core::fmt::Debug for DecryptedKey {
     // Never print the key material.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("DecryptedKey").field("used_prekey_id", &self.used_prekey_id).finish_non_exhaustive()
+        f.debug_struct("DecryptedKey")
+            .field("used_prekey_id", &self.used_prekey_id)
+            .finish_non_exhaustive()
     }
 }
 
@@ -70,7 +72,9 @@ fn cipher(ctx: &Ctx) -> Result<Cipher, Error> {
     let mut raw = std::ptr::null_mut();
     // SAFETY: all pointers are valid. `addr` is copied by the library.
     unsafe {
-        check(ffi::session_cipher_create(&mut raw, ctx.store, &addr, ctx.global))?;
+        check(ffi::session_cipher_create(
+            &mut raw, ctx.store, &addr, ctx.global,
+        ))?;
         let cipher = Cipher(raw);
         ffi::session_cipher_set_version(cipher.0, ffi::CIPHERTEXT_OMEMO_VERSION);
         Ok(cipher)
@@ -93,21 +97,40 @@ fn build_session(ctx: &Ctx, bundle: &Bundle) -> Result<(), Error> {
         return Err(Error::Malformed("bundle"));
     }
 
-    let (mut ik, mut spk, mut pre) = (std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+    let (mut ik, mut spk, mut pre) = (
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     let mut raw_bundle = std::ptr::null_mut();
     let addr = address();
     let mut builder = std::ptr::null_mut();
     // SAFETY: all slices are valid for their lengths. Each out pointer is owned by `Rc` or
     // `Builder` at once. The library takes its own references to keys in the bundle.
     unsafe {
-        check(ffi::curve_decode_point_ed(&mut ik, bundle.ik.as_ptr(), 32, ctx.global))
-            .map_err(|_| Error::Malformed("bundle identity key"))?;
+        check(ffi::curve_decode_point_ed(
+            &mut ik,
+            bundle.ik.as_ptr(),
+            32,
+            ctx.global,
+        ))
+        .map_err(|_| Error::Malformed("bundle identity key"))?;
         let ik = Rc::from_raw(ik).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-        check(ffi::curve_decode_point_mont(&mut spk, bundle.spk.as_ptr(), 32, ctx.global))
-            .map_err(|_| Error::Malformed("bundle signed prekey"))?;
+        check(ffi::curve_decode_point_mont(
+            &mut spk,
+            bundle.spk.as_ptr(),
+            32,
+            ctx.global,
+        ))
+        .map_err(|_| Error::Malformed("bundle signed prekey"))?;
         let spk = Rc::from_raw(spk).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-        check(ffi::curve_decode_point_mont(&mut pre, pk.as_ptr(), 32, ctx.global))
-            .map_err(|_| Error::Malformed("bundle prekey"))?;
+        check(ffi::curve_decode_point_mont(
+            &mut pre,
+            pk.as_ptr(),
+            32,
+            ctx.global,
+        ))
+        .map_err(|_| Error::Malformed("bundle prekey"))?;
         let pre = Rc::from_raw(pre).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
         // The registration id and the device id mean nothing in OMEMO 2. Use zero.
         check(ffi::session_pre_key_bundle_create(
@@ -123,7 +146,12 @@ fn build_session(ctx: &Ctx, bundle: &Bundle) -> Result<(), Error> {
             ik.as_ptr(),
         ))?;
         let raw_bundle = Rc::from_raw(raw_bundle).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-        check(ffi::session_builder_create(&mut builder, ctx.store, &addr, ctx.global))?;
+        check(ffi::session_builder_create(
+            &mut builder,
+            ctx.store,
+            &addr,
+            ctx.global,
+        ))?;
         let builder = Builder(builder);
         ffi::session_builder_set_version(builder.0, ffi::CIPHERTEXT_OMEMO_VERSION);
         match ffi::session_builder_process_pre_key_bundle(builder.0, raw_bundle.as_ptr()) {
@@ -164,8 +192,19 @@ pub fn encrypt_key(
     // SAFETY: `key_material` is a valid slice. `message` is owned by `Rc` at once. The
     // serialized buffer is borrowed from the message, so we copy it before `message` drops.
     let (data, kex) = unsafe {
-        check(ffi::session_cipher_encrypt(cipher.0, key_material.as_ptr(), key_material.len(), &mut message))
-            .map_err(|e| if e == Error::Library(ffi::SG_ERR_NO_SESSION) { Error::NoSession } else { e })?;
+        check(ffi::session_cipher_encrypt(
+            cipher.0,
+            key_material.as_ptr(),
+            key_material.len(),
+            &mut message,
+        ))
+        .map_err(|e| {
+            if e == Error::Library(ffi::SG_ERR_NO_SESSION) {
+                Error::NoSession
+            } else {
+                e
+            }
+        })?;
         let message = Rc::from_raw(message).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
         let kex = ffi::ciphertext_message_get_type(message.as_ptr()) == ffi::CIPHERTEXT_PREKEY_TYPE;
         let serialized = ffi::ciphertext_message_get_serialized(message.as_ptr());
@@ -173,11 +212,18 @@ pub fn encrypt_key(
             return Err(Error::Library(ffi::SG_ERR_UNKNOWN));
         }
         let len = ffi::signal_buffer_len(serialized);
-        (std::slice::from_raw_parts(ffi::signal_buffer_data(serialized), len).to_vec(), kex)
+        (
+            std::slice::from_raw_parts(ffi::signal_buffer_data(serialized), len).to_vec(),
+            kex,
+        )
     };
     drop(cipher);
 
-    let session = ctx.state().new_session.clone().ok_or(Error::Library(ffi::SG_ERR_UNKNOWN))?;
+    let session = ctx
+        .state()
+        .new_session
+        .clone()
+        .ok_or(Error::Library(ffi::SG_ERR_UNKNOWN))?;
     Ok(EncryptedKey { data, kex, session })
 }
 
@@ -187,7 +233,12 @@ fn remote_identity(ctx: &Ctx, record: &[u8]) -> Result<Vec<u8>, Error> {
     // SAFETY: `record` is a valid slice. The state and the key are borrowed from `raw`,
     // which lives until the end of the block.
     unsafe {
-        check(ffi::session_record_deserialize(&mut raw, record.as_ptr(), record.len(), ctx.global))?;
+        check(ffi::session_record_deserialize(
+            &mut raw,
+            record.as_ptr(),
+            record.len(),
+            ctx.global,
+        ))?;
         let raw = Rc::from_raw(raw).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
         let state = ffi::session_record_get_state(raw.as_ptr());
         if state.is_null() {
@@ -197,7 +248,8 @@ fn remote_identity(ctx: &Ctx, record: &[u8]) -> Result<Vec<u8>, Error> {
         if key.is_null() {
             return Err(Error::Malformed("session record"));
         }
-        let buf = Buf::from_raw(ffi::ec_public_key_get_ed(key)).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
+        let buf = Buf::from_raw(ffi::ec_public_key_get_ed(key))
+            .ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
         Ok(buf.bytes().to_vec())
     }
 }
@@ -243,7 +295,9 @@ pub fn decrypt_key(
                 &mut plaintext,
             );
             if code == ffi::SG_ERR_INVALID_KEY_ID {
-                return Err(Error::UnknownPreKey(ffi::pre_key_signal_message_get_pre_key_id(message.as_ptr())));
+                return Err(Error::UnknownPreKey(
+                    ffi::pre_key_signal_message_get_pre_key_id(message.as_ptr()),
+                ));
             }
             code
         };
@@ -255,10 +309,20 @@ pub fn decrypt_key(
         let mut message = std::ptr::null_mut();
         // SAFETY: as above.
         let code = unsafe {
-            check(ffi::signal_message_deserialize_omemo(&mut message, data.as_ptr(), data.len(), ctx.global))
-                .map_err(|_| Error::Malformed("message"))?;
+            check(ffi::signal_message_deserialize_omemo(
+                &mut message,
+                data.as_ptr(),
+                data.len(),
+                ctx.global,
+            ))
+            .map_err(|_| Error::Malformed("message"))?;
             let message = Rc::from_raw(message).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-            ffi::session_cipher_decrypt_signal_message(cipher.0, message.as_ptr(), std::ptr::null_mut(), &mut plaintext)
+            ffi::session_cipher_decrypt_signal_message(
+                cipher.0,
+                message.as_ptr(),
+                std::ptr::null_mut(),
+                &mut plaintext,
+            )
         };
         finish(code)?;
     }
@@ -267,9 +331,18 @@ pub fn decrypt_key(
     // SAFETY: on success the library wrote a new buffer that we own now.
     let plain = unsafe { Buf::from_raw(plaintext) }.ok_or(Error::Library(ffi::SG_ERR_UNKNOWN))?;
     let key_material = Zeroizing::new(plain.bytes().to_vec());
-    let session = ctx.state().new_session.clone().ok_or(Error::Library(ffi::SG_ERR_UNKNOWN))?;
+    let session = ctx
+        .state()
+        .new_session
+        .clone()
+        .ok_or(Error::Library(ffi::SG_ERR_UNKNOWN))?;
     let remote_identity_key = remote_identity(&ctx, &session)?;
-    Ok(DecryptedKey { key_material, session, used_prekey_id: ctx.state().used_prekey, remote_identity_key })
+    Ok(DecryptedKey {
+        key_material,
+        session,
+        used_prekey_id: ctx.state().used_prekey,
+        remote_identity_key,
+    })
 }
 
 /// Turn a result code of a decrypt call into an error.
@@ -280,9 +353,9 @@ fn finish(code: i32) -> Result<(), Error> {
         ffi::SG_ERR_DUPLICATE_MESSAGE => Err(Error::Duplicate),
         ffi::SG_ERR_NO_SESSION => Err(Error::NoSession),
         ffi::SG_ERR_INVALID_KEY => Err(Error::BadSignature),
-        ffi::SG_ERR_INVALID_MESSAGE | ffi::SG_ERR_INVALID_PROTO_BUF | ffi::SG_ERR_INVALID_VERSION => {
-            Err(Error::Malformed("message"))
-        }
+        ffi::SG_ERR_INVALID_MESSAGE
+        | ffi::SG_ERR_INVALID_PROTO_BUF
+        | ffi::SG_ERR_INVALID_VERSION => Err(Error::Malformed("message")),
         ffi::SG_ERR_LEGACY_MESSAGE => Err(Error::Malformed("legacy message")),
         c => Err(Error::Library(c)),
     }

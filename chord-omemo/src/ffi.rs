@@ -73,7 +73,8 @@ pub const CIPHERTEXT_OMEMO_VERSION: u32 = 4;
 pub const CIPHERTEXT_PREKEY_TYPE: c_int = 3;
 
 pub type RandomFn = unsafe extern "C" fn(*mut u8, usize, *mut c_void) -> c_int;
-pub type HmacInitFn = unsafe extern "C" fn(*mut *mut c_void, *const u8, usize, *mut c_void) -> c_int;
+pub type HmacInitFn =
+    unsafe extern "C" fn(*mut *mut c_void, *const u8, usize, *mut c_void) -> c_int;
 pub type UpdateFn = unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut c_void) -> c_int;
 pub type FinalFn = unsafe extern "C" fn(*mut c_void, *mut *mut signal_buffer, *mut c_void) -> c_int;
 pub type CleanupFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
@@ -154,7 +155,11 @@ pub struct signal_protocol_pre_key_store {
 #[repr(C)]
 pub struct signal_protocol_identity_key_store {
     pub get_identity_key_pair: Option<
-        unsafe extern "C" fn(*mut *mut signal_buffer, *mut *mut signal_buffer, *mut c_void) -> c_int,
+        unsafe extern "C" fn(
+            *mut *mut signal_buffer,
+            *mut *mut signal_buffer,
+            *mut c_void,
+        ) -> c_int,
     >,
     pub get_local_registration_id: Option<unsafe extern "C" fn(*mut c_void, *mut u32) -> c_int>,
     pub save_identity: Option<
@@ -169,7 +174,10 @@ pub struct signal_protocol_identity_key_store {
 
 unsafe extern "C" {
     // signal_protocol.h
-    pub fn signal_context_create(context: *mut *mut signal_context, user_data: *mut c_void) -> c_int;
+    pub fn signal_context_create(
+        context: *mut *mut signal_context,
+        user_data: *mut c_void,
+    ) -> c_int;
     pub fn signal_context_set_crypto_provider(
         context: *mut signal_context,
         provider: *const signal_crypto_provider,
@@ -297,9 +305,15 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn session_signed_pre_key_get_id(key: *const session_signed_pre_key) -> u32;
     pub fn session_signed_pre_key_get_timestamp(key: *const session_signed_pre_key) -> u64;
-    pub fn session_signed_pre_key_get_key_pair(key: *const session_signed_pre_key) -> *mut ec_key_pair;
-    pub fn session_signed_pre_key_get_signature_omemo(key: *const session_signed_pre_key) -> *const u8;
-    pub fn session_signed_pre_key_get_signature_omemo_len(key: *const session_signed_pre_key) -> usize;
+    pub fn session_signed_pre_key_get_key_pair(
+        key: *const session_signed_pre_key,
+    ) -> *mut ec_key_pair;
+    pub fn session_signed_pre_key_get_signature_omemo(
+        key: *const session_signed_pre_key,
+    ) -> *const u8;
+    pub fn session_signed_pre_key_get_signature_omemo_len(
+        key: *const session_signed_pre_key,
+    ) -> usize;
     pub fn session_pre_key_bundle_create(
         bundle: *mut *mut session_pre_key_bundle,
         registration_id: u32,
@@ -357,7 +371,9 @@ unsafe extern "C" {
 
     // protocol.h
     pub fn ciphertext_message_get_type(message: *const ciphertext_message) -> c_int;
-    pub fn ciphertext_message_get_serialized(message: *const ciphertext_message) -> *mut signal_buffer;
+    pub fn ciphertext_message_get_serialized(
+        message: *const ciphertext_message,
+    ) -> *mut signal_buffer;
     pub fn signal_message_deserialize_omemo(
         message: *mut *mut signal_message,
         data: *const u8,
@@ -384,5 +400,6 @@ unsafe extern "C" {
         global: *mut signal_context,
     ) -> c_int;
     pub fn session_record_get_state(record: *mut session_record) -> *mut session_state;
-    pub fn session_state_get_remote_identity_key(state: *const session_state) -> *mut ec_public_key;
+    pub fn session_state_get_remote_identity_key(state: *const session_state)
+    -> *mut ec_public_key;
 }

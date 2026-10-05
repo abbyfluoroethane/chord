@@ -45,9 +45,13 @@ struct Keys {
 fn derive(key: &[u8]) -> Result<Keys, Error> {
     let hk = Hkdf::<Sha256>::new(Some(&[0u8; 32]), key);
     let mut okm = Zeroizing::new([0u8; 80]);
-    hk.expand(INFO, &mut *okm).map_err(|_| Error::Malformed("payload key"))?;
-    let mut keys =
-        Keys { enc: Zeroizing::new([0; 32]), auth: Zeroizing::new([0; 32]), iv: Zeroizing::new([0; 16]) };
+    hk.expand(INFO, &mut *okm)
+        .map_err(|_| Error::Malformed("payload key"))?;
+    let mut keys = Keys {
+        enc: Zeroizing::new([0; 32]),
+        auth: Zeroizing::new([0; 32]),
+        iv: Zeroizing::new([0; 16]),
+    };
     keys.enc.copy_from_slice(&okm[..32]);
     keys.auth.copy_from_slice(&okm[32..64]);
     keys.iv.copy_from_slice(&okm[64..]);
@@ -55,7 +59,8 @@ fn derive(key: &[u8]) -> Result<Keys, Error> {
 }
 
 fn mac(auth: &[u8; 32], ciphertext: &[u8]) -> Hmac<Sha256> {
-    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(auth).expect("HMAC takes any key length");
+    let mut mac =
+        <Hmac<Sha256> as KeyInit>::new_from_slice(auth).expect("HMAC takes any key length");
     mac.update(ciphertext);
     mac
 }
@@ -86,7 +91,9 @@ pub fn decrypt(key_material: &[u8], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u
     }
     let (key, tag) = key_material.split_at(KEY_LEN);
     let keys = derive(key)?;
-    mac(&keys.auth, ciphertext).verify_truncated_left(tag).map_err(|_| Error::BadMac)?;
+    mac(&keys.auth, ciphertext)
+        .verify_truncated_left(tag)
+        .map_err(|_| Error::BadMac)?;
     let plain = cbc::Decryptor::<Aes256>::new_from_slices(&*keys.enc, &*keys.iv)
         .map_err(|_| Error::Malformed("payload key"))?
         .decrypt_padded_vec::<Pkcs7>(ciphertext)

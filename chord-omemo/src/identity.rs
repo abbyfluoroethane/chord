@@ -58,7 +58,11 @@ pub struct Identity {
 
 impl Drop for Identity {
     fn drop(&mut self) {
-        for v in self.signed_prekeys.values_mut().chain(self.prekeys.values_mut()) {
+        for v in self
+            .signed_prekeys
+            .values_mut()
+            .chain(self.prekeys.values_mut())
+        {
             v.zeroize();
         }
     }
@@ -75,7 +79,10 @@ impl core::fmt::Debug for Identity {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Copy the 32 bytes out of an optional buffer.
@@ -90,8 +97,13 @@ fn mont_of_ed(ctx: &Ctx, ed: &[u8]) -> Result<Vec<u8>, Error> {
     let mut key = std::ptr::null_mut();
     // SAFETY: `ed` is a valid slice. `key` is written on success and then owned by `Rc`.
     unsafe {
-        check(ffi::curve_decode_point_ed(&mut key, ed.as_ptr(), ed.len(), ctx.global))
-            .map_err(|_| Error::Malformed("identity key"))?;
+        check(ffi::curve_decode_point_ed(
+            &mut key,
+            ed.as_ptr(),
+            ed.len(),
+            ctx.global,
+        ))
+        .map_err(|_| Error::Malformed("identity key"))?;
         let key = Rc::from_raw(key).ok_or(Error::Malformed("identity key"))?;
         buf_bytes(ffi::ec_public_key_get_mont(key.as_ptr()))
     }
@@ -117,7 +129,9 @@ fn make_prekeys(ctx: &Ctx, start: u32, count: u32) -> Result<Vec<(u32, Vec<u8>)>
     let mut head = std::ptr::null_mut();
     // SAFETY: `head` is written on success. We free the list below, also on error paths.
     unsafe {
-        check(ffi::signal_protocol_key_helper_generate_pre_keys(&mut head, start, count, ctx.global))?;
+        check(ffi::signal_protocol_key_helper_generate_pre_keys(
+            &mut head, start, count, ctx.global,
+        ))?;
         let mut out = Vec::new();
         let mut node = head;
         let mut result = Ok(());
@@ -149,11 +163,18 @@ fn prekey_public(ctx: &Ctx, record: &[u8]) -> Result<Vec<u8>, Error> {
     let mut key = std::ptr::null_mut();
     // SAFETY: `record` is a valid slice. The pair is borrowed from `key`, which lives on.
     unsafe {
-        check(ffi::session_pre_key_deserialize(&mut key, record.as_ptr(), record.len(), ctx.global))
-            .map_err(|_| Error::Malformed("prekey record"))?;
+        check(ffi::session_pre_key_deserialize(
+            &mut key,
+            record.as_ptr(),
+            record.len(),
+            ctx.global,
+        ))
+        .map_err(|_| Error::Malformed("prekey record"))?;
         let key = Rc::from_raw(key).ok_or(Error::Malformed("prekey record"))?;
         let pair = ffi::session_pre_key_get_key_pair(key.as_ptr());
-        buf_bytes(ffi::ec_public_key_get_mont(ffi::ec_key_pair_get_public(pair)))
+        buf_bytes(ffi::ec_public_key_get_mont(ffi::ec_key_pair_get_public(
+            pair,
+        )))
     }
 }
 
@@ -162,11 +183,18 @@ fn spk_parts(ctx: &Ctx, record: &[u8]) -> Result<(u32, Vec<u8>, Vec<u8>, u64), E
     let mut key = std::ptr::null_mut();
     // SAFETY: `record` is a valid slice. All getters borrow from `key`, which lives on.
     unsafe {
-        check(ffi::session_signed_pre_key_deserialize(&mut key, record.as_ptr(), record.len(), ctx.global))
-            .map_err(|_| Error::Malformed("signed prekey record"))?;
+        check(ffi::session_signed_pre_key_deserialize(
+            &mut key,
+            record.as_ptr(),
+            record.len(),
+            ctx.global,
+        ))
+        .map_err(|_| Error::Malformed("signed prekey record"))?;
         let key = Rc::from_raw(key).ok_or(Error::Malformed("signed prekey record"))?;
         let pair = ffi::session_signed_pre_key_get_key_pair(key.as_ptr());
-        let public = buf_bytes(ffi::ec_public_key_get_mont(ffi::ec_key_pair_get_public(pair)))?;
+        let public = buf_bytes(ffi::ec_public_key_get_mont(ffi::ec_key_pair_get_public(
+            pair,
+        )))?;
         let sig_ptr = ffi::session_signed_pre_key_get_signature_omemo(key.as_ptr());
         let sig_len = ffi::session_signed_pre_key_get_signature_omemo_len(key.as_ptr());
         if sig_ptr.is_null() || sig_len != 64 {
@@ -196,7 +224,9 @@ impl Identity {
         let mut pair = std::ptr::null_mut();
         // SAFETY: `pair` is written on success and owned by `Rc`. Getters borrow from it.
         let (ik_private, ik_public) = unsafe {
-            check(ffi::signal_protocol_key_helper_generate_identity_key_pair(&mut pair, ctx.global))?;
+            check(ffi::signal_protocol_key_helper_generate_identity_key_pair(
+                &mut pair, ctx.global,
+            ))?;
             let pair = Rc::from_raw(pair).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
             let mut private = std::ptr::null_mut();
             check(ffi::ec_private_key_serialize(
@@ -204,9 +234,9 @@ impl Identity {
                 ffi::ratchet_identity_key_pair_get_private(pair.as_ptr()),
             ))?;
             let private = Buf::from_raw(private).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-            let public = buf_bytes(ffi::ec_public_key_get_ed(ffi::ratchet_identity_key_pair_get_public(
-                pair.as_ptr(),
-            )))?;
+            let public = buf_bytes(ffi::ec_public_key_get_ed(
+                ffi::ratchet_identity_key_pair_get_public(pair.as_ptr()),
+            ))?;
             (Zeroizing::new(private.bytes().to_vec()), public)
         };
 
@@ -243,13 +273,22 @@ impl Identity {
     /// The bundle to publish: the current signed prekey and all unused prekeys.
     pub fn bundle(&self) -> Result<Bundle, Error> {
         let ctx = Ctx::new(StoreState::default())?;
-        let record = self.signed_prekeys.get(&self.current_spk).ok_or(Error::Malformed("signed prekey"))?;
+        let record = self
+            .signed_prekeys
+            .get(&self.current_spk)
+            .ok_or(Error::Malformed("signed prekey"))?;
         let (spk_id, spk, spks, _) = spk_parts(&ctx, record)?;
         let mut prekeys = Vec::with_capacity(self.prekeys.len());
         for (id, record) in &self.prekeys {
             prekeys.push((*id, prekey_public(&ctx, record)?));
         }
-        Ok(Bundle { ik: self.ik_public.clone(), spk_id, spk, spks, prekeys })
+        Ok(Bundle {
+            ik: self.ik_public.clone(),
+            spk_id,
+            spk,
+            spks,
+            prekeys,
+        })
     }
 
     /// How many unused one-time prekeys are left.
@@ -299,11 +338,25 @@ impl Identity {
         let mut buf = std::ptr::null_mut();
         // SAFETY: the out pointers are written on success and owned by `Rc` or `Buf` at once.
         let record = unsafe {
-            check(ffi::curve_decode_private_point(&mut private, self.ik_private.as_ptr(), 32, ctx.global))?;
+            check(ffi::curve_decode_private_point(
+                &mut private,
+                self.ik_private.as_ptr(),
+                32,
+                ctx.global,
+            ))?;
             let private = Rc::from_raw(private).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-            check(ffi::curve_decode_point_ed(&mut public, self.ik_public.as_ptr(), 32, ctx.global))?;
+            check(ffi::curve_decode_point_ed(
+                &mut public,
+                self.ik_public.as_ptr(),
+                32,
+                ctx.global,
+            ))?;
             let public = Rc::from_raw(public).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-            check(ffi::ratchet_identity_key_pair_create(&mut pair, public.as_ptr(), private.as_ptr()))?;
+            check(ffi::ratchet_identity_key_pair_create(
+                &mut pair,
+                public.as_ptr(),
+                private.as_ptr(),
+            ))?;
             let pair = Rc::from_raw(pair).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
             check(ffi::signal_protocol_key_helper_generate_signed_pre_key(
                 &mut spk,
@@ -313,13 +366,22 @@ impl Identity {
                 ctx.global,
             ))?;
             let spk = Rc::from_raw(spk).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?;
-            check(ffi::session_signed_pre_key_serialize(&mut buf, spk.as_ptr()))?;
-            Buf::from_raw(buf).ok_or(Error::Library(ffi::SG_ERR_NOMEM))?.bytes().to_vec()
+            check(ffi::session_signed_pre_key_serialize(
+                &mut buf,
+                spk.as_ptr(),
+            ))?;
+            Buf::from_raw(buf)
+                .ok_or(Error::Library(ffi::SG_ERR_NOMEM))?
+                .bytes()
+                .to_vec()
         };
         let (_, public, sig, _) = spk_parts(&ctx, &record)?;
         self.signed_prekeys.insert(id, record);
         self.current_spk = id;
-        self.next_spk_id = id.checked_add(1).filter(|n| *n < PREKEY_ID_LIMIT).unwrap_or(1);
+        self.next_spk_id = id
+            .checked_add(1)
+            .filter(|n| *n < PREKEY_ID_LIMIT)
+            .unwrap_or(1);
         Ok((id, public, sig))
     }
 
@@ -386,7 +448,9 @@ impl Identity {
     pub fn from_bytes(bytes: &[u8]) -> Result<Identity, Error> {
         let bad = Error::Malformed("identity record");
         let mut r = Reader { bytes, pos: 0 };
-        if r.take(4).ok_or(bad.clone())? != MAGIC || r.take(1).ok_or(bad.clone())? != [FORMAT_VERSION] {
+        if r.take(4).ok_or(bad.clone())? != MAGIC
+            || r.take(1).ok_or(bad.clone())? != [FORMAT_VERSION]
+        {
             return Err(bad);
         }
         let device_id = r.u32().ok_or(bad.clone())?;
@@ -451,6 +515,7 @@ impl<'a> Reader<'a> {
     }
 
     fn u32(&mut self) -> Option<u32> {
-        self.take(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        self.take(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 }

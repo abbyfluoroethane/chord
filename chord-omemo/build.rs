@@ -105,8 +105,8 @@ const ED_FILES: &[&str] = &[
 ];
 
 fn main() {
-    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("../vendor/libomemo-c");
+    let root =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../vendor/libomemo-c");
     let src = root.join("src");
     let ed = src.join("curve25519/ed25519");
 

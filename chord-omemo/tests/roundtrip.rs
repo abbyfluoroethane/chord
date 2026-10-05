@@ -26,7 +26,12 @@ fn connect() -> Pair {
     assert_eq!(&*dec.key_material, &material[..]);
     assert_eq!(dec.remote_identity_key, alice.identity_key());
     assert!(bob.remove_prekey(dec.used_prekey_id.expect("a key exchange uses a prekey")));
-    Pair { alice, bob, alice_session: enc.session, bob_session: dec.session }
+    Pair {
+        alice,
+        bob,
+        alice_session: enc.session,
+        bob_session: dec.session,
+    }
 }
 
 #[test]
@@ -60,14 +65,23 @@ fn fingerprint_has_eight_groups_of_eight() {
     let fp = fingerprint(id.identity_key()).unwrap();
     let groups: Vec<&str> = fp.split(' ').collect();
     assert_eq!(groups.len(), 8);
-    assert!(groups.iter().all(|g| g.len() == 8 && g.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))));
+    assert!(groups.iter().all(|g| {
+        g.len() == 8
+            && g.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    }));
     assert_eq!(fp, id.fingerprint().unwrap());
     assert!(fingerprint(&[1, 2, 3]).is_err());
 }
 
 #[test]
 fn round_trip_both_ways() {
-    let Pair { alice, bob, mut alice_session, mut bob_session } = connect();
+    let Pair {
+        alice,
+        bob,
+        mut alice_session,
+        mut bob_session,
+    } = connect();
     for i in 0..5 {
         let m = format!("bob {i}").into_bytes();
         let enc = encrypt_key(&bob, Some(&bob_session), None, &m).unwrap();
@@ -91,7 +105,12 @@ fn round_trip_both_ways() {
 
 #[test]
 fn key_exchange_repeats_until_answered() {
-    let Pair { alice, bob, alice_session, bob_session } = connect();
+    let Pair {
+        alice,
+        bob,
+        alice_session,
+        bob_session,
+    } = connect();
     // Alice has not heard from Bob. The next message is still a key exchange.
     let enc = encrypt_key(&alice, Some(&alice_session), None, b"again").unwrap();
     assert!(enc.kex);
@@ -102,10 +121,17 @@ fn key_exchange_repeats_until_answered() {
 
 #[test]
 fn out_of_order_messages_work() {
-    let Pair { alice, bob, mut alice_session, mut bob_session } = connect();
+    let Pair {
+        alice,
+        bob,
+        mut alice_session,
+        mut bob_session,
+    } = connect();
     // Bob answers once, so that Alice leaves the key exchange state.
     let enc = encrypt_key(&bob, Some(&bob_session), None, b"hi").unwrap();
-    alice_session = decrypt_key(&alice, Some(&alice_session), &enc.data, false).unwrap().session;
+    alice_session = decrypt_key(&alice, Some(&alice_session), &enc.data, false)
+        .unwrap()
+        .session;
 
     let mut sent = Vec::new();
     for i in 0..3u8 {
@@ -129,7 +155,10 @@ fn tampered_data_fails() {
     for i in 0..enc.data.len() {
         let mut bad = enc.data.clone();
         bad[i] ^= 0x01;
-        assert!(decrypt_key(&bob, None, &bad, true).is_err(), "byte {i} was accepted");
+        assert!(
+            decrypt_key(&bob, None, &bad, true).is_err(),
+            "byte {i} was accepted"
+        );
     }
     assert!(decrypt_key(&bob, None, &enc.data[..enc.data.len() - 1], true).is_err());
     assert!(decrypt_key(&bob, None, b"", true).is_err());
@@ -139,15 +168,25 @@ fn tampered_data_fails() {
 
 #[test]
 fn tampered_message_after_session_fails() {
-    let Pair { alice, bob, mut alice_session, bob_session } = connect();
+    let Pair {
+        alice,
+        bob,
+        mut alice_session,
+        bob_session,
+    } = connect();
     let enc = encrypt_key(&bob, Some(&bob_session), None, b"x").unwrap();
-    alice_session = decrypt_key(&alice, Some(&alice_session), &enc.data, false).unwrap().session;
+    alice_session = decrypt_key(&alice, Some(&alice_session), &enc.data, false)
+        .unwrap()
+        .session;
     let enc = encrypt_key(&alice, Some(&alice_session), None, &key_material()).unwrap();
     let mut bad = enc.data.clone();
     let last = bad.len() - 1;
     bad[last] ^= 1;
     let err = decrypt_key(&bob, Some(&bob_session), &bad, false).unwrap_err();
-    assert!(matches!(err, Error::BadMac | Error::Malformed(_)), "{err:?}");
+    assert!(
+        matches!(err, Error::BadMac | Error::Malformed(_)),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -166,15 +205,25 @@ fn used_prekey_fails() {
     // Another device builds a session with the same old bundle.
     let mallory = Identity::generate().unwrap();
     let second = encrypt_key(&mallory, None, Some(&one), b"second").unwrap();
-    assert_eq!(decrypt_key(&bob, None, &second.data, true).unwrap_err(), Error::UnknownPreKey(used_id));
+    assert_eq!(
+        decrypt_key(&bob, None, &second.data, true).unwrap_err(),
+        Error::UnknownPreKey(used_id)
+    );
 }
 
 #[test]
 fn failed_decrypt_changes_no_state() {
-    let Pair { alice, bob, mut alice_session, bob_session } = connect();
+    let Pair {
+        alice,
+        bob,
+        mut alice_session,
+        bob_session,
+    } = connect();
     let enc = encrypt_key(&bob, Some(&bob_session), None, b"x").unwrap();
     let bob_session = enc.session;
-    alice_session = decrypt_key(&alice, Some(&alice_session), &enc.data, false).unwrap().session;
+    alice_session = decrypt_key(&alice, Some(&alice_session), &enc.data, false)
+        .unwrap()
+        .session;
 
     let good = encrypt_key(&alice, Some(&alice_session), None, &[7; 32]).unwrap();
     let mut bad = good.data.clone();
@@ -191,14 +240,23 @@ fn failed_decrypt_changes_no_state() {
     // The untouched session still reads the good message, once.
     let dec = decrypt_key(&bob, Some(&bob_session), &good.data, false).unwrap();
     assert_eq!(&*dec.key_material, &[7; 32][..]);
-    assert_eq!(decrypt_key(&bob, Some(&dec.session), &good.data, false).unwrap_err(), Error::Duplicate);
+    assert_eq!(
+        decrypt_key(&bob, Some(&dec.session), &good.data, false).unwrap_err(),
+        Error::Duplicate
+    );
 }
 
 #[test]
 fn no_session_and_no_bundle_is_an_error() {
     let alice = Identity::generate().unwrap();
-    assert_eq!(encrypt_key(&alice, None, None, b"x").unwrap_err(), Error::NoSession);
-    assert_eq!(decrypt_key(&alice, None, b"x", false).unwrap_err(), Error::NoSession);
+    assert_eq!(
+        encrypt_key(&alice, None, None, b"x").unwrap_err(),
+        Error::NoSession
+    );
+    assert_eq!(
+        decrypt_key(&alice, None, b"x", false).unwrap_err(),
+        Error::NoSession
+    );
 }
 
 #[test]
@@ -207,7 +265,10 @@ fn bad_bundles_are_refused() {
     let bob = Identity::generate().unwrap();
     let mut bundle = bob.bundle().unwrap();
     bundle.spks[10] ^= 1;
-    assert_eq!(encrypt_key(&alice, None, Some(&bundle), b"x").unwrap_err(), Error::BadSignature);
+    assert_eq!(
+        encrypt_key(&alice, None, Some(&bundle), b"x").unwrap_err(),
+        Error::BadSignature
+    );
     // A signed prekey of another device, with the signature of the right one.
     let other = Identity::generate().unwrap().bundle().unwrap();
     let mut mixed = bob.bundle().unwrap();
@@ -232,7 +293,11 @@ fn prekey_refill_and_signed_prekey_rotation() {
     assert_eq!(added.len(), 79);
     assert_eq!(bob.prekey_count(), 100);
     assert!(bob.refill_prekeys(100).unwrap().is_empty());
-    assert!(added.iter().all(|(id, _)| !old.prekeys.iter().any(|(o, _)| o == id)));
+    assert!(
+        added
+            .iter()
+            .all(|(id, _)| !old.prekeys.iter().any(|(o, _)| o == id))
+    );
 
     let (id, spk, sig) = bob.rotate_signed_prekey().unwrap();
     assert_ne!(id, old.spk_id);
@@ -245,14 +310,25 @@ fn prekey_refill_and_signed_prekey_rotation() {
     stale.prekeys.truncate(1);
     let alice = Identity::generate().unwrap();
     let enc = encrypt_key(&alice, None, Some(&stale), b"late").unwrap();
-    assert_eq!(&*decrypt_key(&bob, None, &enc.data, true).unwrap().key_material, b"late");
+    assert_eq!(
+        &*decrypt_key(&bob, None, &enc.data, true)
+            .unwrap()
+            .key_material,
+        b"late"
+    );
 
     assert_eq!(bob.signed_prekeys().unwrap().len(), 2);
     assert!(!bob.discard_signed_prekey(id));
     assert!(bob.discard_signed_prekey(old.spk_id));
     assert_eq!(bob.signed_prekeys().unwrap().len(), 1);
     // The record with the rotated key reads back.
-    assert_eq!(Identity::from_bytes(&bob.to_bytes()).unwrap().bundle().unwrap(), bob.bundle().unwrap());
+    assert_eq!(
+        Identity::from_bytes(&bob.to_bytes())
+            .unwrap()
+            .bundle()
+            .unwrap(),
+        bob.bundle().unwrap()
+    );
 }
 
 #[test]
@@ -262,7 +338,10 @@ fn payload_round_trip_and_tamper() {
     assert_eq!(&*payload::decrypt(&material, &ct).unwrap(), b"the envelope");
     let mut bad = ct.clone();
     bad[0] ^= 1;
-    assert_eq!(payload::decrypt(&material, &bad).unwrap_err(), Error::BadMac);
+    assert_eq!(
+        payload::decrypt(&material, &bad).unwrap_err(),
+        Error::BadMac
+    );
     let mut bad_key = material.to_vec();
     bad_key[40] ^= 1;
     assert_eq!(payload::decrypt(&bad_key, &ct).unwrap_err(), Error::BadMac);

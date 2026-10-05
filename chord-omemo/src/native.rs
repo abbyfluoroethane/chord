@@ -67,7 +67,11 @@ impl<T> Drop for Rc<T> {
 
 /// Turn a C result code into a `Result`. Negative is an error.
 pub(crate) fn check(code: c_int) -> Result<c_int, Error> {
-    if code >= 0 { Ok(code) } else { Err(Error::Library(code)) }
+    if code >= 0 {
+        Ok(code)
+    } else {
+        Err(Error::Library(code))
+    }
 }
 
 /// What the in-memory stores hold during one call.
@@ -92,7 +96,11 @@ pub(crate) struct StoreState {
 
 impl Drop for StoreState {
     fn drop(&mut self) {
-        for v in self.prekeys.values_mut().chain(self.signed_prekeys.values_mut()) {
+        for v in self
+            .prekeys
+            .values_mut()
+            .chain(self.signed_prekeys.values_mut())
+        {
             v.zeroize();
         }
         if let Some(s) = self.session.as_mut() {
@@ -109,7 +117,11 @@ impl Drop for StoreState {
 const ADDRESS_NAME: &[u8] = b"r";
 
 pub(crate) fn address() -> ffi::signal_protocol_address {
-    ffi::signal_protocol_address { name: ADDRESS_NAME.as_ptr(), name_len: ADDRESS_NAME.len(), device_id: 1 }
+    ffi::signal_protocol_address {
+        name: ADDRESS_NAME.as_ptr(),
+        name_len: ADDRESS_NAME.len(),
+        device_id: 1,
+    }
 }
 
 pub(crate) struct Ctx {
@@ -122,14 +134,24 @@ impl Ctx {
     pub(crate) fn new(state: StoreState) -> Result<Ctx, Error> {
         let state = Box::into_raw(Box::new(state));
         // From here on `ctx` owns `state` and frees it on drop, also on the early returns.
-        let mut ctx = Ctx { global: std::ptr::null_mut(), store: std::ptr::null_mut(), state };
+        let mut ctx = Ctx {
+            global: std::ptr::null_mut(),
+            store: std::ptr::null_mut(),
+            state,
+        };
         // SAFETY: all pointers are valid. Out pointers are written by the library only on
         // success. libomemo-c copies the provider and the store tables, so locals are fine.
         unsafe {
-            check(ffi::signal_context_create(&mut ctx.global, std::ptr::null_mut()))?;
+            check(ffi::signal_context_create(
+                &mut ctx.global,
+                std::ptr::null_mut(),
+            ))?;
             let prov = provider();
             check(ffi::signal_context_set_crypto_provider(ctx.global, &prov))?;
-            check(ffi::signal_protocol_store_context_create(&mut ctx.store, ctx.global))?;
+            check(ffi::signal_protocol_store_context_create(
+                &mut ctx.store,
+                ctx.global,
+            ))?;
             let user = state.cast::<c_void>();
             check(ffi::signal_protocol_store_context_set_session_store(
                 ctx.store,
@@ -295,13 +317,21 @@ unsafe extern "C" fn session_delete(
     0
 }
 
-unsafe extern "C" fn session_delete_all(_name: *const u8, _len: usize, _user: *mut c_void) -> c_int {
+unsafe extern "C" fn session_delete_all(
+    _name: *const u8,
+    _len: usize,
+    _user: *mut c_void,
+) -> c_int {
     0
 }
 
 // Prekey stores.
 
-unsafe extern "C" fn pre_key_load(out: *mut *mut signal_buffer, id: u32, user: *mut c_void) -> c_int {
+unsafe extern "C" fn pre_key_load(
+    out: *mut *mut signal_buffer,
+    id: u32,
+    user: *mut c_void,
+) -> c_int {
     guard(|| {
         // SAFETY: see `st` and `give`.
         let state = unsafe { st(user) };
@@ -312,7 +342,12 @@ unsafe extern "C" fn pre_key_load(out: *mut *mut signal_buffer, id: u32, user: *
     })
 }
 
-unsafe extern "C" fn pre_key_store(_id: u32, _record: *mut u8, _len: usize, _user: *mut c_void) -> c_int {
+unsafe extern "C" fn pre_key_store(
+    _id: u32,
+    _record: *mut u8,
+    _len: usize,
+    _user: *mut c_void,
+) -> c_int {
     // The library never makes prekeys on its own. Our `Identity` owns them.
     0
 }
@@ -344,7 +379,12 @@ unsafe extern "C" fn spk_load(out: *mut *mut signal_buffer, id: u32, user: *mut 
     })
 }
 
-unsafe extern "C" fn spk_store(_id: u32, _record: *mut u8, _len: usize, _user: *mut c_void) -> c_int {
+unsafe extern "C" fn spk_store(
+    _id: u32,
+    _record: *mut u8,
+    _len: usize,
+    _user: *mut c_void,
+) -> c_int {
     0
 }
 

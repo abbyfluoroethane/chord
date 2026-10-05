@@ -36,7 +36,11 @@ impl Peer {
             .unwrap_or_else(|e| panic!("cannot start {python}: {e}. See tests/interop/README.md"));
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        Peer { child, stdin, stdout }
+        Peer {
+            child,
+            stdin,
+            stdout,
+        }
     }
 
     /// Send one command. The reply must be good.
@@ -63,7 +67,11 @@ impl Drop for Peer {
 }
 
 fn hx(v: &Value) -> Vec<u8> {
-    hex::decode(v.as_str().unwrap_or_else(|| panic!("not a hex string: {v}"))).unwrap()
+    hex::decode(
+        v.as_str()
+            .unwrap_or_else(|| panic!("not a hex string: {v}")),
+    )
+    .unwrap()
 }
 
 fn bundle_from_json(j: &Value) -> Bundle {
@@ -72,7 +80,12 @@ fn bundle_from_json(j: &Value) -> Bundle {
         spk_id: j["spk_id"].as_u64().unwrap() as u32,
         spk: hx(&j["spk"]),
         spks: hx(&j["spks"]),
-        prekeys: j["prekeys"].as_array().unwrap().iter().map(|p| (p[0].as_u64().unwrap() as u32, hx(&p[1]))).collect(),
+        prekeys: j["prekeys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p[0].as_u64().unwrap() as u32, hx(&p[1])))
+            .collect(),
     }
 }
 
@@ -99,7 +112,13 @@ impl Rust {
     /// Encrypt `text` for Python and let Python decrypt it. Returns the `kex` flag.
     fn send(&mut self, text: &str) -> bool {
         let (material, ciphertext) = payload::encrypt(text.as_bytes()).unwrap();
-        let enc = encrypt_key(&self.me, self.session.as_deref(), self.py_bundle.as_ref(), &material).unwrap();
+        let enc = encrypt_key(
+            &self.me,
+            self.session.as_deref(),
+            self.py_bundle.as_ref(),
+            &material,
+        )
+        .unwrap();
         self.session = Some(enc.session.clone());
         self.deliver(&enc.data, enc.kex, Some(&ciphertext), text);
         enc.kex
@@ -111,7 +130,11 @@ impl Rust {
             "payload": ciphertext.map(hex::encode),
         }));
         if ciphertext.is_some() {
-            assert_eq!(hx(&reply["plaintext"]), text.as_bytes(), "python read another text");
+            assert_eq!(
+                hx(&reply["plaintext"]),
+                text.as_bytes(),
+                "python read another text"
+            );
         } else {
             assert_eq!(reply["empty"], json!(true));
         }
@@ -125,10 +148,15 @@ impl Rust {
 
     fn read(&mut self, m: &Value, text: &str) -> bool {
         let kex = m["kex"].as_bool().unwrap();
-        let dec = decrypt_key(&self.me, self.session.as_deref(), &hx(&m["data"]), kex).expect("rust cannot decrypt the key");
-        let plain = payload::decrypt(&dec.key_material, &hx(&m["payload"])).expect("rust cannot decrypt the payload");
+        let dec = decrypt_key(&self.me, self.session.as_deref(), &hx(&m["data"]), kex)
+            .expect("rust cannot decrypt the key");
+        let plain = payload::decrypt(&dec.key_material, &hx(&m["payload"]))
+            .expect("rust cannot decrypt the payload");
         assert_eq!(&*plain, text.as_bytes());
-        assert_eq!(dec.remote_identity_key, self.py_ik, "wrong identity key of the python device");
+        assert_eq!(
+            dec.remote_identity_key, self.py_ik,
+            "wrong identity key of the python device"
+        );
         if let Some(id) = dec.used_prekey_id {
             assert!(self.me.remove_prekey(id));
         }
@@ -140,7 +168,10 @@ impl Rust {
     fn conversation(&mut self) {
         for i in 0..5 {
             assert!(!self.receive(&format!("py to rust {i}")));
-            assert!(!self.send(&format!("rust to py {i}")), "no key exchange after an answer");
+            assert!(
+                !self.send(&format!("rust to py {i}")),
+                "no key exchange after an answer"
+            );
         }
         // Out of order, Python to Rust: Python makes three, Rust reads 3, 1, 2.
         let m: Vec<Value> = (1..=3)
@@ -178,7 +209,13 @@ fn start(initiator_is_rust: bool) -> Rust {
         py.ok(json!({"cmd": "set_remote", "device_id": me.device_id(), "bundle": bundle_to_json(&me.bundle().unwrap())}));
     }
     let py_ik = py_bundle.ik.clone();
-    Rust { me, session: None, py_bundle: initiator_is_rust.then_some(py_bundle), py, py_ik }
+    Rust {
+        me,
+        session: None,
+        py_bundle: initiator_is_rust.then_some(py_bundle),
+        py,
+        py_ik,
+    }
 }
 
 /// Case a: Python publishes a bundle. Rust builds a session from it and sends a payload.
@@ -186,7 +223,10 @@ fn start(initiator_is_rust: bool) -> Rust {
 #[ignore = "needs the python venv, see tests/interop/README.md"]
 fn rust_starts_the_session() {
     let mut t = start(true);
-    assert!(t.send("hello from rust"), "the first message is a key exchange");
+    assert!(
+        t.send("hello from rust"),
+        "the first message is a key exchange"
+    );
     // Python has not answered yet: Rust keeps sending key exchanges.
     assert!(t.send("second message before any answer"));
     // Python answers. Rust reads it and leaves the key exchange state.
@@ -200,11 +240,15 @@ fn rust_starts_the_session() {
 #[ignore = "needs the python venv, see tests/interop/README.md"]
 fn python_starts_the_session() {
     let mut t = start(false);
-    assert!(t.receive("hello from python"), "the first message is a key exchange");
+    assert!(
+        t.receive("hello from python"),
+        "the first message is a key exchange"
+    );
     // Python has not heard from Rust: the next message is a key exchange again.
     assert!(t.receive("python, once more"));
     // An empty OMEMO message from Python (it holds 32 zero bytes).
-    let e = t.py.ok(json!({"cmd": "empty", "device_id": t.me.device_id()}));
+    let e =
+        t.py.ok(json!({"cmd": "empty", "device_id": t.me.device_id()}));
     let kex = e["kex"].as_bool().unwrap();
     let dec = decrypt_key(&t.me, t.session.as_deref(), &hx(&e["data"]), kex).unwrap();
     assert_eq!(&*dec.key_material, &payload::EMPTY_KEY_MATERIAL[..]);
@@ -213,7 +257,13 @@ fn python_starts_the_session() {
     assert!(!t.send("hello from rust"));
     assert!(!t.receive("python, plain now"));
     // An empty OMEMO message from Rust.
-    let enc = encrypt_key(&t.me, t.session.as_deref(), None, &payload::EMPTY_KEY_MATERIAL).unwrap();
+    let enc = encrypt_key(
+        &t.me,
+        t.session.as_deref(),
+        None,
+        &payload::EMPTY_KEY_MATERIAL,
+    )
+    .unwrap();
     t.session = Some(enc.session.clone());
     t.deliver(&enc.data, enc.kex, None, "");
     t.conversation();
@@ -230,12 +280,17 @@ fn damaged_data_is_refused_on_both_sides() {
     let mid = bad.len() / 2;
     bad[mid] ^= 1;
     let reply = t.py.raw(json!({"cmd": "decrypt", "device_id": t.me.device_id(), "data": hex::encode(&bad), "kex": true, "payload": hex::encode(&ct)}));
-    assert!(reply.get("error").is_some(), "python accepted damaged data: {reply}");
+    assert!(
+        reply.get("error").is_some(),
+        "python accepted damaged data: {reply}"
+    );
     // The good data still works after the failure.
     t.session = Some(enc.session.clone());
     t.deliver(&enc.data, true, Some(&ct), "x");
 
-    let m = t.py.ok(json!({"cmd": "encrypt", "device_id": t.me.device_id(), "plaintext": hex::encode("y")}));
+    let m = t.py.ok(
+        json!({"cmd": "encrypt", "device_id": t.me.device_id(), "plaintext": hex::encode("y")}),
+    );
     let mut bad = hx(&m["data"]);
     let last = bad.len() - 1;
     bad[last] ^= 1;
