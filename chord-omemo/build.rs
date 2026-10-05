@@ -133,6 +133,11 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_ENDIAN").as_deref() == Ok("big") {
         build.define("WORDS_BIGENDIAN", None);
     }
+    // signal_protocol.c wipes secrets with SecureZeroMemory on Windows. Without this
+    // define it uses a volatile loop, which is weaker.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build.define("HAVE_SECUREZEROMEMORY", None);
+    }
     build.compile("omemo_c");
 
     for f in &files {

@@ -43,7 +43,13 @@ file.
 OpenSSL, CommonCrypto or any system library. The crypto provider (random, HMAC-SHA-256,
 SHA-512, AES) comes from RustCrypto crates, in `chord-omemo/src/provider.rs`.
 
-Tested: macOS (aarch64, Apple clang). Not tested yet:
+Windows builds define `HAVE_SECUREZEROMEMORY` (updated 2026-10-05). `THIRD-PARTY.md` in the
+repository root lists the licenses of the parts. The Apple App Store permission text is in
+the "License" block of `README.md` in this folder. The Android app ships the licenses in
+`chord-android/app/src/main/assets/licenses`.
+
+Tested: macOS (aarch64, Apple clang). CI builds and tests it on Linux, Windows (MSVC) and
+macOS (`ci.yml`). We have not seen those runs yet. The NDK was not available when we checked on 2026-10-05. Not tested yet:
 
 - Linux: the `cc` crate uses `cc` or `gcc`. No extra flag or library should be needed.
 - Windows MSVC: not tested. The sources have `_MSC_VER` branches. Expect to add
