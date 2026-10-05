@@ -54,6 +54,9 @@ pub enum Encryption {
     None,
     /// OMEMO 2. We decrypted it, or we sent it encrypted.
     Omemo,
+    /// OMEMO 2, but the sending device has no trust decision yet. The text is real. Show a
+    /// warning: the key is not checked.
+    OmemoUntrusted,
     /// An OMEMO message that we could not decrypt. The body is a short notice.
     Undecryptable,
 }
@@ -63,6 +66,7 @@ impl From<core_views::Encryption> for Encryption {
         match e {
             core_views::Encryption::None => Self::None,
             core_views::Encryption::Omemo => Self::Omemo,
+            core_views::Encryption::OmemoUntrusted => Self::OmemoUntrusted,
             core_views::Encryption::Undecryptable => Self::Undecryptable,
         }
     }

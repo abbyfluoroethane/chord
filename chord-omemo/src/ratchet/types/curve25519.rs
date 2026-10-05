@@ -108,7 +108,7 @@ impl Curve25519PublicKey {
 
     /// Convert this public key to a byte array.
     #[inline]
-    pub fn to_bytes(&self) -> [u8; Self::LENGTH] {
+    pub fn to_bytes(self) -> [u8; Self::LENGTH] {
         self.inner.to_bytes()
     }
 
@@ -144,7 +144,7 @@ impl Curve25519PublicKey {
     }
 
     /// The key as lowercase hex.
-    pub fn to_hex(&self) -> String {
+    pub fn to_hex(self) -> String {
         self.inner
             .as_bytes()
             .iter()

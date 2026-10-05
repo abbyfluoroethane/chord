@@ -542,7 +542,7 @@ mod tests {
         wrong[0] = 2;
         assert!(Identity::from_bytes(&wrong).is_err());
         // A signed prekey whose signature is not for its key.
-        let text = String::from_utf8_lossy(&bytes[1..]).replace("\"created_ms\"", "\"created_ms\"");
+        let text = String::from_utf8_lossy(&bytes[1..]).into_owned();
         let mut parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         parsed["signed_prekeys"][0]["signature"][3] = serde_json::json!(
             (parsed["signed_prekeys"][0]["signature"][3]
