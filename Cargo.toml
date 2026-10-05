@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["chord-core", "chord-ffi", "chord-cli", "chord-desktop/src-tauri"]
+members = ["chord-core", "chord-omemo", "chord-ffi", "chord-cli", "chord-desktop/src-tauri"]
 # A plain `cargo build` skips the desktop app. It needs WebKitGTK on Linux.
-default-members = ["chord-core", "chord-ffi", "chord-cli"]
+default-members = ["chord-core", "chord-omemo", "chord-ffi", "chord-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ license = "MIT"
 
 [workspace.dependencies]
 chord-core = { path = "chord-core" }
+chord-omemo = { path = "chord-omemo" }
 # Exact pin: tokio-xmpp changes its API often. See the Core spec.
 tokio-xmpp = { version = "=6.0.0" }
 xmpp-parsers = "0.23"

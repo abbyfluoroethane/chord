@@ -1,0 +1,8 @@
+[package]
+name = "chord-omemo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OMEMO 2 (XEP-0384) protocol parts for Chord: keys, X3DH, Double Ratchet, payload crypto. No XMPP and no I/O."
+
+[dependencies]
