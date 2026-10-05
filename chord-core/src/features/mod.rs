@@ -30,6 +30,7 @@ pub mod mds;
 pub mod message_ext;
 pub mod muc;
 pub mod notify;
+pub mod omemo;
 pub mod orphans;
 pub mod owner_form;
 pub mod pins;
