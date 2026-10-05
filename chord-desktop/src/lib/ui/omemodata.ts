@@ -107,6 +107,21 @@ export function sendFailedText(reason: string | undefined): string {
   return r ? `Not sent. ${r}` : 'Not sent.';
 }
 
+/** The tooltip of the warning lock on a message from a device that the user did not decide on. */
+export const UNTRUSTED_HINT = 'From an unverified device.';
+
+/** Which lock a message shows: none, the normal lock, or the warning lock. */
+export function lockKind(encryption: string | undefined): 'none' | 'ok' | 'warn' {
+  if (encryption === 'omemo') return 'ok';
+  if (encryption === 'omemo-untrusted') return 'warn';
+  return 'none';
+}
+
+/** The notice after a send that left out some devices. */
+export function skippedText(count: number): string {
+  return count === 1 ? 'Not sent to 1 device.' : `Not sent to ${count} devices.`;
+}
+
 /** The caption of the notice about a new key. */
 export function trustNeededText(name: string): string {
   return `${name} has a new key.`;

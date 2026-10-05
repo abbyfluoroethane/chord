@@ -104,7 +104,7 @@ export interface TimelineItem {
   status: MessageStatus;
   mention: boolean; // UI: the message mentions me
   /** How the message was protected. Missing means plain text. */
-  encryption?: 'none' | 'omemo' | 'undecryptable';
+  encryption?: 'none' | 'omemo' | 'omemo-untrusted' | 'undecryptable';
 }
 
 export interface Me {

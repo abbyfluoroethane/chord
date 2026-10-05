@@ -565,6 +565,7 @@ class LiveController {
       case 'omemoTrustNeeded':
       case 'omemoDevicesChanged':
       case 'omemoSendFailed':
+      case 'omemoDevicesSkipped':
         omemo.onEvent(e);
         break;
       case 'messageReceived':
