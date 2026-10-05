@@ -1081,6 +1081,7 @@ mod tests {
             attachment: None,
             attachment_info: None,
             status: core_views::DeliveryStatus::Displayed,
+            encryption: core_views::Encryption::None,
         };
         let t: TimelineItem = core.into();
         assert_eq!(t.status, DeliveryStatus::Displayed);

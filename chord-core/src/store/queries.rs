@@ -124,6 +124,9 @@ pub struct MessageExtras {
     pub oob_url: Option<String>,
     /// XEP-0446: the metadata of the attached file.
     pub file: Option<FileMeta>,
+    /// How the message was protected: `None` for plain text, or one of the `ENCRYPTION_*`
+    /// values of `features::omemo::store`.
+    pub encryption: Option<String>,
 }
 
 /// XEP-0446 file metadata. Every part is optional: a peer sends what it has.
@@ -219,9 +222,9 @@ pub fn insert_message(
                 "INSERT INTO messages
                     (account_id, key_kind, key, direction, peer, sender, body, timestamp, kind,
                      message_id, origin_id, stanza_id, reply_to, reply_to_sender, oob_url,
-                     file_name, file_size, file_type, file_hash)
+                     file_name, file_size, file_type, file_hash, encryption)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, COALESCE(?8, {NOW_MS}), ?9,
-                         ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                         ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
                  ON CONFLICT (account_id, key_kind, key) DO NOTHING
                  RETURNING id, timestamp"
             ),
@@ -245,6 +248,7 @@ pub fn insert_message(
                 x.file.as_ref().and_then(|f| f.size.map(|s| s as i64)),
                 x.file.as_ref().and_then(|f| f.media_type.as_deref()),
                 x.file.as_ref().and_then(|f| f.sha256.as_deref()),
+                x.encryption,
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

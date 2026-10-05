@@ -9,7 +9,7 @@ use chord_core::features::notify::Notification;
 use chord_core::jid::{BareJid, Jid};
 use chord_core::session::{AuthFailure, ConnectError};
 use chord_core::views::{
-    ChannelKind, ChannelScope, DeliveryStatus, ListDiff, ReactionSummary, ReplyPreview,
+    ChannelKind, ChannelScope, DeliveryStatus, Encryption, ListDiff, ReactionSummary, ReplyPreview,
     TimelineItem,
 };
 use serde_json::json;
@@ -41,6 +41,7 @@ fn item() -> TimelineItem {
         attachment: None,
         attachment_info: None,
         status: DeliveryStatus::Displayed,
+        encryption: Encryption::Omemo,
     }
 }
 
@@ -66,7 +67,8 @@ fn timeline_item_uses_camel_case_names() {
             "replyTo": {"id": "m:3", "senderName": "amy", "body": "yo"},
             "attachment": null,
             "attachmentInfo": null,
-            "status": "displayed"
+            "status": "displayed",
+            "encryption": "omemo"
         })
     );
 }
