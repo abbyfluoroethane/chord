@@ -19,6 +19,12 @@ pub fn room_password_key(account: &str, room: &str) -> String {
     format!("{account}#room-password#{room}")
 }
 
+/// The key of the OMEMO data key of `account` (hex text). It seals the OMEMO secrets in the
+/// database. See `features::omemo::store::Sealer`.
+pub fn omemo_data_key(account: &str) -> String {
+    format!("{account}#omemo-data-key")
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     use super::SecretStore;

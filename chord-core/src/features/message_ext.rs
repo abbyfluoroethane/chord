@@ -90,6 +90,7 @@ pub(crate) fn extras(message: &Message, ids: &MessageIds) -> MessageExtras {
             .or(sfs_url)
             .filter(|url| is_web_url(url)),
         file,
+        encryption: None,
     }
 }
 

@@ -345,4 +345,73 @@ pub const MIGRATIONS: &[&str] = &[
     CREATE INDEX messages_by_kind_peer ON messages (account_id, kind, peer, timestamp);
     CREATE INDEX messages_by_peer_direction ON messages (account_id, peer, direction, id, retracted_at);
     "#,
+    // 18: OMEMO 2 (docs/omemo-plan.md). Every column that says "sealed" holds an
+    // AES-256-GCM blob (12-byte nonce, then the ciphertext) of features/omemo/store.rs.
+    // The crypto library owns the content of the blobs: this schema does not know it.
+    // A used one-time prekey is deleted, so the table has no "consumed" column.
+    // `notification_levels` is the only per-chat settings table, and it is about
+    // notifications, so the switch of a chat gets its own table.
+    // messages.encryption: NULL is plain text, 'omemo:2' is an OMEMO message that we read
+    // or sent, 'omemo:2:failed' is one that we could not decrypt.
+    r#"
+    -- The data key, only for a build with no secret store. See Sealer in omemo/store.rs.
+    CREATE TABLE omemo_data_key (
+        account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+        key        BLOB NOT NULL
+    );
+    CREATE TABLE omemo_identity (
+        account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+        device_id  INTEGER NOT NULL,
+        identity   BLOB NOT NULL,                 -- sealed
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE omemo_signed_prekeys (
+        account_id  INTEGER NOT NULL REFERENCES accounts(id),
+        id          INTEGER NOT NULL,
+        record      BLOB NOT NULL,                -- sealed
+        created_at  INTEGER NOT NULL,
+        replaced_at INTEGER,
+        PRIMARY KEY (account_id, id)
+    );
+    CREATE TABLE omemo_prekeys (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        id         INTEGER NOT NULL,
+        record     BLOB NOT NULL,                 -- sealed
+        PRIMARY KEY (account_id, id)
+    );
+    CREATE TABLE omemo_devices (
+        account_id   INTEGER NOT NULL REFERENCES accounts(id),
+        jid          TEXT NOT NULL,               -- bare JID
+        device_id    INTEGER NOT NULL,
+        identity_key BLOB,                        -- public, not sealed
+        label        TEXT,
+        active       INTEGER NOT NULL DEFAULT 1,
+        first_seen   INTEGER NOT NULL,
+        last_seen    INTEGER NOT NULL,
+        PRIMARY KEY (account_id, jid, device_id)
+    );
+    CREATE TABLE omemo_sessions (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        jid        TEXT NOT NULL,
+        device_id  INTEGER NOT NULL,
+        state      BLOB NOT NULL,                 -- sealed
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (account_id, jid, device_id)
+    );
+    CREATE TABLE omemo_trust (
+        account_id  INTEGER NOT NULL REFERENCES accounts(id),
+        jid         TEXT NOT NULL,
+        fingerprint BLOB NOT NULL,                -- the public identity key
+        level       TEXT NOT NULL CHECK (level IN ('undecided', 'blind', 'verified', 'distrusted')),
+        decided_at  INTEGER NOT NULL,
+        PRIMARY KEY (account_id, jid, fingerprint)
+    );
+    CREATE TABLE omemo_conversations (
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        jid        TEXT NOT NULL,                 -- as messages.peer stores it
+        enabled    INTEGER NOT NULL,
+        PRIMARY KEY (account_id, jid)
+    );
+    ALTER TABLE messages ADD COLUMN encryption TEXT;
+    "#,
 ];

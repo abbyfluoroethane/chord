@@ -63,6 +63,26 @@ pub struct TimelineItem {
     pub attachment_info: Option<FileMeta>,
     /// XEP-0333: for an outgoing message, how far it got.
     pub status: DeliveryStatus,
+    /// How the message was protected. The UI shows a lock for `Omemo` and a warning for
+    /// `Undecryptable`.
+    pub encryption: Encryption,
+}
+
+/// The protection of a stored message (`messages.encryption`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "camelCase")
+)]
+pub enum Encryption {
+    /// Plain text.
+    #[default]
+    None,
+    /// OMEMO 2. We decrypted it, or we sent it encrypted.
+    Omemo,
+    /// An OMEMO message that we could not decrypt. The body is empty.
+    Undecryptable,
 }
 
 /// The reactions with one emoji.
@@ -137,6 +157,7 @@ struct Row {
     status: String,
     /// XEP-0421: the occupant that wrote a room message.
     occupant_id: Option<String>,
+    encryption: Option<String>,
 }
 
 /// The `peer` value of a timeline: the room or the chat peer, or `room/nick` for the
@@ -162,7 +183,7 @@ pub(crate) fn query(
                 reply_to_sender, oob_url,
                 file_name, file_size, file_type, file_hash,
                 CASE WHEN failed_at IS NOT NULL THEN 'failed' ELSE status END,
-                occupant_id
+                occupant_id, encryption
          FROM messages
          WHERE account_id = ?1 AND peer = ?2
            AND NOT (failed_at IS NOT NULL AND retracted_at IS NOT NULL)
@@ -193,6 +214,7 @@ pub(crate) fn query(
             },
             status: row.get(17)?,
             occupant_id: row.get(18)?,
+            encryption: row.get(19)?,
         })
     })?;
     let mut rows: Vec<Row> = rows.collect::<rusqlite::Result<_>>()?;
@@ -284,6 +306,11 @@ pub(crate) fn query(
                 "displayed" => DeliveryStatus::Displayed,
                 "received" => DeliveryStatus::Received,
                 _ => DeliveryStatus::Sent,
+            },
+            encryption: match row.encryption.as_deref() {
+                None => Encryption::None,
+                Some(crate::features::omemo::store::ENCRYPTION_FAILED) => Encryption::Undecryptable,
+                Some(_) => Encryption::Omemo,
             },
         });
     }
