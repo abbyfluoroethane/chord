@@ -293,6 +293,41 @@ impl Identity {
         self.signed_prekeys.remove(&id).is_some()
     }
 
+    /// An identity with fixed keys, for the known-answer tests. The first signed prekey is the
+    /// current one.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        device_id: u32,
+        seed: [u8; 32],
+        signed_prekeys: &[(u32, [u8; 32])],
+        prekeys: &[(u32, [u8; 32])],
+    ) -> Identity {
+        let mut id = Identity::from_signing_key(device_id, SigningKey::from_bytes(&seed));
+        for (n, (spk_id, secret)) in signed_prekeys.iter().enumerate() {
+            let secret = Curve25519SecretKey::from_slice(secret);
+            let signature = id
+                .ik
+                .sign(Curve25519PublicKey::from(&secret).as_bytes_ref())
+                .to_bytes();
+            id.signed_prekeys.insert(
+                *spk_id,
+                SignedPreKey {
+                    secret,
+                    signature,
+                    created_ms: 0,
+                },
+            );
+            if n == 0 {
+                id.current_spk = *spk_id;
+            }
+        }
+        for (pk_id, secret) in prekeys {
+            id.prekeys
+                .insert(*pk_id, Curve25519SecretKey::from_slice(secret));
+        }
+        id
+    }
+
     /// The identity key as a Curve25519 key, for Diffie-Hellman.
     pub(crate) fn identity_dh_key(&self) -> &Curve25519SecretKey {
         &self.ik_dh

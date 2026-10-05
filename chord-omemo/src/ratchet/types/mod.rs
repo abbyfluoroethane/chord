@@ -16,6 +16,8 @@
 
 mod curve25519;
 
+#[cfg(test)]
+pub(crate) use curve25519::TEST_TAPE;
 pub use curve25519::{Curve25519PublicKey, Curve25519SecretKey};
 use thiserror::Error;
 

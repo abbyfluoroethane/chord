@@ -23,7 +23,7 @@ pub const HEARTBEAT_COUNTER: u32 = 53;
 
 /// The longest key material that we encrypt, in bytes. A real message has 48 bytes (a
 /// 32-byte key and a 16-byte MAC) and an empty message has 32 bytes.
-const MAX_KEY_MATERIAL: usize = 512;
+pub(crate) const MAX_KEY_MATERIAL: usize = 512;
 
 /// The result of [`encrypt_key`].
 #[derive(Debug)]

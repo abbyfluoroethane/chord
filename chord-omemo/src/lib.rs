@@ -22,9 +22,13 @@
 
 pub mod aesgcm;
 pub mod identity;
+#[cfg(test)]
+mod kat;
 pub mod payload;
 mod ratchet;
 pub mod session;
+#[cfg(test)]
+mod tamper;
 
 pub use identity::{Bundle, Identity, PREKEY_COUNT, PREKEY_MIN, fingerprint};
 pub use session::{DecryptedKey, EncryptedKey, HEARTBEAT_COUNTER, decrypt_key, encrypt_key};
